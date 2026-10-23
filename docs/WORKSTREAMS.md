@@ -103,7 +103,7 @@ flowchart LR
 | E2 Data, workload, bench | Codex | `src/engine/data/**`, `src/engine/workload/**`, `src/engine/bench/**`, `src/lib/persistence/schemas.ts` (accept P2 Design fields) |
 | E3 Scale breadth | Codex | `src/engine/scale/**` |
 | C1 Sandbox breadth | Claude | `src/app/sandbox/**`, `src/app/challenges/**`, `src/components/sandbox/**`, `src/lib/run-manager/**`, `src/content/challenges/**` |
-| C2 Scale + model UIs | Claude | `src/components/scale/**`, `src/components/models/**`, `src/app/dev/**`, `src/lib/content/widgets*` (widget registry only) |
+| C2 Scale + model UIs | Claude | `src/components/scale/**`, `src/components/models/**`, `src/app/dev/**`, `src/lib/content/schema.ts` (`widgetSchemas` entries only) and `mdx-components.tsx` (`implementations` entries only) |
 
 ## Contract: E2 modules → E1
 
