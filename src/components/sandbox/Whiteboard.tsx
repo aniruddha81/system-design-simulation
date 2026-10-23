@@ -10,7 +10,7 @@ import { AnnotationLayer, type Tool } from "./Annotations";
 import {
   edgeTypes, NODE_H, NODE_W, nodeTypes, type ComponentFlowNode, type Look, type NodeHealth, type SketchFlowEdge,
 } from "./board-elements";
-import { addNode, brokenRefs, connect, distToSegment, insertOnEdge, updateNode } from "./design-ops";
+import { addNode, brokenRefs, connect, distToSegment, elementName, insertOnEdge, updateNode } from "./design-ops";
 import { useAnnotations, useDesign, useDesignApi } from "./design-store";
 import { KIND_COLOR } from "./kinds";
 import { DRAG_MIME, Library } from "./Library";
@@ -109,7 +109,8 @@ export function Whiteboard(props: {
       commit(() => r.design);
       api.getState().setRewritten(r.rewritten);
       if (r.cacheId) select({ kind: "node", id: r.cacheId });
-      return notify(`Inserted a cache: ${r.rewritten.length} route${r.rewritten.length === 1 ? "" : "s"} rewritten to cache-aside — review them in the inspector.`);
+      const reused = design.nodes.some((n) => n.id === r.cacheId);
+      return notify(`${reused ? `Using the existing ${elementName(design, r.cacheId!)}` : "Inserted a cache"}: ${r.rewritten.length} route${r.rewritten.length === 1 ? "" : "s"} rewritten to cache-aside — review them in the inspector.`);
     }
     const r = addNode(design, kind, pos);
     commit(() => r.design);

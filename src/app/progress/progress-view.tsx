@@ -14,7 +14,7 @@ export type LessonSummary = {
 
 const MASTERED = 0.8;
 
-export function ProgressView({ lessons }: { lessons: LessonSummary[] }) {
+export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]; challenges: { id: string; title: string }[] }) {
   const progress = useProgress();
   if (!progress) return <p className="mt-10 text-muted" role="status">Loading progress…</p>;
 
@@ -102,6 +102,27 @@ export function ProgressView({ lessons }: { lessons: LessonSummary[] }) {
               </span>
             </li>
           ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="challenges">
+        <h2 id="challenges" className="mb-4 text-xl font-semibold">
+          Challenges
+        </h2>
+        <ul className="grid gap-2">
+          {challenges.map((c) => {
+            const stars = progress.get(`challenge:${c.id}`)?.stars ?? 0;
+            return (
+              <li key={c.id} className="panel flex flex-wrap items-center justify-between gap-3 p-4">
+                <Link href={`/challenges/${c.id}`} className="font-medium underline-offset-4 hover:underline">
+                  {c.title}
+                </Link>
+                <span className={`text-sm font-medium ${stars ? "text-success" : "text-muted"}`}>
+                  {stars ? `${"★".repeat(stars)} Passed` : "○ Not passed"}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

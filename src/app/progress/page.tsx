@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { loadLessons } from "@/lib/content/loader";
 import { templates } from "@/lib/content/variants";
+import { challenges } from "@/content/challenges";
 import { ProgressView, type LessonSummary } from "./progress-view";
 
 export const metadata: Metadata = {
@@ -24,7 +25,7 @@ export default function ProgressPage() {
     <div className="mx-auto max-w-4xl px-4 pb-20 pt-12">
       <h1 className="text-4xl font-semibold tracking-tight">Progress</h1>
       <p className="mt-3 text-muted">Stored in this browser only. Export a backup from Settings to move it.</p>
-      <ProgressView lessons={lessons} />
+      <ProgressView lessons={lessons} challenges={challenges.map((c) => ({ id: c.id, title: c.title }))} />
     </div>
   );
 }
