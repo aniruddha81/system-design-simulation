@@ -164,6 +164,7 @@ export type Scenario = {
 
 export type RunSettings = {
   traceSampleRate: number; // fraction of requests sent for packet animation (visual only, not in results)
+  limits?: Partial<{ events: number; liveRequests: number; heap: number; queued: number; memoryBytes: number }>;
 };
 
 // §5.1 — same RunKey => byte-identical results.
@@ -212,6 +213,9 @@ export type NodeStats = {
   errors: number;
   served: number;
   latency: Percentiles; // sojourn at this node
+  meanQueueWaitUs?: number | null;
+  inFlight?: number;
+  wastedWork?: number;
   cache?: { hits: number; misses: number; evictions: number; hitRate: number | null };
 };
 
@@ -267,6 +271,13 @@ export type Span = {
   note?: string; // e.g. "cache MISS user:42", "DB read v17"
 };
 export type TraceResult = { status: Status; totalUs: Us; spans: Span[]; dataOps: string[] };
+export type TraceInput = { endpointId: EndpointId; key: string };
+export type AdvanceOptions = { maxWallMs?: number; untilUs?: Us; maxEvents?: number };
+export interface Simulation {
+  advance(options?: AdvanceOptions): 'running' | 'done';
+  snapshot(): LiveSnapshot;
+  result(): RunResult;
+}
 
 // ---------- live animation feed (visual only, never part of results) ----------
 export type Packet = { requestId: string; from: NodeId; to: NodeId; departUs: Us; arriveUs: Us; ok: boolean };
