@@ -1,26 +1,299 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------
+   Tokens. Dark-first; light via [data-theme="light"].
+   Contract (W3 depends on these names): --bg --surface --surface-2 --border
+   --text --text-muted --accent --accent-2 --danger --warning --success
+   --radius-sm --radius --radius-lg --font-sans --font-mono
+   ------------------------------------------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+  --bg: #0b1120;
+  --surface: #111a2e;
+  --surface-2: #17223b;
+  --border: #25324f;
+  --text: #e6ebf5;
+  --text-muted: #97a3bd;
+  --accent: #8b9bff;
+  --accent-2: #3fd0c2;
+  --accent-ink: #0b1120;
+  --danger: #ff7a7a;
+  --warning: #f2b84b;
+  --success: #4fdd9a;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+
+  /* Elevation: one light source above; deeper = larger, softer, bluer. */
+  --elev-1: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 1px 2px rgb(2 6 23 / 0.5);
+  --elev-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 8px 24px -8px rgb(2 6 23 / 0.7);
+  --elev-3: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 24px 48px -16px rgb(2 6 23 / 0.8);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* The one brand gradient: a slow-turning signal sweep. */
+  --brand: linear-gradient(var(--brand-angle), #8b9bff 0%, #3fd0c2 45%, #f2b84b 100%);
+  --grid-line: rgb(139 155 255 / 0.07);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #eaeef7;
+  --border: #d3dae9;
+  --text: #0d1526;
+  --text-muted: #4a5672;
+  --accent: #4152d9;
+  --accent-2: #0b8278;
+  --accent-ink: #ffffff;
+  --danger: #c93636;
+  --warning: #9a5b00;
+  --success: #147a48;
+  --elev-1: 0 1px 2px rgb(13 21 38 / 0.08);
+  --elev-2: 0 8px 24px -10px rgb(13 21 38 / 0.18);
+  --elev-3: 0 24px 48px -18px rgb(13 21 38 / 0.25);
+  --brand: linear-gradient(var(--brand-angle), #4152d9 0%, #0b8278 50%, #b86e00 100%);
+  --grid-line: rgb(65 82 217 / 0.07);
+}
+
+@property --brand-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 115deg;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-fg: var(--text);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --shadow-e1: var(--elev-1);
+  --shadow-e2: var(--elev-2);
+  --shadow-e3: var(--elev-3);
+  --radius-md: var(--radius);
 }
+/* --radius-sm / --radius-lg / --font-sans / --font-mono override Tailwind's defaults
+   directly (unlayered :root beats @layer theme), so rounded-sm, rounded-lg, font-sans
+   and font-mono all use the tokens above. Spacing uses Tailwind's 4px scale. */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    min-height: 100dvh;
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 35%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding: 0 1rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.9375rem;
+    transition:
+      background-color 150ms,
+      border-color 150ms,
+      transform 150ms;
+  }
+  .btn:hover {
+    border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+  }
+  .btn:active {
+    transform: translateY(1px);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--accent-ink);
+  }
+  .btn-primary:hover {
+    background: color-mix(in oklab, var(--accent) 88%, white);
+  }
+  .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+  }
+  .btn-ghost:hover {
+    background: var(--surface-2);
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-1);
+  }
+
+  .field {
+    min-height: 2.5rem;
+    padding: 0 0.75rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .field:focus-visible {
+    outline-offset: 0;
+    border-color: var(--accent);
+  }
+
+  input[type="range"] {
+    accent-color: var(--accent);
+    min-height: 24px;
+  }
+
+  .brand-text {
+    background: var(--brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: brand-turn 14s linear infinite;
+  }
+  .brand-rule {
+    height: 2px;
+    background: var(--brand);
+    animation: brand-turn 14s linear infinite;
+  }
+  .blueprint {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* Lesson prose rendered from MDX. */
+  .prose-lesson {
+    max-width: 68ch;
+    line-height: 1.7;
+    font-size: 1.0625rem;
+  }
+  .prose-lesson > * + * {
+    margin-top: 1rem;
+  }
+  .prose-lesson strong {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .prose-lesson a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .prose-lesson > ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+  .prose-lesson > ol {
+    list-style: decimal;
+    padding-left: 1.25rem;
+  }
+  .prose-lesson code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+  }
+}
+
+@keyframes brand-turn {
+  to {
+    --brand-angle: 475deg;
+  }
+}
+
+@keyframes flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+/* ---- Motion settings (PLAN §12): system default, Reduced, Off. ---- */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) *,
+  :root:not([data-motion="full"]) *::before,
+  :root:not([data-motion="full"]) *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"])::view-transition-group(*) {
+    animation-duration: 0.01ms;
+  }
+}
+:root[data-motion="reduced"]::view-transition-group(*),
+:root[data-motion="off"]::view-transition-group(*),
+:root[data-motion="off"]::view-transition-old(*),
+:root[data-motion="off"]::view-transition-new(*) {
+  animation: none;
 }

@@ -1,0 +1,165 @@
+{/*
+id: caching
+slug: caching
+track: building-blocks
+title: "Caching: cache-aside, eviction, stampede"
+description: "Why a cache's hit rate comes from key skew, how it sets database load, how to keep it fresh, and why a cold restart can take the database down."
+objectives:
+  - id: hit-rate-from-skew
+    text: Explain why the hit rate emerges from key popularity skew and cache size
+  - id: predict-db-load
+    text: Predict database load from request rate and hit rate, and the hit rate a database needs
+  - id: cache-aside-path
+    text: Trace the cache-aside read path on a miss and say who fills the cache
+  - id: choose-freshness
+    text: Choose between TTL expiry and explicit invalidation for a freshness requirement
+  - id: explain-stampede
+    text: Explain the stampede after a cache restart and how request coalescing prevents it
+requires: [latency-numbers, throughput]
+activities: [C, Q, R]
+limitations:
+  - "No memory fragmentation: the cache holds exactly its configured number of keys."
+  - "Hit rates assume a stationary Zipf key distribution; real popularity shifts over time."
+  - "Network and serialisation costs are folded into a single cache latency."
+sources:
+  - title: "Scaling Memcache at Facebook"
+    authors: "R. Nishtala et al."
+    year: 2013
+    url: "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+  - title: "Hierarchical Web caching systems: modeling, design and experimental results"
+    authors: "H. Che, Y. Tung, Z. Wang"
+    year: 2002
+    url: "https://doi.org/10.1109/JSAC.2002.801752"
+  - title: "Web caching and Zipf-like distributions: evidence and implications"
+    authors: "L. Breslau, P. Cao, L. Fan, G. Phillips, S. Shenker"
+    year: 1999
+    url: "https://doi.org/10.1109/INFCOM.1999.749260"
+  - title: "A versatile and accurate approximation for LRU cache performance"
+    authors: "C. Fricker, P. Robert, J. Roberts"
+    year: 2012
+    url: "https://arxiv.org/abs/1202.3974"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="why-cache" title="A database that cannot keep up">
+
+Your database answers a read in about 5 ms and saturates at a few thousand reads per second. Traffic is growing past that. A cache in front of it answers in under a millisecond, but only for keys it already holds.
+
+The number that matters is the **hit rate**: the share of reads the cache answers. Every miss still goes to the database.
+
+Move the sliders. Watch what happens to database load between a 90% and a 99% hit rate.
+
+<HitRateCalculator />
+
+</Step>
+
+<Step id="db-load" title="Predict the database load">
+
+With cache-aside, only misses reach the database:
+
+**database reads per second = request rate × (1 − hit rate)**
+
+That is why hit rate improvements near the top matter so much: going from 98% to 99% halves the database load.
+
+<VariantQuestion template="cache.db-load" />
+
+</Step>
+
+<Step id="read-path" title="Follow a miss through cache-aside">
+
+In **cache-aside** (also called lazy loading) the application owns the cache. The cache never talks to the database. On a hit, the service returns the cached value. On a miss, the service does the work and fills the cache itself.
+
+<Ordering
+  id="cache-aside-miss"
+  objective="cache-aside-path"
+  prompt="Put the steps of a cache miss in order."
+  items={[
+    { id: "get", text: "Service sends GET user:42 to the cache" },
+    { id: "miss", text: "Cache replies that the key is missing" },
+    { id: "db", text: "Service reads user:42 from the database" },
+    { id: "set", text: "Service writes the row to the cache with a TTL" },
+    { id: "respond", text: "Service returns the response to the caller" }
+  ]}
+  explanation="The service checks the cache, reads the database only on a miss, fills the cache, then responds. Read-through caches move the fill into the cache itself; cache-aside keeps it in your code, which is why every service must handle misses."
+/>
+
+</Step>
+
+<Step id="skew" title="Where the hit rate comes from">
+
+A cache does not create hits. **Key popularity does.** Web and application traffic is highly skewed: a few keys get most of the reads. Breslau et al. measured that request frequency roughly follows a Zipf law, where the key of rank *i* gets a share proportional to 1 / *i*.
+
+Under Zipf with exponent 1, the top *k* of *N* keys receive about **H(k) ÷ H(N)** of all requests, where H(n) ≈ ln n + 0.577. So a cache holding 1% of the keys can serve well over half the reads.
+
+Eviction decides which keys stay. LRU keeps recently used keys; the Che approximation predicts LRU's hit rate from a single "characteristic time" for which keys survive. For skewed, stable popularity, LRU comes close to the ideal of holding the top *k*.
+
+<VariantQuestion template="cache.zipf-coverage" />
+
+</Step>
+
+<Step id="hit-rate-needed" title="Size the hit rate to the database">
+
+Turn the formula around. If you know the peak request rate and the database's saturation point, you know the minimum hit rate you must sustain, including after a deploy, a cache node loss, or a key change that invalidates everything.
+
+<VariantQuestion template="cache.hit-rate-needed" />
+
+</Step>
+
+<Step id="freshness" title="Keep cached data fresh">
+
+A cached value is a copy, so it can go stale. You have two levers: a **TTL**, which bounds staleness by time, and **invalidation**, where the writer deletes the key after changing the database. Deleting rather than updating the key avoids races in which two writers leave an older value behind.
+
+<Choice
+  id="price-freshness"
+  objective="choose-freshness"
+  prompt="Product prices change a few times a day. A price that is stale for more than a few seconds causes refunds. All price writes go through one pricing service. What do you do?"
+  options={[
+    { id: "long-ttl", text: "Cache prices with a 24-hour TTL", feedback: "A long TTL serves an old price for up to a day after each change. TTL alone bounds staleness by time, and a day is far too long here." },
+    { id: "invalidate", text: "Delete the key in the pricing service after each database write, and keep a TTL as a safety net", correct: true, feedback: "Right. The writer knows exactly when data changes, so invalidation bounds staleness by the delete's latency. The TTL cleans up if a delete is ever lost." },
+    { id: "short-ttl", text: "Use a 1-second TTL on every price", feedback: "This does bound staleness, but every key now misses every second. The hit rate drops and database load rises for data that changes a few times a day." },
+    { id: "update-first", text: "Write the new price to the cache, then to the database", feedback: "If the database write fails, or a concurrent writer commits later, the cache holds a price the database never committed." }
+  ]}
+/>
+
+</Step>
+
+<Step id="stampede" title="The stampede after a restart">
+
+A cache node restarts empty. Every hot key misses at once, and every request that misses goes to the database while the first fill is still in flight. The database, sized for a 95% hit rate, suddenly sees close to 100% of the traffic. This is a **stampede**, also called a thundering herd or dogpile.
+
+<VariantQuestion template="cache.stampede" />
+
+</Step>
+
+<Step id="stampede-fix" title="Prevent the stampede">
+
+Facebook's memcache paper handles this with **leases**: the first miss for a key gets a token to fill it, and other clients wait briefly and retry the cache instead of hitting the database. In-process, the same idea is called **request coalescing** or single-flight.
+
+<Choice
+  id="stampede-mitigations"
+  objective="explain-stampede"
+  multiple
+  prompt="After a cache node restart, the database is overwhelmed. Which changes reduce the stampede? Select all that apply."
+  options={[
+    { id: "coalesce", text: "Coalesce concurrent misses for the same key so one request fills it", correct: true, feedback: "Right. Database queries per hot key drop from rate × fill time to about one." },
+    { id: "jitter", text: "Add random jitter to TTLs", correct: true, feedback: "Right. Keys written together otherwise expire together, which is a small stampede on a timer." },
+    { id: "warm", text: "Pre-warm the hottest keys, or shift traffic back gradually", correct: true, feedback: "Right. Filling the cache before full load arrives keeps the miss rate low while it warms." },
+    { id: "retry", text: "Retry failed database reads immediately", feedback: "Immediate retries add load exactly when the database is saturated. That turns a stampede into a retry storm." },
+    { id: "short-ttl", text: "Shorten every TTL so stale data clears faster", feedback: "Shorter TTLs cause more misses, which means more database load, not less." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then build it">
+
+The mastery check draws fresh variants you have not seen. Score 80% or more to master the lesson. A wrong answer links back to the step that teaches it.
+
+<MasteryCheck templates={["cache.db-load", "cache.hit-rate-needed", "cache.zipf-coverage", "cache.stampede"]} count={5} />
+
+Now run it for real. Open the [cache-aside template in the sandbox](/sandbox?template=cache-aside), drive Zipf traffic through it, and watch the hit rate climb as the cache warms. Then take the challenge: [keep reads fast through a cache restart](/challenges/cache-aside-recovery).
+
+</Step>

@@ -1,0 +1,55 @@
+{
+  "lessons": [
+    { "id": "how-the-web-works", "track": "foundations", "title": "How the web works", "status": "planned", "requires": [] },
+    { "id": "latency-numbers", "track": "foundations", "title": "Latency numbers", "status": "planned", "requires": [] },
+    { "id": "throughput", "track": "foundations", "title": "Throughput and Little's law", "status": "planned", "requires": ["latency-numbers"] },
+    { "id": "percentiles", "track": "foundations", "title": "Percentiles and tail latency", "status": "planned", "requires": ["throughput"] },
+    { "id": "bandwidth", "track": "foundations", "title": "Bandwidth, saturation and egress", "status": "planned", "requires": ["latency-numbers"] },
+    { "id": "availability", "track": "foundations", "title": "Availability nines", "status": "planned", "requires": [] },
+    { "id": "estimation", "track": "foundations", "title": "Back-of-envelope estimation", "status": "planned", "requires": ["throughput"] },
+
+    { "id": "caching", "track": "building-blocks", "title": "Caching: cache-aside, eviction, stampede", "status": "live", "requires": ["latency-numbers", "throughput"] },
+    { "id": "queues", "track": "building-blocks", "title": "Queues and delivery guarantees", "status": "planned", "requires": ["throughput"] },
+    { "id": "partitioning", "track": "building-blocks", "title": "Partitioning and consistent hashing", "status": "planned", "requires": ["estimation"] },
+    { "id": "transactions", "track": "building-blocks", "title": "Transactions and isolation anomalies", "status": "planned", "requires": [] },
+    { "id": "replication", "track": "building-blocks", "title": "Replication and quorums", "status": "planned", "requires": ["availability"] },
+    { "id": "rate-limiting", "track": "building-blocks", "title": "Rate limiting algorithms", "status": "planned", "requires": ["throughput"] },
+    { "id": "streams", "track": "building-blocks", "title": "Stream processing and windows", "status": "planned", "requires": ["queues"] },
+
+    { "id": "retries", "track": "distributed-systems", "title": "Retries, backoff and jitter", "status": "planned", "requires": ["percentiles", "availability"] },
+    { "id": "consensus", "track": "distributed-systems", "title": "Consensus with Raft", "status": "planned", "requires": ["replication"] },
+    { "id": "idempotency", "track": "distributed-systems", "title": "Idempotency", "status": "planned", "requires": ["retries"] },
+    { "id": "sagas", "track": "distributed-systems", "title": "Sagas and the transactional outbox", "status": "planned", "requires": ["transactions", "queues"] },
+
+    { "id": "failure-modes", "track": "reliability", "title": "Failure modes and metastability", "status": "planned", "requires": ["retries", "queues"] },
+    { "id": "capacity-planning", "track": "reliability", "title": "Capacity planning at planet scale", "status": "planned", "requires": ["estimation", "partitioning"] },
+
+    { "id": "authn-authz", "track": "security", "title": "Authentication and authorisation", "status": "planned", "requires": ["how-the-web-works"] },
+
+    { "id": "payment-system", "track": "case-studies", "title": "Payment system", "status": "planned", "requires": ["idempotency", "sagas"] },
+    { "id": "stock-exchange", "track": "case-studies", "title": "Stock exchange", "status": "planned", "requires": ["consensus", "queues"] },
+
+    { "id": "interview-framework", "track": "interview", "title": "The interview framework", "status": "planned", "requires": ["estimation", "caching"] }
+  ],
+  "rows": [
+    { "concept": "Little's law", "lesson": "throughput", "activities": ["R", "C"], "assessment": "numeric variants", "capability": "queues, metrics", "limitations": "steady state only" },
+    { "concept": "Tail latency and fan-out", "lesson": "percentiles", "activities": ["R"], "assessment": "predict p99", "capability": "parallel(all)", "limitations": "none listed" },
+    { "concept": "Cache-aside and stampede", "lesson": "caching", "activities": ["R", "C", "Q"], "assessment": "numeric variants, mastery check, tune-to-SLO challenge", "capability": "cache, coalescing", "limitations": "no memory fragmentation" },
+    { "concept": "Consistent hashing", "lesson": "partitioning", "activities": ["M", "R"], "assessment": "key-movement variants", "capability": "ring, rebalancing", "limitations": "none listed" },
+    { "concept": "Isolation anomalies", "lesson": "transactions", "activities": ["M"], "assessment": "identify the anomaly", "capability": "none (focused model only)", "limitations": "not in the R engine" },
+    { "concept": "Async replication loss", "lesson": "replication", "activities": ["R"], "assessment": "invariant spotting", "capability": "replication, failover", "limitations": "none listed" },
+    { "concept": "Quorums and read repair", "lesson": "replication", "activities": ["M", "R"], "assessment": "R/W choice", "capability": "quorum KV", "limitations": "no Merkle-tree detail" },
+    { "concept": "Retry storm", "lesson": "retries", "activities": ["R"], "assessment": "fix the design", "capability": "retries, amplification", "limitations": "none listed" },
+    { "concept": "Raft", "lesson": "consensus", "activities": ["M"], "assessment": "scenario predictions", "capability": "none (election delay in R)", "limitations": "no membership changes" },
+    { "concept": "Idempotency", "lesson": "idempotency", "activities": ["R"], "assessment": "invariant passes", "capability": "dedup store", "limitations": "none listed" },
+    { "concept": "Sagas and outbox", "lesson": "sagas", "activities": ["M", "R"], "assessment": "order compensation", "capability": "queue redelivery", "limitations": "none listed" },
+    { "concept": "Metastable failure", "lesson": "failure-modes", "activities": ["R"], "assessment": "recover the system", "capability": "retries and queues", "limitations": "none listed" },
+    { "concept": "Rate limiting", "lesson": "rate-limiting", "activities": ["R", "V"], "assessment": "choose algorithm", "capability": "limiter", "limitations": "centralised store latency simplified" },
+    { "concept": "Stream windows", "lesson": "streams", "activities": ["M"], "assessment": "late-data cases", "capability": "none (focused model only)", "limitations": "none listed" },
+    { "concept": "Payment system", "lesson": "payment-system", "activities": ["R", "M"], "assessment": "rubric and invariants", "capability": "dedup, invariants", "limitations": "no fraud model" },
+    { "concept": "Stock exchange", "lesson": "stock-exchange", "activities": ["M", "R"], "assessment": "rubric", "capability": "ordering invariant", "limitations": "single-venue only" },
+    { "concept": "Capacity at planet scale", "lesson": "capacity-planning", "activities": ["R", "C"], "assessment": "find the breaking point", "capability": "fluid model, sweep", "limitations": "fluid approximations" },
+    { "concept": "Hot shard and bad shard key", "lesson": "partitioning", "activities": ["R"], "assessment": "choose a shard key", "capability": "key to shard mapping", "limitations": "scaled keyspace" },
+    { "concept": "Link saturation and egress", "lesson": "bandwidth", "activities": ["R"], "assessment": "fix via CDN or compression", "capability": "contended links", "limitations": "no TCP dynamics" }
+  ]
+}
