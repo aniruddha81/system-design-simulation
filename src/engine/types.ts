@@ -19,7 +19,19 @@ export type ComponentKind =
   | "service"
   | "cache"
   | "database"
-  | "rateLimiter";
+  | "rateLimiter"
+  // P2 (§5.3)
+  | "dns"
+  | "cdn"
+  | "apiGateway"
+  | "kvStore"
+  | "queue"
+  | "worker"
+  | "objectStore"
+  | "searchIndex"
+  | "dedupStore"
+  | "autoscaler"
+  | "circuitBreaker";
 
 export type QueueParams = {
   concurrency: number; // workers
@@ -28,6 +40,15 @@ export type QueueParams = {
   costPerHour: number; // USD
   region: string;
   zone: string;
+  restartWarmupUs?: Us; // P2: time spent `restarting` after a kill ends (default 1 µs)
+};
+
+// P2 failover settings for leader-based stores (§5.6).
+export type FailoverParams = {
+  heartbeatUs: Us;
+  missedHeartbeats: number; // detection delay = heartbeatUs × missedHeartbeats
+  electionUs: Us;
+  fencing: boolean; // without fencing an old leader that comes back can accept writes (split brain)
 };
 
 export type NodeParams = {
@@ -49,13 +70,78 @@ export type NodeParams = {
     readTime: Dist;
     writeTime: Dist;
     replicas: number; // P1: capacity only; replication semantics arrive in P2
+    // P2 (all optional; absent = P1 behaviour)
+    replication?: "sync" | "semiSync" | "async";
+    replicationLag?: Dist; // async/semi-sync shipping delay per write
+    readFromReplicas?: boolean; // read/write split
+    walDurable?: boolean; // committed WAL survives a kill (default true)
+    connectionPool?: number; // max concurrent connections; excess waits
+    failover?: FailoverParams;
   };
   rateLimiter: QueueParams & {
     serviceTime: Dist;
     algorithm: "tokenBucket" | "leakyBucket" | "fixedWindow" | "slidingWindow";
     ratePerSec: number;
     burst: number;
+    centralised?: boolean; // P2: shared state adds a round trip (simplified)
   };
+  // ---------- P2 ----------
+  dns: { resolutionTime: Dist; ttlUs: Us; records: NodeId[] }; // records[0] primary, rest failover
+  cdn: QueueParams & {
+    serviceTime: Dist;
+    capacityBytes: number; // per region
+    eviction: "lru" | "lfu";
+    ttlUs?: Us;
+    originShield: boolean;
+    costPerGB: number; // egress
+  }; // miss => forwards to its single outgoing edge (origin)
+  apiGateway: QueueParams & { serviceTime: Dist; maxRequestBytes: number }; // serviceTime = auth latency; oversize => 413 counted as 409-class reject
+  kvStore: QueueParams & {
+    readTime: Dist;
+    writeTime: Dist;
+    members: number; // nodes on the consistent-hash ring (live-editable => rebalancing)
+    vnodes: number;
+    replicationFactor: number; // N
+    readQuorum: number; // R
+    writeQuorum: number; // W
+    hintedHandoff: boolean;
+    readRepair: boolean;
+    tombstoneGcUs: Us;
+  };
+  queue: {
+    partitions: number;
+    capacityMessages: number; // back-pressure: publish rejected (503) when full
+    visibilityTimeoutUs: Us;
+    maxDeliveries: number; // then DLQ
+    retentionUs: Us;
+    publishTime: Dist;
+    costPerHour: number;
+    region: string;
+    zone: string;
+  };
+  worker: QueueParams & { serviceTime: Dist; source: NodeId; batchSize: number }; // consumer group of `concurrency` consumers; handlers keyed by endpoint
+  objectStore: { readTime: Dist; writeTime: Dist; costPerGBMonth: number; costPerMillionRequests: number; region: string; zone: string };
+  searchIndex: QueueParams & { serviceTime: Dist; indexLag: Dist; source: NodeId }; // eventually consistent copy of `source`
+  dedupStore: QueueParams & { serviceTime: Dist; ttlUs: Us; atomic: boolean; durable: boolean };
+  autoscaler: {
+    targets: NodeId[];
+    metric: "utilisation" | "queueLength";
+    targetValue: number;
+    min: number;
+    max: number;
+    cooldownUs: Us;
+    provisionUs: Us;
+    warmupUs: Us;
+    evaluateEveryUs: Us;
+  }; // not in the request path; changes targets' concurrency
+  circuitBreaker: {
+    failureRateThreshold: number; // [0,1]
+    windowUs: Us;
+    minRequests: number;
+    openUs: Us;
+    halfOpenProbes: number;
+    bulkheadMax?: number; // max concurrent pass-through calls
+  }; // pass-through to its single outgoing edge; open => fast 503
 };
 
 export type NodeSpec<K extends ComponentKind = ComponentKind> = K extends ComponentKind
@@ -81,6 +167,13 @@ export type EdgeSpec = {
   lossRate: number; // [0,1]
 };
 
+// P2 (§8A.2): input field generators. keyTemplate placeholders refer to these names.
+export type InputGen =
+  | { kind: "zipf"; min: number; max: number; s: number }
+  | { kind: "uniform"; min: number; max: number }
+  | { kind: "sequence"; start: number }
+  | { kind: "size"; meanBytes: number; sdBytes: number };
+
 export type EndpointSpec = {
   id: EndpointId;
   name: string; // e.g. "GET /user/:id"
@@ -89,7 +182,30 @@ export type EndpointSpec = {
   requestBytes: number;
   responseBytes: number;
   idempotent: boolean;
+  inputs?: Record<string, InputGen>; // P2; absent => scenario.workload.keys drives the key
+  responseFields?: string[]; // P2; response size = sum of these entity field sizes (else responseBytes)
 };
+
+// ---------- P2 data model (§8A.1) ----------
+export type FieldSpec = {
+  name: string;
+  type: "string" | "int" | "float" | "bool" | "timestamp";
+  bytes: { meanBytes: number; sdBytes: number };
+};
+export type IndexSpec = { name: string; fields: string[]; unique: boolean };
+export type EntitySpec = {
+  name: string;
+  store: NodeId; // database / kvStore / cache / searchIndex / objectStore
+  fields: FieldSpec[];
+  primaryKey: string;
+  indexes: IndexSpec[];
+  shardKey?: string;
+  dataset: { count: number; keys: KeyDist; initial?: Record<string, number> }; // generated from the run seed, reset every run; count ≤ 1M (Exact)
+};
+
+// P2: visual frames (§8). Membership comes from node params region/zone; latency from Design.regions.
+export type GroupSpec = { id: string; kind: "region" | "zone"; name: string; position: { x: number; y: number }; size: { w: number; h: number } };
+export type RegionMatrix = { names: string[]; latencyUs: Us[][]; egressCostPerGB: number[][] }; // added to edges crossing regions
 
 export type Design = {
   schemaVersion: 1;
@@ -98,6 +214,11 @@ export type Design = {
   nodes: NodeSpec[];
   edges: EdgeSpec[];
   endpoints: EndpointSpec[];
+  // P2 (optional; absent = P1). designHash excludes groups, annotations and every position/label.
+  entities?: EntitySpec[];
+  regions?: RegionMatrix;
+  groups?: GroupSpec[];
+  annotations?: unknown[]; // whiteboard ink/text/stickies; never simulated (§8A.5)
 };
 
 // ---------- route program (§5.2) — P1 subset ----------
@@ -111,15 +232,37 @@ export type RetryPolicy = {
 
 export type Condition =
   | { kind: "cacheHit" } // result of the most recent cacheGet in this route
-  | { kind: "prob"; p: number }; // explicitly probabilistic
+  | { kind: "prob"; p: number } // explicitly probabilistic
+  // P2: state-based (§5.2)
+  | { kind: "found" } // most recent data read returned a record
+  | { kind: "dedupHit" } // most recent dedup step saw a known idempotency key
+  | { kind: "leaderAlive"; store: NodeId }
+  | { kind: "breakerClosed"; breaker: NodeId };
+
+export type DataOp =
+  | { kind: "get" }
+  | { kind: "query"; index?: string; limit: number } // no index => full scan ∝ entity count
+  | { kind: "insert" } // unique conflict => 409
+  | { kind: "put" }
+  | { kind: "update"; field: string; op: "set" | "increment" | "append" }
+  | { kind: "delete" }
+  | { kind: "conditionalPut" } // version mismatch => 409
+  | { kind: "decrementIfPositive"; field: string }; // inventory/tickets; would go < 0 => 409
+
+export type Join = { kind: "all" } | { kind: "any" } | { kind: "quorum"; k: number } | { kind: "firstN"; n: number };
 
 export type Step =
-  | { type: "call"; target: NodeId; timeoutUs: Us; retry?: RetryPolicy; cancelOnTimeout?: boolean }
+  | { type: "call"; target: NodeId; timeoutUs: Us; retry?: RetryPolicy; cancelOnTimeout?: boolean; propagateDeadline?: boolean }
   | { type: "cacheGet"; cache: NodeId; timeoutUs: Us }
   | { type: "cacheSet"; cache: NodeId; timeoutUs: Us }
   | { type: "cacheDelete"; cache: NodeId; timeoutUs: Us }
   | { type: "branch"; cond: Condition; then: Step[]; else: Step[] }
-  | { type: "respond"; status: Status };
+  | { type: "respond"; status: Status }
+  // P2
+  | { type: "parallel"; branches: Step[][]; join: Join; cancelLosers: boolean }
+  | { type: "publish"; queue: NodeId; timeoutUs: Us; orderedByKey: boolean } // ack when the queue accepts
+  | { type: "data"; target: NodeId; entity: string; op: DataOp; timeoutUs: Us; retry?: RetryPolicy }
+  | { type: "dedup"; store: NodeId; timeoutUs: Us }; // check-and-record idempotency key (atomic per store params)
 
 export type Status = 200 | 201 | 404 | 409 | 429 | 503 | 504;
 
@@ -135,12 +278,18 @@ export type Workload = {
     | { kind: "poisson"; rps: number }
     | { kind: "constant"; rps: number }
     | { kind: "step"; rps: number; stepAtUs: Us; stepRps: number }
-    | { kind: "spike"; rps: number; spikeAtUs: Us; spikeDurUs: Us; spikeRps: number };
+    | { kind: "spike"; rps: number; spikeAtUs: Us; spikeDurUs: Us; spikeRps: number }
+    // P2 (§5.5)
+    | { kind: "ramp"; fromRps: number; toRps: number }
+    | { kind: "diurnal"; meanRps: number; amplitude: number; periodUs: Us } // amplitude in [0,1]
+    | { kind: "replay"; points: { atUs: Us; rps: number }[] }; // validated user curve (CSV), linear between points
   mix: Record<EndpointId, number>; // weights
   keys: KeyDist;
   deadlineUs: Us; // per logical request, inclusive (§5.1)
+  sessions?: { count: number }; // P2: requests carry a session id for read-your-writes / monotonic reads / sticky LB
 };
 
+// `target` meaning depends on kind: node id, edge id ("link*"), zone or region name.
 export type ChaosEvent = {
   id: string;
   target: NodeId;
@@ -150,6 +299,14 @@ export type ChaosEvent = {
   | { kind: "kill" }
   | { kind: "degrade"; slowFactor: number }
   | { kind: "gray"; errorRate: number }
+  // P2 (§5.6)
+  | { kind: "partition"; links: { from: NodeId; to: NodeId }[] } // directional; target unused ("")
+  | { kind: "linkLoss"; lossRate: number } // target = edge id
+  | { kind: "linkLatency"; addUs: Us } // target = edge id (dependency latency injection)
+  | { kind: "clockSkew"; skewUs: Us } // target = node id (lease demos)
+  | { kind: "zoneOutage" } // target = zone name
+  | { kind: "regionOutage" } // target = region name
+  | { kind: "trafficSpike"; multiplier: number } // target unused ("")
 );
 
 export type Scenario = {
@@ -179,6 +336,7 @@ export type RunKey = {
 };
 
 export type Cursor = { timeUs: Us; seq: number };
+// §5.7. nodeId "@workload" edits scenario.workload (path e.g. "arrival.rps"); "@chaos" adds/edits future chaos events.
 export type LiveEdit = { cursor: Cursor; nodeId: NodeId; path: string; value: unknown };
 
 // ---------- validation (§5.9) ----------
@@ -217,6 +375,12 @@ export type NodeStats = {
   inFlight?: number;
   wastedWork?: number;
   cache?: { hits: number; misses: number; evictions: number; hitRate: number | null };
+  // P2 (present only for the relevant kinds)
+  replicationLagUs?: { mean: number; max: number };
+  queue?: { depthMax: number; redelivered: number; deadLettered: number; consumerLagMax: number };
+  breaker?: { opens: number; shortCircuited: number };
+  autoscale?: { minConcurrency: number; maxConcurrency: number; scaleEvents: number };
+  failovers?: number;
 };
 
 export type SeriesPoint = {
@@ -244,6 +408,7 @@ export type RunMetrics = {
   throughput: { offeredPerSec: number; admittedPerSec: number; completedPerSec: number };
   costPerMonth: number;
   statusCounts: Partial<Record<Status, number>>;
+  costBreakdown?: { compute: number; egress: number; requests: number; storage: number }; // P2, per month
 };
 
 export type Bottleneck = { nodeId: NodeId; utilisation: number; queueGrowth: number; retryAmplification: number | null };
@@ -301,7 +466,8 @@ export type ToWorker =
   | { type: "setSpeed"; speed: Speed }
   | { type: "step"; by: "event" | "1ms" }
   | { type: "replayTo"; cursor: Cursor }
-  | { type: "ping" };
+  | { type: "ping" }
+  | { type: "liveEdit"; nodeId: NodeId; path: string; value: unknown }; // P2 §5.7; applied at next event boundary
 
 export type FromWorker =
   | { type: "invalid"; issues: ValidationIssue[] }
@@ -310,7 +476,9 @@ export type FromWorker =
   | { type: "heartbeat" }
   | { type: "pong" }
   | { type: "done"; result: RunResult }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "editAck"; edit: LiveEdit } // only acked edits enter liveEditLog
+  | { type: "editRejected"; nodeId: NodeId; path: string; reason: string }; // structural or past-cursor edits
 
 // ---------- grading (§7) ----------
 export type SLO =
