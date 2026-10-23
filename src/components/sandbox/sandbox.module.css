@@ -1,0 +1,71 @@
+/* React Flow themed with the shared tokens (W4 contract). */
+.board {
+  --xy-background-color: var(--bg);
+  --xy-background-pattern-dots-color: color-mix(in oklab, var(--text-muted) 35%, transparent);
+  --xy-edge-stroke: var(--text-muted);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-handle-background-color: var(--surface-2);
+  --xy-handle-border-color: var(--text-muted);
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--bg) 70%, transparent);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-2);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-node-border-radius: var(--radius);
+  --xy-selection-background-color: color-mix(in oklab, var(--accent) 12%, transparent);
+  --xy-selection-border: 1px dashed var(--accent);
+}
+
+.board :global(.react-flow__node) {
+  border-radius: var(--radius);
+}
+.board :global(.react-flow__node:focus-visible),
+.board :global(.react-flow__edge:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.board :global(.react-flow__handle) {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.board :global(.react-flow__handle:hover),
+.board :global(.react-flow__handle.connectingto) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.board :global(.react-flow__controls-button) {
+  width: 28px;
+  height: 28px;
+}
+.board :global(.react-flow__minimap) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.board :global(.react-flow__attribution) {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .shake {
+    animation: shake 420ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+  .pulse {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(3px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+
+@keyframes pulse {
+  50% { opacity: 0.55; }
+}

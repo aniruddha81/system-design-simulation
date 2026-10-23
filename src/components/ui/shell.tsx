@@ -55,6 +55,16 @@ export function setPref(key: Key, value: string) {
 export function Providers({ children }: { children: ReactNode }) {
   // React's dev remount resets <html> attributes; re-apply (no-op in production).
   useLayoutEffect(applyPrefs, []);
+  // Full-height tools (sandbox editor) size themselves with calc(100dvh - var(--app-header-h)).
+  useLayoutEffect(() => {
+    const header = document.querySelector("header");
+    if (!header) return;
+    const ro = new ResizeObserver(() =>
+      document.documentElement.style.setProperty("--app-header-h", `${header.getBoundingClientRect().height}px`),
+    );
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, []);
   const motion = usePref("motion");
   const reducedMotion = motion === "full" ? "never" : motion === "reduced" || motion === "off" ? "always" : "user";
   return <MotionConfig reducedMotion={reducedMotion}>{children}</MotionConfig>;

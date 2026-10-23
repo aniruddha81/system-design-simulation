@@ -73,7 +73,6 @@ export function decodeShareLink(hash: string): Design | { error: string } {
     if (!payload.length || payload.length > SHARE_COMPRESSED_LIMIT || !/^[A-Za-z0-9+\-$]+$/.test(payload)) throw new Error("Invalid or oversized share link; use export.");
     const parsed = JSON.parse(decompressBounded(payload));
     // A link is an unsaved new draft; callers decide when to persist it.
-    // TODO(W3): Editor currently saves decoded links immediately; defer until edit or Save.
     return { ...designSchema.parse(parsed), id: newId() };
   } catch (error) { return { error: error instanceof Error ? error.message : "Malformed share link" }; }
 }
