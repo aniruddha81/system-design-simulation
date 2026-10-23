@@ -27,6 +27,8 @@ flowchart LR
 | W2 Persistence | Codex | `src/lib/persistence/**` |
 | W3 Sandbox + challenge | Claude | `src/app/sandbox/**`, `src/app/challenges/**`, `src/components/sandbox/**`, `src/lib/run-manager/**`, `src/content/challenges/**` |
 | W4 Shell + content | Claude | `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`, `src/app/not-found.tsx`, `src/app/learn/**`, `src/app/progress/**`, `src/app/settings/**`, `src/app/reference/**`, `src/components/ui/**`, `src/components/lesson/**`, `src/lib/content/**`, `src/lib/format.ts`, `content/**`, `mdx-components.tsx`, `next.config.ts` |
+| W5 Focused models | Codex | `src/models/**` (PLAN §6: `Model<S, A>` interface, hash ring, isolation scheduler) |
+| W6 Scale mode | Codex | `src/engine/scale/**` (PLAN §5A; reads `src/engine/types.ts`, never edits Exact-mode files) |
 | Lead | Claude (main) | `package.json`, `docs/**`, integration, commits |
 
 ## Contract: engine (W1 → W3, W4)
