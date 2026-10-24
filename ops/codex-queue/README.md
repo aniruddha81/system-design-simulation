@@ -20,6 +20,6 @@ flowchart LR
 
   Leave the window open; it exits by itself when the queue is empty. If another runner is already alive (for example one Claude started), yours waits on standby and takes over the moment that one dies, so it is always safe to start one.
 - **HOLD gate**: while the file `ops/codex-queue/HOLD` exists, the runner waits and starts nothing new. The lead creates it while interactive (non-queue) workers are still landing and deletes it when their work is merged. If the lead is offline and those workers have finished (`git status` is clean, or nothing is changing), delete `HOLD` yourself to let the queue proceed.
-- **Results**: `logs/<name>.result.md` holds Codex's final summary, and `logs/<name>.log` the full transcript. Exit 0 moves the task to `done/`; anything else moves it to `failed/`.
+- **Results**: `logs/<name>.result.md` holds Codex's final summary, and `logs/<name>.err` the full transcript (Codex writes it to stderr). Exit 0 moves the task to `done/`; anything else moves it to `failed/`.
 - **Rules every task inherits**: follow `docs/WORKSTREAMS.md` (owned paths, no commits). Codex never commits; the lead verifies and commits.
 - **Interrupted task**: if a task sits in `running/` with no live runner, move it back to `pending/` and restart the runner, or resume it with `codex exec resume <session id from its log>`.
