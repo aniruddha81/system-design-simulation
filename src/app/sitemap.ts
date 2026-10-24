@@ -10,6 +10,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/learn`, priority: 0.9 },
     { url: `${SITE_URL}/reference`, priority: 0.7 },
     { url: `${SITE_URL}/challenges`, priority: 0.7 },
+    { url: `${SITE_URL}/case-studies`, priority: 0.8 },
+    { url: `${SITE_URL}/interview`, priority: 0.7 },
     ...loadLessons().filter((lesson) => matrix.lessons.some((entry) => entry.id === lesson.id && entry.status === "live"))
       .map((l) => ({ url: `${SITE_URL}/learn/${l.track}/${l.slug}`, lastModified: l.lastReviewed, priority: 0.8 })),
     ...caseStudies.map((study) => ({ url: `${SITE_URL}/case-studies/${study.id}`, priority: 0.8 })),

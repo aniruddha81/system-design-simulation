@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { loadCurriculum } from "@/lib/content/loader";
+import { loadLessons } from "@/lib/content/loader";
 
 export const metadata: Metadata = { title: "Page not found", robots: { index: false } };
 
 export default function NotFound() {
-  const live = loadCurriculum().lessons.filter((l) => l.status === "live");
+  const live = loadLessons();
   const places = [
     { href: "/learn", title: "Curriculum", body: "Every track and lesson, ordered by prerequisites" },
     { href: "/reference", title: "Reference", body: "Latency numbers and estimation calculators" },
@@ -17,7 +17,7 @@ export default function NotFound() {
       <p className="font-mono text-sm text-accent">404</p>
       <h1 className="mt-2 font-display text-4xl leading-tight tracking-tight sm:text-5xl">A page missing from the notebook.</h1>
       <p className="mt-4 text-lg text-muted">
-        The page may have moved, or the link has a typo. Lessons keep stable IDs, so a renamed lesson redirects; this one did not match anything.
+        The page may have moved, or the link has a typo. Use Search in the navigation to find a lesson or design.
       </p>
 
       <h2 className="mt-12 font-display text-2xl">Lessons</h2>

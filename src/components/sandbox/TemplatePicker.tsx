@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { cacheAsideDesign, noCacheDesign } from "@/engine/fixtures";
 import type { Design } from "@/engine/types";
 import { importDesign, newId, openStore, type DesignRecord } from "@/lib/persistence";
+import { saveScenario } from "./scenario-ops";
 
 const TEMPLATES: { id: string; title: string; blurb: string; make: () => Design }[] = [
   {
@@ -32,10 +33,21 @@ export function TemplatePicker() {
   // /sandbox?template=cache-aside (linked from lessons) opens that template directly.
   // Read client-side so the page stays static; the ref stops Activity re-shows from creating duplicates.
   useEffect(() => {
-    const t = TEMPLATES.find((x) => x.id === new URLSearchParams(location.search).get("template"));
-    if (!t || opened.current) return;
+    const query = new URLSearchParams(location.search);
+    const t = TEMPLATES.find((x) => x.id === query.get("template"));
+    if (opened.current || (!t && !query.has("ref") && !query.has("case"))) return;
     opened.current = true;
-    createDraft(t.make()).then((id) => router.replace(`/sandbox/${id}`)).catch(() => {});
+    void (async () => {
+      const { resolveDesignRequest } = await import("./open-design");
+      const request = resolveDesignRequest(query);
+      if (request) {
+        const id = await createDraft(structuredClone(request.design));
+        saveScenario(id, structuredClone(request.scenario));
+        const context = new URLSearchParams();
+        for (const key of ["ref", "case", "scenario", "practice", "alt"]) if (query.has(key)) context.set(key, query.get(key)!);
+        router.replace(`/sandbox/${id}?${context}`);
+      } else if (t) router.replace(`/sandbox/${await createDraft(t.make())}`);
+    })().catch((e) => setError(`Couldn't open that design: ${e instanceof Error ? e.message : e}`));
   }, [router]);
 
   useEffect(() => {

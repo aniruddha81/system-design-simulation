@@ -1,0 +1,245 @@
+{/*
+id: ticket-booking
+slug: ticket-booking
+track: case-studies
+title: "Case study: Ticket booking (Ticketmaster)"
+description: "Design a high-contention ticket booking system: virtual waiting rooms, two-phase seat holds with bounded TTLs, atomic conditional updates (`decrementIfPositive`), and fencing tokens."
+objectives:
+  - id: size-ticket-booking
+    text: Estimate stadium seat inventory memory, flash-crowd read vs write ratios, and waiting-room admission pacing
+  - id: prevent-oversell
+    text: Prevent double-selling seats under contention using atomic conditional updates (`decrementIfPositive` / CAS) instead of read-then-write
+  - id: two-phase-holds
+    text: Design a two-phase seat reservation protocol with bounded-TTL holds, active+lazy expiry, and fencing tokens
+  - id: booking-failures
+    text: Predict system behaviour during hot front-row drops, seat-map refresh storms, and database leader failovers
+requires: [transactions, leader-election, caching]
+activities: [R, Q]
+limitations:
+  - "The runnable cell simulates 2,500 requests/s over 10,000 seats (`remaining = 1` per seat) and demonstrates the oversell invariant on the read-then-write alternative."
+  - "Hold expiry is modelled via the `holdexpirer` queue and explicit `release` endpoint."
+sources:
+  - title: "Designing Data-Intensive Applications, Ch. 7 (Transactions) & Ch. 8 (Fencing Tokens)"
+    authors: "M. Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+  - title: "How Martin Kleppmann's Fencing Tokens Prevent Split-Brain Writes"
+    authors: "M. Kleppmann"
+    year: 2016
+    url: "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+When a major concert or championship game goes on sale at 10:00:00 AM, **2 million fans** compete for **50,000 seats** at the exact same second. Two people must **never** walk away with a confirmed ticket for Section 101, Row A, Seat 1 (`oversell` must be strictly zero), and a user who selects a seat needs a fair window (e.g. **5 minutes**) to enter payment details without someone else stealing the seat mid-checkout.
+
+**Functional**: browse the interactive seat map; place a temporary **5-minute hold** on specific seats; confirm the booking upon payment (or release the seat automatically if the hold expires or is cancelled); queue excess users fairly in a virtual waiting room.
+
+**Non-functional**: **zero overselling** (`oversell` invariant); fast seat-map reads (< 100 ms, eventual consistency of 2–5 s is fine); survive 100× flash-crowd spikes at on-sale time.
+
+<Choice
+  id="why-two-phase-hold"
+  objective="two-phase-holds"
+  prompt="Why does ticket booking split purchase into Phase 1 (a 5-minute temporary seat hold) and Phase 2 (payment confirmation), rather than charging the credit card first and assigning a seat afterward?"
+  options={[
+    { id: "ux-and-lock-duration", text: "Typing card details and running 3D-Secure takes minutes; holding a temporary lease reserves the exact seat for the fan without holding a database lock across a multi-minute human checkout", correct: true, feedback: "Right. If you only checked seat availability after charging the card, 95% of fans on a hot drop would have their card charged only to find the seat was sold while they typed their CVV." },
+    { id: "psp-forbids-seats", text: "Payment gateways require a seat row ID before they can hash a credit card number", feedback: "Payment gateways do not care about seat IDs; the hold exists for user experience and inventory reservation." },
+    { id: "sql-no-integers", text: "SQL databases cannot decrement an integer in one statement", feedback: "SQL can decrement in one statement; the two phases exist because human payment takes minutes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Look closely at the **size of the data** vs the **size of the traffic** for a major stadium on-sale:
+
+- **Seats per stadium event**: **50,000 seats** × ~128 bytes/row (`seatId, section, row, status, holdToken, holdExpiresAt`) ≈ **6.4 MB**!
+- **Key insight**: an entire stadium's seat inventory is **6.4 megabytes** — it fits inside a single CPU's L3 cache! Ticket booking is **never** a big-data storage problem; it is a **high-contention concurrency and traffic-shaping** problem.
+- **Seat-map reads**: 500k active browsers refreshing sections every 5 s ≈ **100,000 reads/s** (absorbed by a 2–5 s cache).
+- **Hold writes**: 50,000 seats × ~3 hold attempts/seat over 300 s ≈ **500–2,000 atomic writes/s** once shaped by the waiting room.
+
+<Choice
+  id="stadium-data-size"
+  objective="size-ticket-booking"
+  prompt="A stadium has 50,000 seats, and each seat row is 128 bytes. Roughly how large is the entire event's seat table?"
+  options={[
+    { id: "six-megabytes", text: "About 6.4 MB — the bottleneck is lock contention and flash-crowd traffic, not storage capacity", correct: true, feedback: "Right. Recognising that 50,000 rows × 128 B = 6.4 MB immediately tells the interviewer you understand where the real bottleneck lives." },
+    { id: "six-terabytes", text: "About 6.4 TB — requires 100 storage shards per concert", feedback: "50,000 × 128 is 6.4 × 10⁶ bytes (6.4 MB), a million times smaller than 6.4 TB." },
+    { id: "six-gigabytes", text: "About 6.4 GB", feedback: "Off by 1,000×: 50,000 × 128 B is 6.4 MB." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the API">
+
+- `GET /v1/events/{eventId}/seats?section={sec}` → `200 { seats: [{ seatId, status, priceCents }] }` (cached 2–5 s in `seatcache`).
+- `POST /v1/seats/{seatId}/hold` → `200 { holdId, holdToken, expiresAt }` if the seat was available, or **`409 Conflict`** if another fan claimed it first.
+- `POST /v1/holds/{holdId}/confirm` (`{ holdToken, paymentId }`) → verifies `holdToken` still matches the seat row, charges payment, and transitions `HELD → SOLD`.
+- `POST /v1/seats/{seatId}/release` (`{ holdToken }`) → releases an abandoned or expired hold back to `AVAILABLE`.
+
+<Choice
+  id="map-staleness-ok"
+  objective="size-ticket-booking"
+  prompt="Why is it acceptable to cache `GET /v1/events/{id}/seats` for 2–5 seconds even though a seat might be taken during those 2 seconds?"
+  options={[
+    { id: "authoritative-hold", text: "The seat map is only a hint for browsing; `POST /seats/{id}/hold` performs the authoritative atomic check on the database and returns 409 if the seat was just taken", correct: true, feedback: "Right. Caching the map for 2 seconds cuts database read load by 99%+ while `POST /hold` still enforces strict serialisability on the seat row." },
+    { id: "fans-dont-notice-double-sell", text: "Because selling the same seat twice is acceptable if it happens within 2 seconds", feedback: "Overselling is never acceptable; the cache is only on the read map, never on the hold mutation." },
+    { id: "http-get-locks-row", text: "`GET` requests acquire exclusive write locks on the cache", feedback: "`GET` requests are read-only." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the seat state machine and atomic transitions">
+
+Each seat row in `bookingdb` is a state machine:
+
+`AVAILABLE (remaining = 1) → HELD (remaining = 0, holdToken = t, expiresAt) → SOLD`
+
+The hold transition **must** execute as a single **atomic conditional update** (`decrementIfPositive` in the simulator, or `UPDATE ... WHERE` in SQL):
+```sql
+UPDATE seats
+SET status = 'HELD',
+    remaining = 0,
+    hold_token = hold_token + 1,
+    hold_expires_at = NOW() + INTERVAL '5 minutes'
+WHERE seat_id = :seatId
+  AND (status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW()))
+RETURNING hold_token, hold_expires_at;
+```
+If 50 fans click Seat 1 at the same millisecond, the database serialises the conditional `UPDATE` on that row: **exactly 1 fan gets 1 row updated (`200 OK`)** and **49 fans get 0 rows updated (`409 Conflict`)**.
+
+<Choice
+  id="read-then-write-bug"
+  objective="prevent-oversell"
+  prompt="What happens if the API executes `SELECT remaining FROM seats WHERE seat_id = 1`, checks `if (remaining == 1)` in application code, and then runs `UPDATE seats SET remaining = remaining - 1 WHERE seat_id = 1`?"
+  options={[
+    { id: "oversell-race", text: "Two concurrent requests both read `remaining = 1` before either `UPDATE` runs, so both succeed and `remaining` becomes -1 (`oversell` violation)", correct: true, feedback: "Right. Switch to the `ticket-booking-unsafe` alternative in the simulator and run `hot-event` to watch the engine catch this exact `oversell` violation." },
+    { id: "deadlock-only", text: "The database rejects both requests with a syntax error", feedback: "Both SQL statements are syntactically valid; they just lack atomic conditional isolation." },
+    { id: "faster-and-safe", text: "It is safe as long as the application servers run in the same data centre", feedback: "Even on a single multi-core server, two concurrent requests interleave between the `SELECT` and `UPDATE`." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+In the reference design:
+
+1. **Booking API servers** (`api1`, `api2`) serve `seatmap` reads via **cache-aside** through the **Seat-map cache** (`seatcache`).
+2. On `reserve`, the API executes an atomic `decrementIfPositive` on the `seats` entity in **Seat inventory DB** (`bookingdb`), invalidates `seatcache`, and publishes a delayed expiration job to the **Hold TTL expiry queue** (`holdexpirer`).
+3. **Hold expiry workers** (`reaper`) consume `holdexpirer` and release unconfirmed holds once their TTL elapses.
+
+<Ordering
+  id="two-phase-booking-flow"
+  objective="two-phase-holds"
+  prompt="Order the lifecycle of a successful two-phase seat booking."
+  items={[
+    { id: "waiting-room", text: "Virtual waiting room admits the fan to the event page and serves the cached seat map" },
+    { id: "atomic-hold", text: "Fan selects Seat 42; API runs an atomic conditional update (AVAILABLE → HELD) with a 5-minute TTL and monotonic holdToken" },
+    { id: "enqueue-timer", text: "API invalidates the seat-map cache and schedules a 5-minute expiry check in the hold-expiry queue" },
+    { id: "charge-card", text: "Fan enters payment details; payment service charges the card outside the seat database lock" },
+    { id: "fenced-confirm", text: "API transitions Seat 42 from HELD → SOLD only if holdToken still matches the seat row" }
+  ]}
+  explanation="Atomic conditional hold claims the seat in microseconds; charging outside the DB avoids lock starvation; verifying holdToken on confirm prevents late payments from overwriting a re-held seat."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: Fencing tokens, Lazy + Active Expiry, and Waiting Rooms">
+
+### 1. The late-payment race and fencing tokens (`holdToken`)
+Suppose Alice holds Seat 1 at $t = 0:00$ with a 5-minute TTL (`holdToken = 101`). At $t = 4:59$, Alice clicks "Pay", and her request enters a slow card-network call that takes 4 seconds:
+- At $t = 5:00$, Alice's hold expires!
+- At $t = 5:01$, Bob clicks Seat 1 and acquires a new hold (`holdToken = 102`).
+- At $t = 5:03$, Alice's payment call returns `SUCCESS` and tries to mark Seat 1 `SOLD`!
+
+If the confirmation query only checked `WHERE seat_id = 1`, Alice would overwrite Bob's hold (or Bob would overwrite Alice's sale). By requiring **`WHERE seat_id = 1 AND status = 'HELD' AND hold_token = 101`**, Alice's stale `holdToken = 101` is rejected (`0 rows updated`), and the system automatically refunds Alice's payment. **`holdToken` is a classic Kleppmann fencing token.**
+
+### 2. Active + lazy hold expiration
+What if the background `reaper` worker lags by 30 seconds during a spike? Combining two mechanisms makes expiry bulletproof:
+- **Lazy expiry in the hold `UPDATE` predicate**: `WHERE status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW())` lets the next buyer claim an expired seat **immediately** without waiting for the reaper.
+- **Active reaper queue**: still needed so expired seats flip back to green on the cached seat map even if nobody clicks them right away.
+
+### 3. Virtual waiting room at the edge
+When 2M fans arrive for 50k seats, edge workers place arrivals into a signed FIFO/randomised queue and issue short-lived admission JWTs at the exact rate checkout can process (~5,000 users/min), shielding the core database from 98% of the flash crowd.
+
+<Choice
+  id="fencing-token-race"
+  objective="two-phase-holds"
+  prompt="User A's 5-minute seat hold (`holdToken = 7`) expires at 10:05:00 while User A's credit card charge is still in flight. At 10:05:01 User B holds the same seat (`holdToken = 8`). At 10:05:02 User A's card charge succeeds. How does the system prevent double-selling the seat?"
+  options={[
+    { id: "check-hold-token", text: "The confirm query checks `WHERE seat_id = :id AND hold_token = 7`; since the row now has `hold_token = 8`, the update fails and User A's charge is automatically refunded", correct: true, feedback: "Right. Monotonically increasing fencing tokens (`holdToken`) prevent a slow thread whose lease expired from corrupting the new leaseholder's state." },
+    { id: "give-to-both", text: "Mark the seat SOLD for User A and let User B also buy it", feedback: "That double-sells the physical seat." },
+    { id: "never-expire-holds", text: "Never expire holds so `holdToken` is unnecessary", feedback: "Without hold expiry, abandoned browser tabs permanently lock up unsold seats." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **Read-then-write holds (`ticket-booking-unsafe`)**: in the simulator, switch to the `ticket-booking-unsafe` alternative (`get` followed by `update(increment, -1)`) and run `hot-event`. Concurrent requests read `remaining = 1` simultaneously and trigger an **`oversell` invariant violation**.
+- **Single-threaded in-memory actor per event + WAL**: because an entire stadium is only 6.4 MB, routing all hold/confirm requests for `eventId` to a single-threaded in-memory actor (backed by a replicated Raft/Kafka log) processes 50,000 holds/s sequentially with zero lock contention.
+- **"Best available in section" vs "Pick exact seat"**: assigning any available seat in a price tier from a partitioned counter scales with less contention than everyone clicking the same front-row centre seat on an SVG map.
+
+<Choice
+  id="single-actor-why-it-works"
+  objective="prevent-oversell"
+  prompt="Why is a single-threaded in-memory state machine (actor) per event viable for stadium ticket booking?"
+  options={[
+    { id: "tiny-state-fast-ram", text: "50,000 seats take only ~6.4 MB of RAM, and a single thread mutating in-memory structs (plus batched WAL appends) can serialise tens of thousands of seat holds per second with zero lock contention", correct: true, feedback: "Right. When the working set per partition is a few megabytes, single-writer serialisation in memory is both fast and trivially race-free." },
+    { id: "cpus-have-one-core", text: "Servers only have one CPU core", feedback: "Servers have many cores; each core can run the single-writer actor for a different event or stadium section." },
+    { id: "no-durability-needed", text: "Ticket sales do not need to survive a server reboot", feedback: "Confirmed sales and holds still replicate via a write-ahead log before acknowledging." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Run the three failure scenarios in the simulator:
+
+- **Hot front-row seat (`hot-event`)**: 25% of traffic targets one seat ID. The reference design's `decrementIfPositive` grants the seat to one buyer and rejects contenders with `409 Conflict` (`clean: true`, zero `oversell`). Goodput dips slightly below 1.0 because 409 conflict responses count as rejected attempts — the exact expected behaviour under contention!
+- **Seat-map F5 refresh storm (`map-refresh-storm`)**: traffic doubles as fans hammer refresh. `seatcache` (with request coalescing) shields `bookingdb` and keeps goodput > 98%.
+- **Booking DB primary failover (`bookingdb-failover`)**: `bookingdb` crashes at `t = 1.5 s` and elects a semi-sync replica with fencing. Cached seat maps stay up; seat holds pause for ~500 ms and resume without losing any confirmed hold or double-selling a seat.
+
+<Choice
+  id="hot-seat-409-meaning"
+  objective="booking-failures"
+  prompt="In the `hot-event` scenario, 100 fans try to hold Seat 1 at the same time; 1 gets `200 OK` and 99 get `409 Conflict`. Why is `409 Conflict` a success of the architecture rather than a bug?"
+  options={[
+    { id: "correct-contention-rejection", text: "There is physically only 1 seat; fast, deterministic `409` responses preserve the `oversell = 0` invariant and let the other 99 fans pick a neighbouring seat immediately", correct: true, feedback: "Right. Under physical scarcity, returning 409 to the 99 losers while keeping `clean: true` is the exact correctness contract." },
+    { id: "should-return-200-to-all", text: "All 100 fans should get 200 OK and sort it out at the stadium gate", feedback: "Selling one seat to 100 people is catastrophic for a ticketing business." },
+    { id: "retry-same-seat", text: "The API gateway should automatically retry the 409 on the exact same seat 10 times", feedback: "Retrying a `409` on an already-taken seat just wastes database work; the user must select a different seat." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Review the complete ticket booking blueprint:
+1. **Virtual waiting room at the edge**: shape a 2-million-user spike into steady checkout flow.
+2. **Short-TTL coalesced seat-map cache**: absorb 100:1 read-to-write map refreshes.
+3. **Atomic conditional hold (`decrementIfPositive` / `UPDATE ... WHERE`)**: eliminate read-then-write overselling.
+4. **Bounded-TTL holds (lazy + active expiry) + `holdToken` fencing**: survive abandoned carts and late payment races safely.
+
+<Choice
+  id="lazy-vs-active-expiry"
+  objective="booking-failures"
+  prompt="Why combine lazy expiry (`WHERE status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW())`) with an active background expiry worker?"
+  options={[
+    { id: "instant-claim-plus-clean-map", text: "Lazy expiry lets a buyer claim an expired seat the instant its TTL passes even if the worker lags, while the active worker ensures abandoned seats still flip back to available on the cached seat map", correct: true, feedback: "Right. Lazy expiry guarantees correctness on the write path; active expiry keeps the read-path seat map fresh." },
+    { id: "sql-requires-both", text: "SQL syntax forbids `NOW()` unless a background worker is running", feedback: "`NOW()` works in any SQL query; the two mechanisms complement read-map freshness and write-path immediacy." },
+    { id: "avoid-fencing", text: "So `holdToken` does not need to be checked on payment confirmation", feedback: "You always check `holdToken` on confirmation regardless of how the hold expired." }
+  ]}
+/>
+
+</Step>

@@ -1,0 +1,211 @@
+{/*
+id: uber
+slug: uber
+track: case-studies
+title: "Case study: Uber (ride matching)"
+description: "Design real-time ride matching: an in-memory H3 cell index for 250k location pings/s, atomic conditional claims so no driver is double-booked, and city-scoped failover."
+objectives:
+  - id: size-dispatch
+    text: Estimate location ping rate, in-memory supply index size and ride-matching request rate
+  - id: spatial-supply-index
+    text: Index moving drivers with H3 hexagonal cells in memory rather than a disk-backed relational database
+  - id: atomic-driver-claim
+    text: Prevent double assignment under contention using atomic conditional updates and leases
+  - id: dispatch-failures
+    text: Predict how the system behaves during a downtown surge, a ping storm or a dispatch database failover
+requires: [partitioning, transactions]
+activities: [R, Q]
+limitations:
+  - "The runnable cell scales traffic to 3,000 requests/s over 10,000 drivers; Scale mode covers the 1M-driver calculations."
+  - "ETA routing over a road graph and batch bipartite matching are discussed in the text; the simulator queries the cell index and claims a candidate."
+  - "Driver offer timeouts (leases) are modelled as atomic claim operations on the authoritative dispatch store."
+sources:
+  - title: "H3: Uber's Hexagonal Hierarchical Spatial Index"
+    authors: "I. Brodsky (Uber Engineering)"
+    year: 2018
+    url: "https://www.uber.com/blog/h3/"
+  - title: "Ringpop and Uber's Dispatch System (DISCO)"
+    authors: "Uber Engineering"
+    year: 2015
+    url: "https://ringpop.readthedocs.io/en/latest/"
+  - title: "Designing Data-Intensive Applications, Ch. 7 (Transactions)"
+    authors: "M. Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Drivers send their GPS location every few seconds. When a rider requests a trip, the system finds nearby available drivers, offers the trip, and assigns **exactly one** driver, then tracks trip state (`requested`, `assigned`, `in_progress`, `completed`).
+
+**Non-functional**: matching decisions complete within **~1 s**; location updates are loss-tolerant because a fresh ping arrives 4 seconds later; a driver is **never assigned two concurrent trips**; and dispatch for a city must survive a data-centre outage.
+
+<Choice
+  id="ping-vs-claim-consistency"
+  objective="atomic-driver-claim"
+  prompt="How do the consistency requirements of location pings and driver claims differ?"
+  options={[
+    { id: "ephemeral-vs-atomic", text: "Location pings are ephemeral and loss-tolerant (eventual consistency), while claiming a driver must be strictly atomic so one driver is never given to two riders", correct: true, feedback: "Right. Separating the high-rate ephemeral supply index from the low-rate authoritative dispatch state is the core architectural split." },
+    { id: "both-serializable", text: "Both must be written in serializable distributed transactions across three regions", feedback: "Running distributed transactions at 250,000 pings/s for coordinates that expire in 4 seconds would melt the database for no benefit." },
+    { id: "claims-eventual", text: "Location pings need strict ACID durability, while driver claims can be eventually consistent", feedback: "That is backwards: an eventually consistent claim lets two riders hop into the same car." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+Assume **1M online drivers** pinging every **4 seconds** and **20M trips/day**:
+
+- **Location writes**: 1M ÷ 4 s ≈ **250,000 writes/s**, each ~100 B (≈ 75 MB/s ingress with headers).
+- **Supply index memory**: 1M drivers × ~200 B (driverId, H3 cell, lat/lng, state, timestamp) × 2 replicas ≈ **400 MB** total — the entire world's live driver index fits comfortably in memory.
+- **Ride requests**: 20M ÷ 86,400 × ~3 peak factor ≈ **700 requests/s** at peak — more than 300× lower than the ping rate.
+- **Geo query size**: a ~2 km search in a city inspects the rider's H3 cell and 1–2 rings of neighbours, returning tens to a few hundred candidate drivers.
+
+<Choice
+  id="supply-index-storage"
+  objective="size-dispatch"
+  prompt="At 250,000 location updates per second for 1 million drivers, where should the live supply index live?"
+  options={[
+    { id: "in-memory-kv", text: "In an in-memory store sharded by geo cell (requiring only ~400 MB total), while appending pings to a log for offline analytics", correct: true, feedback: "Right. 400 MB is tiny in RAM, and sub-millisecond in-memory writes absorb 250k pings/s without disk WAL contention." },
+    { id: "single-postgres", text: "In a single disk-backed relational database table with B-tree indexes on latitude and longitude", feedback: "250k index-updating writes/s of data that is obsolete in 4 seconds is the worst workload for a WAL-backed disk database." },
+    { id: "object-store", text: "As individual JSON files in S3", feedback: "Object stores have tens of milliseconds of latency and charge per PUT request." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /v1/drivers/{id}/location` with `{ lat, lng, heading, ts }` → **200**. Idempotent with last-write-wins by device timestamp; stale out-of-order pings are dropped.
+- `POST /v1/rides` with `{ pickup, dropoff, product }` and `Idempotency-Key` → **200** `{ tripId, driver }` or **409** if the candidate driver was just claimed by another request (the dispatcher retries with the next candidate).
+- `POST /v1/trips/{id}/complete` → **200**, setting the driver's availability back to `1`.
+
+<Choice
+  id="claim-conflict-status"
+  objective="atomic-driver-claim"
+  prompt="Two dispatch servers simultaneously try to assign Driver 42 to two different riders. What should the dispatch store do?"
+  options={[
+    { id: "one-200-one-409", text: "Succeed for one request and reject the second with a 409 conflict so the losing dispatcher can claim the next best candidate", correct: true, feedback: "Right. Contention is normal in dense areas; fast atomic rejection plus retry on the next candidate keeps matching under 1 second." },
+    { id: "assign-both", text: "Assign both riders and let the driver choose later", feedback: "That violates the invariant that a non-pooled driver has at most one active trip." },
+    { id: "global-lock", text: "Acquire a city-wide mutex before running any geo query", feedback: "A city-wide lock serialises all ride requests, destroying throughput when a single driver lock suffices." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model">
+
+- **locations** (in-memory KV store `geo`): `driverId`, `cell` (H3 resolution 8–9 hexagon), `lat`, `lng`, `updatedAt`, indexed by `cell`. Quorum is `R = 1, W = 1` over 2 replicas with hinted handoff: speed beats strict durability because the next ping arrives in 4 s.
+- **drivers** (authoritative `dispatchdb`): `driverId`, `available` (`1` = free, `0` = on trip), `tripId`. Replicated semi-synchronously with fencing tokens on failover. Changed only via atomic conditional updates (`decrementIfPositive` / compare-and-set).
+
+<Choice
+  id="why-h3-hexagons"
+  objective="spatial-supply-index"
+  prompt="Why did Uber build H3 (hexagonal cells) instead of using rectangular geohashes for ride matching?"
+  options={[
+    { id: "uniform-neighbours", text: "Every hexagon has 6 neighbours whose centres are at the exact same distance, making 'k rings of cells' a smooth approximation of a radius", correct: true, feedback: "Right. Rectangular geohashes have 4 edge neighbours and 4 farther corner neighbours, and their aspect ratio distorts with latitude." },
+    { id: "less-ram", text: "Hexagons use no memory in the index", feedback: "Both H3 and geohash represent a cell as a 64-bit integer or short string." },
+    { id: "no-boundaries", text: "Moving drivers never cross cell boundaries in H3", feedback: "Any fixed grid has boundaries; H3 makes neighbour ring expansion uniform across them." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+Clients connect through a load balancer to stateless **Dispatch API** servers. Location pings go straight to the in-memory **Location index (`geo`)**, sharded by cell. Ride requests query `geo` by cell to get up to 30 nearby candidates, rank them by ETA, and execute an atomic `decrementIfPositive` on `available` in the **Dispatch state (`dispatchdb`)** store. Trip completion sets `available = 1`.
+
+<Ordering
+  id="ride-matching-flow"
+  objective="atomic-driver-claim"
+  prompt="Order the steps when a rider requests a ride."
+  items={[
+    { id: "cell-lookup", text: "The dispatch server maps the pickup lat/lng to an H3 cell and queries the in-memory location index for that cell and its neighbours" },
+    { id: "eta-rank", text: "The dispatch server filters free candidates and ranks them by road-network ETA" },
+    { id: "atomic-claim", text: "The dispatch server executes an atomic conditional update (available 1 → 0) on the top candidate in the dispatch database" },
+    { id: "retry-on-409", text: "If another request claimed that driver first (409), the server moves to the next candidate in its ranked list" },
+    { id: "confirm-trip", text: "Once a claim succeeds, the trip is recorded and returned to the rider and driver" }
+  ]}
+  explanation="The in-memory geo index proposes candidates fast (even if a few milliseconds stale), while the authoritative dispatch store guarantees that only one request can claim each driver."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: atomic claims, leases and city failover">
+
+1. **Assigning exactly one driver.** Read-then-write (`SELECT available` followed by `UPDATE available = 0`) has a classic race condition: two servers both read `1` and both assign the driver. Instead, use a single atomic conditional write (`UPDATE drivers SET available = 0, trip_id = :t WHERE driver_id = :d AND available = 1`, or `decrementIfPositive`). When offering a trip to a driver's phone, attach a **lease timeout** (e.g. 15 seconds) so an unanswered offer automatically releases the driver.
+2. **Batch matching vs greedy.** Greedy matching claims the nearest driver immediately. Waiting 1–2 seconds to collect all requests in a neighbourhood and solving a minimum-cost bipartite matching problem reduces overall pickup ETAs when demand is dense.
+3. **Regional failover.** Riders and drivers only interact within the same city, so **city is both the shard key and the failure domain**. If a data centre fails, only the cities hosted there fail over; the supply index rebuilds itself from scratch within 4 seconds of incoming driver pings.
+
+<Choice
+  id="index-loss-recovery"
+  objective="spatial-supply-index"
+  prompt="An in-memory supply index shard crashes and restarts completely empty. How do you recover the locations of drivers in that cell?"
+  options={[
+    { id: "wait-four-seconds", text: "Let incoming driver pings repopulate it naturally within 4 seconds", correct: true, feedback: "Right. Because every online driver sends a fresh coordinate every 4 seconds, replaying old logs would only restore stale positions." },
+    { id: "restore-nightly-backup", text: "Restore last night's database snapshot from cold storage", feedback: "Where a car was 12 hours ago is useless for dispatching a ride right now." },
+    { id: "page-drivers", text: "Ask drivers to reinstall the app", feedback: "Persistent connections reconnect automatically and send the next ping." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **Read the driver's state, then write it.** The runnable `uber-unsafe-claim` alternative performs a `get` followed by an unconditional `increment(-1)`. Under the downtown surge scenario, concurrent requests read `available = 1` at the same time and double-book the driver (`oversell` violation).
+- **Store locations in the relational database.** Gives ACID durability and PostGIS spatial queries, but 250k writes/s of ephemeral coordinates saturates disk I/O and starves actual trip transactions.
+- **Quadtree instead of H3.** A quadtree adapts leaf sizes to density, which is great for static places (like restaurants), but constantly rebalancing a tree as a million cars drive across boundaries is much harder to shard and lock than fixed H3 hexagons.
+
+<Choice
+  id="read-then-write-bug"
+  objective="atomic-driver-claim"
+  prompt="What violation does the simulator report when you run the downtown surge scenario against the read-then-write alternative?"
+  options={[
+    { id: "oversell-violation", text: "An oversell violation: two riders are assigned the same driver because both reads saw available = 1 before either write completed", correct: true, feedback: "Right. Without an atomic conditional write (`decrementIfPositive`), concurrent claims interleave and drive `available` negative." },
+    { id: "stale-read", text: "A DNS resolution timeout", feedback: "DNS is not involved; the bug is a lost update / check-then-act race on the dispatch database." },
+    { id: "oom", text: "The location index runs out of memory", feedback: "Memory usage does not change between atomic and non-atomic claims." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **Everyone wants the same driver downtown** (20% of traffic targets one hot driver after a concert). Exactly one claim succeeds; concurrent contenders receive **409** and move to the next candidate. No double assignment occurs.
+- **Location pings triple** (a mobile app bug pings every 1 s instead of 4 s). The in-memory `geo` ring absorbs the 3× write storm in sub-millisecond time and ride matching latency barely moves.
+- **The dispatch database leader dies.** Location pings keep succeeding (`geo` is separate). Ride claims and completions fail for the ~0.5 s of heartbeat detection (3 × 100 ms) and election (200 ms), then resume on the promoted replica. Semi-synchronous replication and fencing guarantee that no confirmed trip is lost or split-brained.
+
+<Choice
+  id="dispatch-leader-down"
+  objective="dispatch-failures"
+  prompt="The dispatch database leader crashes and takes 500 ms to fail over to a replica. What happens to location pings during that 500 ms?"
+  options={[
+    { id: "pings-unaffected", text: "Location pings continue normally because they write only to the in-memory geo index, not the dispatch database", correct: true, feedback: "Right. Separating the high-volume location index from the transactional dispatch database isolates faults between the two paths." },
+    { id: "pings-dropped", text: "Every location ping fails with a 500 error", feedback: "The location handler only touches `geo`, which is still healthy." },
+    { id: "double-assign", text: "Drivers get double-assigned during the election", feedback: "Fencing tokens and single-leader conditional writes prevent split-brain assignments; claims simply fail fast until the new leader is elected." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise the design: **H3 hexagonal cells** in an in-memory store for the 250k/s ping firehose, an **authoritative transactional store** with atomic conditional claims for the 700/s dispatch decisions, and **city-scoped sharding** so a regional outage never affects other cities. Key operational metrics: **matching p99 latency**, **409 claim conflict rate** (signals hot-cell contention), and **supply index staleness**. Score yourself from 1 to 4 against the rubric.
+
+<Choice
+  id="conflict-rate-signal"
+  objective="dispatch-failures"
+  prompt="Your dashboard shows the 409 claim-conflict rate jumping from 1% to 45% in downtown Manhattan while matching latency climbs. What does that indicate, and what helps?"
+  options={[
+    { id: "hot-cell-contention", text: "Many dispatchers are racing to greedily claim the exact same top driver; switching to windowed batch matching or jittering top-k candidate selection reduces collisions", correct: true, feedback: "Right. When dozens of requests pick the same #1 driver simultaneously, 99% of claims waste a round-trip on a 409; coordinating per cell or randomising among close candidates fixes the thundering herd." },
+    { id: "disk-full", text: "The object store is out of disk space", feedback: "409 conflicts come from atomic conditional updates on the driver table, not disk capacity." },
+    { id: "gps-broken", text: "Satellites stopped broadcasting GPS coordinates", feedback: "High 409 rates mean candidates are being found and contended over, not missing." }
+  ]}
+/>
+
+</Step>

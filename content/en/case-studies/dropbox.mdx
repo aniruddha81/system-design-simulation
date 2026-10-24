@@ -1,0 +1,236 @@
+{/*
+id: dropbox
+slug: dropbox
+track: case-studies
+title: "Case study: File sync & storage (Dropbox)"
+description: "Design a cloud file sync service: content-addressed chunking, SHA-256 deduplication, write-blocks-before-commit metadata ordering, and conflict copies."
+objectives:
+  - id: size-file-sync
+    text: Estimate block ingress bandwidth, deduplication savings, metadata QPS, and long-poll client connections
+  - id: content-addressed-chunks
+    text: Explain fixed vs Rabin content-defined chunking and why blocks are addressed by their SHA-256 hash
+  - id: metadata-block-separation
+    text: Separate immutable block storage from ACID versioned metadata and enforce write-blocks-before-commit
+  - id: dropbox-failures
+    text: Predict how the system handles shared-folder hotspots, metadata DB failovers, and offline edit conflicts
+requires: [caching, replication, transactions]
+activities: [R, Q]
+limitations:
+  - "The runnable cell simulates 2,000 requests/s over 15,000 files and content-addressed blocks."
+  - "Rabin rolling-hash chunk boundary detection happens on the client before calling the simulated commit endpoint."
+  - "Reed-Solomon erasure coding across storage racks is covered in the deep dive."
+sources:
+  - title: "Inside the Magic Pocket: How Dropbox Built Its Exabyte Storage System"
+    authors: "J. Cowling (Dropbox Engineering)"
+    year: 2016
+    url: "https://dropbox.tech/infrastructure/inside-the-magic-pocket"
+  - title: "A Low-Bandwidth Network File System (LBFS)"
+    authors: "A. Muthitacharoen, B. Chen, D. Mazières"
+    year: 2001
+    url: "https://pdos.csail.mit.edu/papers/lbfs:sosp01/lbfs.pdf"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+A cloud file sync service (Dropbox, Google Drive, iCloud Drive) keeps a user's folder tree synchronised across laptops and phones. If a user edits one slide in a **500 MB presentation**, re-uploading and re-downloading all 500 MB on every save would saturate uplink bandwidth and storage.
+
+**Functional**: sync files and folders across multiple devices; upload and download only modified chunks (**delta sync**); deduplicate identical chunks via cryptographic hashes; preserve version history; handle concurrent offline edits without losing either user's work.
+
+**Non-functional**: **11 nines (99.999999999%)** block durability; zero silent data corruption (end-to-end checksums); propagate changes to linked online devices within a few seconds; support files from 1 KB to 50+ GB.
+
+<Choice
+  id="delta-sync-motivation"
+  objective="content-addressed-chunks"
+  prompt="A user modifies 50 KB inside a 400 MB video project and hits Save. How does Dropbox avoid uploading 400 MB?"
+  options={[
+    { id: "chunk-hash-diff", text: "The client splits the file into ~4 MB chunks, hashes each chunk with SHA-256, and uploads only the single chunk whose hash changed", correct: true, feedback: "Right. Splitting files into content-addressed blocks reduces a 400 MB upload to a single ≤ 4 MB block." },
+    { id: "full-reupload", text: "It uploads all 400 MB over UDP without checksums", feedback: "Uploading 400 MB on every save wastes 100× bandwidth and UDP without checksums corrupts files." },
+    { id: "ot-on-binary", text: "It runs character-by-character Operational Transformation on every binary file", feedback: "OT works for structured collaborative docs, not opaque compressed binary files." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **100M daily active users**, **2.5 devices per user**, and **500M file saves per day**:
+
+- **Connected sync clients**: 100M × 2.5 = **250 million** devices holding long-poll or WebSocket notification channels.
+- **Chunk write rate**: 500M saves/day × 1.5 changed chunks/save ÷ 86,400 s ≈ **8,700 chunk writes/s** average (~400 KB mean compressed chunk size $\Rightarrow$ **~3.5 GB/s** ingress before deduplication).
+- **Deduplication savings**: ~25–35% of uploaded chunks match an already-stored SHA-256 hash and skip block upload entirely.
+- **Storage footprint**: 700M registered users × ~3 GB logical ÷ 1.4 (compression + dedup) ≈ **1.5 exabytes** physical before replication/erasure coding.
+- **Metadata QPS**: ~50k–100k reads/s and ~10k writes/s on small (~250 B) manifest rows.
+
+<Choice
+  id="metadata-vs-block-scale"
+  objective="size-file-sync"
+  prompt="Why must file metadata (names, versions, chunk hash lists) and raw file blocks live in two completely different storage systems?"
+  options={[
+    { id: "acid-vs-throughput", text: "Metadata needs low-latency ACID transactions over small rows (gigabytes/terabytes), whereas blocks are immutable multi-megabyte blobs needing exabyte scale and erasure coding", correct: true, feedback: "Right. Sharded relational/KV databases excel at small transactional metadata; content-addressed object stores excel at immutable exabyte blobs." },
+    { id: "sql-no-hashes", text: "Relational databases cannot store 32-byte SHA-256 hashes", feedback: "Storing 32-byte hashes in SQL is trivial — that is exactly what the metadata DB stores!" },
+    { id: "object-store-fast-tx", text: "Object stores have faster multi-row ACID transactions than SQL", feedback: "Object stores have higher latency (15–50 ms) and no multi-object ACID transactions." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the sync protocol and API">
+
+Saving a file is a **two-step protocol** that keeps block transfer off the metadata path:
+
+1. **Check & upload missing blocks**:
+   - `POST /v1/blocks/check { hashes: [sha256_0, sha256_1, ...] }` → returns `{ missing: [sha256_1] }`.
+   - `PUT /v1/blocks/{sha256_1}` (raw compressed & encrypted chunk bytes) → server verifies `sha256(body) == sha256_1` and stores it in the object store.
+2. **Commit the new file version**:
+   - `POST /v1/files/{fileId}/commit { baseVersion: 3, blockHashes: [sha256_0, sha256_1, ...] }` → atomically advances `version` from `3` to `4` (or returns `409 Conflict` if another device already committed `v4`).
+3. **Sync to other devices**:
+   - `GET /v1/changes?cursor={lastSeq}` (long-poll) → wakes up within seconds when `v4` commits.
+   - `GET /v1/files/{fileId}/manifest` → returns `blockHashes[]`; the receiving device downloads only the hashes it does not already have on local disk!
+
+<Ordering
+  id="write-before-commit-order"
+  objective="metadata-block-separation"
+  prompt="Put the steps of saving an edited file in the exact order that prevents dangling block pointers."
+  items={[
+    { id: "chunk-hash", text: "Client splits the modified file into chunks and computes each chunk's SHA-256 hash" },
+    { id: "check-dedup", text: "Client asks the block index which SHA-256 hashes are not yet stored" },
+    { id: "upload-blocks", text: "Client uploads only the missing chunks to the immutable block store and receives 201" },
+    { id: "cas-commit", text: "Client commits (fileId, baseVersion, blockHashes[]) in an ACID transaction on the metadata DB" },
+    { id: "notify-peers", text: "Notification stream wakes the user's other devices to fetch the new manifest and missing blocks" }
+  ]}
+  explanation="Always durably store all referenced blocks BEFORE committing the metadata row that points to them; otherwise another device syncing immediately after the commit would get a 404 on a missing block."
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the data">
+
+- **blocks**: `sha256 → immutable compressed bytes` in the object store. Because a block's key **is** the cryptographic hash of its contents, a block is never modified in place: changing 1 bit produces a brand-new `sha256` key.
+- **fileMeta**: `(workspaceId, fileId) → { version, path, blockHashes: [sha256...], updatedAt }`, sharded by `workspaceId` (a user's private folder or a shared team folder) so directory listings and workspace change logs stay on one shard.
+- **workspaceLog**: `(workspaceId, seq) → { fileId, newVersion }`. Every device stores its last applied `seq` cursor locally; on wake-up, it asks for `seq > cursor`.
+
+<Choice
+  id="immutability-benefit"
+  objective="content-addressed-chunks"
+  prompt="What is the biggest operational advantage of addressing blocks by `sha256(content)`?"
+  options={[
+    { id: "immutable-cacheable", text: "Blocks are immutable by definition: they never need cache invalidation, never suffer partial-overwrite corruption, and deduplicate identical chunks automatically", correct: true, feedback: "Right. Content addressing turns mutable files into a thin mutable pointer (`fileMeta`) over an immutable set of blocks." },
+    { id: "shorter-than-int", text: "A 256-bit hash is smaller than a 32-bit integer", feedback: "256 bits is 32 bytes (8× larger than a 4-byte integer), which is a tiny price for immutability and global deduplication." },
+    { id: "no-replication", text: "SHA-256 hashes regenerate the 4 MB file without storing the bytes", feedback: "Cryptographic hashes are one-way; you still store the compressed block bytes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+Look at the reference design in the simulator:
+
+- **Commit path**: the API checks the **Block SHA-256 index** (`blockdedup`). If the chunk is already stored (`dedupHit`), it skips the **Content-addressed block store** (`blockstore`) write and goes straight to incrementing the version in the **Metadata DB** (`metadb`), invalidating the **Metadata cache** (`metacache`), and publishing to the **Device notification stream** (`syncbus`).
+- **Sync path**: linked devices read the manifest through `metacache` (`cacheAside` in front of `metadb`).
+
+<Choice
+  id="long-poll-vs-short-poll"
+  objective="size-file-sync"
+  prompt="250 million idle desktop clients need to learn about file changes within 2 seconds. Why use cursor-based HTTP long polling (e.g. 60–90 s timeout) instead of polling `GET /changes` every 2 seconds?"
+  options={[
+    { id: "save-125m-qps", text: "Polling every 2 s generates 125M empty requests/s against the metadata tier; long polling holds an idle connection and only hits the DB when a file actually changes", correct: true, feedback: "Right. Long polling pushes change notifications immediately on write while reducing idle request rate by ~40×." },
+    { id: "http-forbids-polling", text: "HTTP/1.1 and HTTP/2 forbid sending the same URL twice", feedback: "HTTP allows repeated requests, but 125M empty database queries per second would bankrupt the service." },
+    { id: "cursor-encryption", text: "Short polling cannot pass a sequence number in the query string", feedback: "Both pass `?cursor=seq`; the difference is holding the request open at the notification gateway until an event arrives." }
+  ]}
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: Rabin chunking, conflict copies, and Magic Pocket">
+
+### 1. Fixed 4 MB chunks vs Content-Defined Chunking (Rabin fingerprinting)
+Suppose a file is split at fixed 4 MB offsets (`0..4MB`, `4..8MB`, ...). If you insert **10 bytes at offset 0**, every byte shifts right by 10 bytes — so **every single 4 MB chunk changes its SHA-256 hash**!
+**Content-Defined Chunking (LBFS / Rabin rolling hash)** slides a 48-byte window over the file and declares a chunk boundary whenever the lower 22 bits of the rolling polynomial hash equal zero (`hash & 0x3FFFFF == 0`, average 4 MB). Inserting 10 bytes at the start changes only the first chunk; the very next boundary marker aligns back up with the original file!
+
+### 2. Offline conflicts without data loss
+If Alice and Bob both edit `budget.xlsx` (`baseVersion = 7`) while on an airplane:
+1. Alice lands first and commits `commit(baseVersion=7)` $\rightarrow$ succeeds, file becomes `version = 8`.
+2. Bob lands later and sends `commit(baseVersion=7)` $\rightarrow$ the conditional update `WHERE version = 7` returns **409 Conflict**.
+3. Bob's client fetches `v8` for `budget.xlsx` and commits Bob's blocks as a separate file `budget (Bob's conflicted copy).xlsx` so neither user's work is silently overwritten.
+
+### 3. Erasure coding in cold storage (Magic Pocket)
+Keeping 3 full replicas of 1.5 EB costs 4.5 EB of raw disks (`3×` overhead). Because content-addressed blocks are **immutable**, Dropbox packs blocks into 1 GB extents and encodes them with **Reed-Solomon erasure coding** (e.g. 6 data shards + 3 parity shards across separate racks = `1.5×` storage overhead while tolerating any 3 simultaneous disk/rack failures).
+
+<Choice
+  id="rabin-chunking-advantage"
+  objective="content-addressed-chunks"
+  prompt="Why does Content-Defined Chunking (Rabin rolling hash) outperform fixed 4 MB chunk offsets when a user inserts a paragraph at the top of a 100 MB file?"
+  options={[
+    { id: "boundary-resync", text: "Chunk boundaries depend on local byte content rather than absolute file offset, so boundaries re-synchronise right after the insertion and only the first chunk changes", correct: true, feedback: "Right. Fixed offsets suffer the 'byte-shift' problem where a 1-byte insertion at the front invalidates every chunk to the end of the file." },
+    { id: "faster-than-memcpy", text: "Rabin hashing uses zero CPU instructions", feedback: "Rolling hashes use slightly more CPU than fixed offsets, trading a bit of client CPU for massive bandwidth and storage savings." },
+    { id: "smaller-hashes", text: "Rabin hashes replace SHA-256 as the block key", feedback: "Rabin rolling hashes only decide where to cut chunk boundaries; each chunk is still identified by its cryptographic SHA-256 hash." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **Whole-file upload without chunk dedup or metadata cache (`dropbox-whole-file`)**: in the simulator, skipping block deduplication and scanning metadata directly drops goodput below 85%.
+- **Client-side encryption (zero-knowledge) vs server-side encryption**: encrypting chunks with a user-held key before hashing gives zero-knowledge privacy, at the cost of disabling cross-user deduplication (two users encrypting the same file with different keys produce different ciphertexts).
+- **Direct-to-object-store pre-signed URLs**: in production, the metadata API returns pre-signed URLs so clients stream 4 MB chunks directly to and from the block storage cluster without passing bytes through metadata servers.
+
+<Choice
+  id="cas-conflict-resolution"
+  objective="dropbox-failures"
+  prompt="Two devices edit `notes.txt` (`v5`) offline. Device A commits `v6` first. When Device B comes online and tries to commit with `baseVersion = 5`, what should happen?"
+  options={[
+    { id: "conflict-copy", text: "The metadata DB rejects Device B's commit with 409 Conflict; Device B downloads v6 and saves its own version as 'notes (conflicted copy).txt'", correct: true, feedback: "Right. For arbitrary files, preserving both versions as a conflict copy guarantees zero silent data loss." },
+    { id: "last-write-wins", text: "Device B silently overwrites v6 so Device A's changes disappear", feedback: "Last-write-wins silently destroys hours of offline work." },
+    { id: "corrupt-interleave", text: "Interleave Device A's and Device B's block lists `[A0, B0, A1, B1]`", feedback: "Interleaving blocks from two edits produces a corrupted file." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Run the three failure scenarios in the simulator:
+
+- **Shared team folder storm (`shared-folder-storm`)**: 35% of requests hit one shared file. `metacache` serves manifest reads and `blockdedup` skips duplicate chunk writes, maintaining > 99% goodput.
+- **Metadata DB leader failover (`metadb-failover`)**: `metadb` crashes for 500 ms. Cached manifest reads continue; commits pause during leader election and resume on the promoted replica with zero lost versions (`semiSync` + fencing).
+- **Notification worker crash (`notifier-lag`)**: `notifier` workers crash for 600 ms. File commits and manifest reads stay at > 99% goodput while change notifications queue safely in `syncbus`.
+
+<Choice
+  id="dangling-block-race"
+  objective="metadata-block-separation"
+  prompt="What goes wrong if the API commits the new `fileMeta` version row *before* the uploaded blocks finish writing to `blockstore`?"
+  options={[
+    { id: "sync-404", text: "Other devices receive the change notification immediately, request the new block hashes from `blockstore`, and fail with 404 Not Found (or worse, if the uploading client disconnects, the file version permanently points to missing blocks)", correct: true, feedback: "Right. Write immutable data blocks first, commit the metadata pointer second." },
+    { id: "nothing-wrong", text: "Nothing — object stores travel backwards in time", feedback: "A committed pointer to an unwritten block is a classic distributed storage corruption bug." },
+    { id: "duplicate-blocks", text: "The block is stored twice", feedback: "Blocks are content-addressed by SHA-256, so writing twice is idempotent; the danger is a dangling reference." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Bring the pieces together:
+1. **Content-defined chunks + SHA-256**: delta sync and automatic deduplication.
+2. **Write blocks before committing metadata**: never expose a dangling block hash.
+3. **Optimistic CAS (`baseVersion`) + conflict copies**: never silently overwrite concurrent offline edits.
+4. **Erasure coding + cold tiering**: 11-nines durability at ~1.5× storage overhead instead of 3×.
+
+<Choice
+  id="garbage-collection-race"
+  objective="dropbox-failures"
+  prompt="A background garbage collector deletes unreferenced blocks from `blockstore`. How do you prevent it from deleting a block that a client just uploaded 2 seconds ago but hasn't committed to `fileMeta` yet?"
+  options={[
+    { id: "grace-ttl-watermark", text: "Only garbage-collect unreferenced blocks whose upload timestamp is older than a generous grace window (e.g. 24 hours) and use two-phase mark-and-sweep", correct: true, feedback: "Right. A 24-hour minimum age watermark ensures in-flight uploads are never swept before their metadata commit lands." },
+    { id: "never-gc", text: "Delete every block 10 ms after it is uploaded", feedback: "Deleting blocks after 10 ms would destroy uploads before the client can call commit." },
+    { id: "stop-uploads-all-day", text: "Block all user uploads globally for 6 hours every night during GC", feedback: "A grace-window mark-and-sweep collector runs online with zero downtime." }
+  ]}
+/>
+
+</Step>

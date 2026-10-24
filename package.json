@@ -8,6 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "prebuild": "node scripts/build-search-index.mjs",
+    "pretest": "node scripts/build-search-index.mjs",
+    "e2e": "playwright test",
+    "check:bundle": "node scripts/check-bundle.mjs",
     "typecheck": "tsc --noEmit",
     "bench": "node src/engine/bench/run.mjs"
   },

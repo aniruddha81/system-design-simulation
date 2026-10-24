@@ -1,0 +1,211 @@
+{/*
+id: rate-limiter
+slug: rate-limiter
+track: case-studies
+title: "Case study: Rate limiter"
+description: "Design a distributed rate limiter: choose the algorithm, decide where counters live, and make the limiter's own slowness or failure survivable."
+objectives:
+  - id: size-limiter
+    text: Estimate counter memory, counter-store throughput and the latency budget of a check
+  - id: shared-counters
+    text: Design globally consistent per-client limits with atomic counter updates
+  - id: limiter-policy
+    text: Choose fail-open or fail-closed behaviour and place the limiter in the request path
+  - id: limiter-failures
+    text: Predict what a burst, a slow counter store and a dead limiter do to clients
+requires: [rate-limiting]
+activities: [R, Q]
+limitations:
+  - "The simulated limiter is one global token bucket; per-client buckets are discussed but not simulated, so the simulator's 429s also hit well-behaved clients."
+  - "The shared counter store is modelled as one extra round trip inside the limiter component."
+sources:
+  - title: "Scaling your API with rate limiters"
+    authors: "P. Tarjan (Stripe)"
+    year: 2017
+    url: "https://stripe.com/blog/rate-limiters"
+  - title: "Additional HTTP Status Codes (RFC 6585)"
+    authors: "M. Nottingham, R. Fielding"
+    year: 2012
+    url: "https://www.rfc-editor.org/rfc/rfc6585"
+  - title: "Exponential Backoff And Jitter"
+    authors: "M. Brooker"
+    year: 2015
+    url: "https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Limit each client (API key, user or IP) to rules such as 100 requests a minute, with short bursts allowed. Rejected requests get **429 Too Many Requests** with `Retry-After`. Rules change without a deploy.
+
+Non-functional: a check adds under 1 ms p99; limits hold across all API servers within a small tolerance; and — the requirement people forget — **the limiter failing must not take the API down**, so the failure policy is decided up front.
+
+<Choice
+  id="limiter-purpose"
+  objective="limiter-policy"
+  prompt="Which question decides whether the limiter should fail open or fail closed?"
+  options={[
+    { id: "purpose", text: "Is the limit overload protection, or a hard quota that customers pay for?", correct: true, feedback: "Right. Abuse and overload protection usually fail open; billing quotas may fail closed." },
+    { id: "algorithm", text: "Token bucket or sliding window?", feedback: "The algorithm decides precision, not what to do when the limiter is unavailable." },
+    { id: "servers", text: "How many API servers are there?", feedback: "That matters for local vs shared counters, not for failure policy." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Checks**: every request is checked — at 50k requests/s that is 50k counter operations/s.
+- **State**: 1M active clients × 3 rules × ~50 B ≈ **150 MB**. Fits in memory on one Redis node.
+- **Throughput**: ~100k simple operations/s per Redis shard, so one shard is enough; run three for headroom and blast radius.
+- **Latency**: same-zone round trip ≈ 0.5 ms + operation ≈ 0.1 ms ≈ **0.6 ms**, inside the 1 ms budget.
+- **The simulated cell**: two API servers × 16 workers ÷ ~10 ms per request ≈ 3,200 requests/s of capacity, protected by a global limit of 2,000/s with a 400-token burst.
+
+<Choice
+  id="counter-memory"
+  objective="size-limiter"
+  prompt="10M clients each have 2 rules, and each counter takes about 64 bytes. How much memory do the counters need?"
+  options={[
+    { id: "1-3gb", text: "About 1.3 GB", correct: true, feedback: "Right. 10M × 2 × 64 B ≈ 1.28 GB — still one or two cache nodes." },
+    { id: "13mb", text: "About 13 MB", feedback: "That is off by 100×: 20M counters × 64 B is about 1.3 GB." },
+    { id: "130gb", text: "About 130 GB", feedback: "That is 100× too large." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API and headers">
+
+The limiter has no public API of its own; it shapes every response. Allowed requests pass through. Rejected ones get 429 with `Retry-After` and rate-limit headers (limit, remaining, reset) so well-behaved clients can pace themselves. Rules are managed by an internal API and pushed to limiters as configuration, cached locally.
+
+<Choice
+  id="retry-after"
+  objective="limiter-failures"
+  prompt="Every rejected client retries exactly when Retry-After says. What goes wrong?"
+  options={[
+    { id: "sync", text: "They all come back at the same instant and create a new burst", correct: true, feedback: "Right. Clients should add jitter to Retry-After and back off exponentially on repeated 429s." },
+    { id: "nothing", text: "Nothing; that is what Retry-After is for", feedback: "Synchronised retries are a burst on a timer." },
+    { id: "lost", text: "Their requests are lost", feedback: "They are rejected, not lost; the problem is when they return." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Counter state">
+
+State is one small key per (client, rule), with a TTL slightly longer than the window so idle clients cost nothing:
+
+- **Token bucket**: tokens and last refill time. Allows bursts of B and a sustained rate r.
+- **Fixed window**: one counter per window. Cheap, but a client can send 2× the limit across a window boundary.
+- **Sliding-window counter**: current and previous counts; the rolling estimate is current + previous × overlap fraction.
+
+The update must be **atomic** — a Lua script or INCR with EXPIRE. A read followed by a write lets two servers read the same count and both allow.
+
+<Choice
+  id="atomic-check"
+  objective="shared-counters"
+  prompt="Two API servers check the same client's counter at the same moment, both read 99 of 100 and both allow. How do you prevent this?"
+  options={[
+    { id: "atomic", text: "Make the check and increment one atomic operation in the counter store", correct: true, feedback: "Right. An atomic increment returns the new value; only one of the two sees 100 or less." },
+    { id: "lock", text: "Hold a distributed lock around every check", feedback: "Correct but far too slow for a sub-millisecond budget; the store's atomic operations already serialise per key." },
+    { id: "local", text: "Keep counters in each server's memory instead", feedback: "Then each server enforces its own copy of the limit and the client gets the limit times the number of servers." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+Requests pass the **API gateway** (authentication, size limits), then the **limiter** with shared counters, then the load balancer and API servers. Limiting at the gateway rejects excess work before any expensive processing happens.
+
+Layer the protection: a coarse per-IP limit at the edge against floods, per-key quotas at the gateway, and concurrency limits inside services. A rate limit cannot see a slow dependency: at the same request rate, slower responses mean more requests in flight.
+
+<Ordering
+  id="request-path"
+  objective="limiter-policy"
+  prompt="Order the checks a request passes, cheapest and broadest first."
+  items={[
+    { id: "edge", text: "Edge or CDN drops floods with a coarse per-IP limit" },
+    { id: "auth", text: "Gateway authenticates the API key and rejects oversized bodies" },
+    { id: "quota", text: "Limiter checks the key's quota in the shared counter store" },
+    { id: "bulkhead", text: "Service admits the request only if it has a free worker (concurrency limit)" }
+  ]}
+  explanation="Each layer rejects what it can cheaply see: volume at the edge, identity at the gateway, quota at the limiter, and overload inside the service."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: making shared counters fast and safe">
+
+A shared counter costs one round trip per request. To cut that, servers can take tokens locally **in chunks** and sync every few hundred milliseconds, accepting a small overshoot. Shard counters by client key so one hot client cannot overload every shard. Put a tight timeout on the counter call and decide what happens when it expires — for overload protection, **allow** and fall back to a local limit.
+
+<Choice
+  id="batching"
+  objective="shared-counters"
+  prompt="Each server takes 50 tokens at a time from the shared counter and spends them locally. What do you give up?"
+  options={[
+    { id: "overshoot", text: "Precision: a client can briefly exceed the limit by up to the tokens held on each server", correct: true, feedback: "Right. Batching trades a bounded overshoot for far fewer round trips." },
+    { id: "safety", text: "Atomicity: counters can now go negative", feedback: "The shared decrement is still atomic; what changes is how fresh each server's view is." },
+    { id: "nothing", text: "Nothing at all", feedback: "Unused tokens on one server cannot be spent on another, and in-flight tokens make the global view approximate." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **No limiter.** Under a 6× burst the backend completes about as many requests as it can — roughly the same goodput in the simulator — but every request waits in a full queue: median latency rises about 10× and failures are slow timeouts instead of instant 429s.
+- **Local in-process limiters.** No network hop and nothing shared to fail, but the effective limit is the per-server limit times the number of servers, and it drifts as the fleet scales.
+- **Sliding window instead of token bucket.** The sliding-window counter fixes most of the fixed window's boundary burst; a token bucket expresses "sustained rate plus burst" directly.
+
+<Choice
+  id="local-limits"
+  objective="shared-counters"
+  prompt="Each of 20 API servers enforces 100 requests/s per client locally behind a round-robin load balancer. What limit does a client actually get?"
+  options={[
+    { id: "2000", text: "Up to about 2,000 requests/s", correct: true, feedback: "Right. Each server allows 100/s on its own, and round robin spreads the client over all 20." },
+    { id: "100", text: "100 requests/s", feedback: "Only if all of the client's traffic lands on one server." },
+    { id: "5", text: "5 requests/s", feedback: "Local limits multiply across servers; they do not divide." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **A 6× burst.** The limiter admits about 2,000 requests/s and answers the rest with 429 in well under a millisecond. Admitted requests stay fast because the backend stays at about two-thirds utilisation.
+- **A slow counter store** (50× slower checks). Every request pays it, because the limiter is in the path, even though nobody is over quota.
+- **The limiter dies.** In this topology every request times out for the whole outage: a protection layer became a single point of failure.
+
+<Choice
+  id="dead-limiter"
+  objective="limiter-failures"
+  prompt="The limiter is down and every request times out. What change keeps the API up next time?"
+  options={[
+    { id: "fail-open", text: "Time out the limiter check quickly and fail open with a local fallback limit", correct: true, feedback: "Right. The API stays available and a coarse local limit still bounds the damage." },
+    { id: "retry", text: "Retry the limiter check until it succeeds", feedback: "Retrying a dead dependency adds latency and load; it does not restore service." },
+    { id: "bigger", text: "Give the limiter more CPU", feedback: "Capacity does not help when the component is down." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise the decisions: token bucket with atomic shared counters per (client, rule), checked at the gateway with a sub-millisecond timeout, failing open to a local limit for overload protection. Name the risks — the limiter's own latency and availability, hot clients on one counter shard — and the signals: 429 rate per client, check latency, and fail-open events. Then score each stage from 1 to 4.
+
+<Choice
+  id="limiter-signal"
+  objective="limiter-policy"
+  prompt="Which alert tells you the limiter is protecting the API rather than hurting it?"
+  options={[
+    { id: "fail-open", text: "An alert on fail-open events and on limiter check latency, alongside the 429 rate per client", correct: true, feedback: "Right. You need to know when the limiter itself is degraded, not just how often it says no." },
+    { id: "cpu", text: "API server CPU", feedback: "Useful in general, but it does not show whether the limiter is working." },
+    { id: "none", text: "No alert; 429s are expected", feedback: "A sudden rise in 429s for well-behaved clients is exactly what you need to catch." }
+  ]}
+/>
+
+</Step>

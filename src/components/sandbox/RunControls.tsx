@@ -18,7 +18,8 @@ const SPEEDS: [Speed, string][] = [[0.1, "0.1×"], [1, "1×"], [10, "10×"], ["m
 
 const btn = "h-8 rounded-(--radius-sm) border border-(--border) px-2.5 text-sm text-(--text) hover:bg-(--surface-2) focus-visible:outline-2 focus-visible:outline-(--accent) disabled:opacity-40 disabled:hover:bg-transparent";
 
-export function RunControls({ runKey, onRun, blockedReason }: { runKey: string; onRun: () => void; blockedReason: string | null }) {
+/** blockedReason: why Run is disabled, shown beside it; onFix jumps to the problem. */
+export function RunControls({ runKey, onRun, blockedReason, onFix }: { runKey: string; onRun: () => void; blockedReason: string | null; onFix?: () => void }) {
   const run = runs.useRun(runKey);
   const live = run.status === "running" || run.status === "paused";
   return (
@@ -29,11 +30,24 @@ export function RunControls({ runKey, onRun, blockedReason }: { runKey: string; 
         disabled={!!blockedReason}
         title={blockedReason ?? "Run the simulation"}
         aria-describedby={blockedReason ? `${runKey}-blocked` : undefined}
-        className="h-8 rounded-(--radius-sm) bg-(--accent) px-3.5 text-sm font-semibold text-(--bg) hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--accent) disabled:cursor-not-allowed disabled:opacity-40"
+        data-tour="run"
+        className="h-8 rounded-(--radius-sm) border border-transparent bg-(--accent) px-3.5 text-sm font-semibold text-(--accent-ink) hover:bg-(--accent-hover,var(--accent)) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--accent) disabled:cursor-not-allowed disabled:border-dashed disabled:border-(--rule,var(--border)) disabled:bg-transparent disabled:text-(--text-muted)"
       >
         {live ? "↻ Restart" : "▶ Run"}
       </button>
-      {blockedReason && <span id={`${runKey}-blocked`} className="sr-only">{blockedReason}</span>}
+      {blockedReason && (
+        <button
+          type="button"
+          id={`${runKey}-blocked`}
+          onClick={onFix}
+          title={`${blockedReason} Show me where.`}
+          className="flex h-8 max-w-[20rem] items-center gap-1.5 rounded-(--radius-sm) bg-[color-mix(in_oklab,var(--warning)_12%,transparent)] px-2.5 text-xs text-(--text) hover:bg-[color-mix(in_oklab,var(--warning)_22%,transparent)] focus-visible:outline-2 focus-visible:outline-(--accent)"
+        >
+          <span aria-hidden="true" className="text-(--warning)">△</span>
+          <span className="truncate">{blockedReason}</span>
+          <span className="shrink-0 font-medium text-(--accent)">Show me<span aria-hidden="true"> →</span></span>
+        </button>
+      )}
       {live && (
         <>
           <button type="button" className={btn} onClick={() => (run.status === "running" ? runs.pause(runKey) : runs.resume(runKey))}>

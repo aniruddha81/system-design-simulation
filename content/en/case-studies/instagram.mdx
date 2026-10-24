@@ -1,0 +1,209 @@
+{/*
+id: instagram
+slug: instagram
+track: case-studies
+title: "Case study: Instagram (photo sharing)"
+description: "Design photo sharing: a CDN carries the views, an object store keeps originals, async workers make every size, and time-ordered shard-aware IDs organise the metadata."
+objectives:
+  - id: size-photos
+    text: Estimate storage growth, egress and origin load from the CDN hit rate
+  - id: upload-pipeline
+    text: Design an upload path that acknowledges fast and processes asynchronously
+  - id: shard-ids
+    text: Explain Instagram's 64-bit IDs and why sharding by user suits photo metadata
+  - id: photo-failures
+    text: Predict the effect of a CDN outage, an upload spike and a slow object store
+requires: [caching, bandwidth]
+activities: [R, Q]
+limitations:
+  - "The simulated CDN is one edge; per-region caches and origin shields across many edges are discussed only."
+  - "The DNS TTL is 300 ms so failover fits in a 3-second run; real TTLs are 30–300 s and resolvers may hold records longer."
+  - "Every request enters through the CDN; uploads pass through to the origin, as CDNs proxy uncacheable requests."
+sources:
+  - title: "Sharding & IDs at Instagram"
+    authors: "Instagram Engineering"
+    year: 2012
+    url: "https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c"
+  - title: "Finding a needle in Haystack: Facebook's photo storage"
+    authors: "D. Beaver, S. Kumar, H. C. Li, J. Sobel, P. Vajgel"
+    year: 2010
+    url: "https://www.usenix.org/conference/osdi10/finding-needle-haystack-facebooks-photo-storage"
+  - title: "f4: Facebook's Warm BLOB Storage System"
+    authors: "S. Muralidhar et al."
+    year: 2014
+    url: "https://www.usenix.org/conference/osdi14/technical-sessions/presentation/muralidhar"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Upload a photo with a caption; view photos in several sizes; list a user's photos (feeds are the news feed case study). Image views p99 under ~200 ms worldwide; uploaded photos are never lost; uploads are acknowledged in a few seconds while thumbnails may appear a moment later; hundreds of views per upload.
+
+<Choice
+  id="uploaded-means"
+  objective="upload-pipeline"
+  prompt="What should 'upload complete' mean to the user?"
+  options={[
+    { id: "stored", text: "The original is durably stored and the metadata recorded; resized versions may still be processing", correct: true, feedback: "Right. Durability is the promise; processing can finish asynchronously while the app shows a local preview." },
+    { id: "all-sizes", text: "Every size has been generated and pushed to the CDN", feedback: "That puts hundreds of milliseconds of CPU and a CDN push inside every upload request." },
+    { id: "received", text: "The server received the first byte", feedback: "A dropped connection would then lose a photo the user thinks is saved." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Uploads**: 100M photos/day ≈ **1,160/s**, about 3k/s at peak.
+- **Storage**: 100M × (2 MB original + ~0.5 MB of resized versions) × 365 ≈ **90 PB/year**.
+- **Views**: 500M daily users × 100 image views ÷ 86,400 ≈ **580k requests/s**.
+- **Egress**: 580k/s × ~150 KB ≈ **87 GB/s**, about 700 Gbit/s. Only a CDN serves this economically.
+- **Origin**: at a 95% CDN hit rate, 580k × 5% ≈ **29k requests/s** reach the origin. The hit rate decides the origin's size.
+- **Resize workers**: Little's law, 1,160/s × 120 ms of CPU ≈ 140 cores busy on average.
+
+<Choice
+  id="origin-load"
+  objective="size-photos"
+  prompt="Views are 580k/s. The CDN hit rate drops from 95% to 90% after a cache purge. What happens to origin traffic?"
+  options={[
+    { id: "double", text: "It doubles, from about 29k/s to about 58k/s", correct: true, feedback: "Right. The miss rate went from 5% to 10%. Small hit-rate changes are large origin-load changes." },
+    { id: "5pct", text: "It rises by 5%", feedback: "The miss rate doubled; origin load is proportional to the miss rate." },
+    { id: "same", text: "It stays the same", feedback: "Every miss goes to the origin." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /v1/media`: a resumable, chunked upload (or a pre-signed URL straight to the object store) plus the caption → **201** with the media ID and URLs, some sizes pending.
+- `GET /p/{photoKey}_{size}.jpg`: served by the CDN. Keys are **immutable** — an edit creates a new key — so CDN entries never need invalidation.
+- `GET /v1/users/{id}/media?cursor=` pages by media ID.
+
+<Choice
+  id="immutable-keys"
+  objective="size-photos"
+  prompt="A user applies a new filter to an existing photo. How do you avoid serving the old image from CDN caches?"
+  options={[
+    { id: "new-key", text: "Store the edited image under a new key and point the metadata at it", correct: true, feedback: "Right. Immutable URLs can be cached for a year, and nothing ever needs purging." },
+    { id: "purge", text: "Overwrite the object and purge it from every CDN location", feedback: "Purges are slow, fallible and rate-limited; browsers may still hold the old copy." },
+    { id: "short-ttl", text: "Give every image a 1-minute TTL", feedback: "That throws away most of the CDN's hit rate for a rare event." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model and IDs">
+
+- **media**: ID, user, caption, photo key, timestamps; **sharded by user**, so a profile grid is one shard. Instagram used thousands of logical shards on PostgreSQL, mapped onto fewer physical servers.
+- **photos**: image bytes in the object store under immutable keys; the database only stores the key.
+
+Instagram generated **64-bit IDs inside PostgreSQL**: 41 bits of milliseconds since a custom epoch, 13 bits of logical shard ID, 10 bits of per-shard sequence. IDs sort by time and say which shard holds the row.
+
+<Choice
+  id="id-shard"
+  objective="shard-ids"
+  prompt="What does embedding the logical shard ID in every media ID buy you?"
+  options={[
+    { id: "locate", text: "Any service can find the row's shard from the ID alone, without a lookup table", correct: true, feedback: "Right. And logical shards can move between physical servers without changing any ID." },
+    { id: "unique", text: "Global uniqueness", feedback: "The timestamp and sequence also matter; the shard bits are about locating the row." },
+    { id: "privacy", text: "It hides the upload time", feedback: "The timestamp bits reveal it; that is a known property of such IDs." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+DNS points clients at the **CDN**, with the origin as a fallback. Views are served from the CDN; misses go to the origin, which reads the **object store**. Uploads pass through to the origin, which stores the original, records metadata, and publishes a **resize job**. **Resize workers** generate the sizes and write them back to the object store.
+
+<Ordering
+  id="upload-flow"
+  objective="upload-pipeline"
+  prompt="Order the upload path."
+  items={[
+    { id: "chunks", text: "The client uploads the original in resumable chunks" },
+    { id: "object", text: "The API stores the original in the object store" },
+    { id: "meta", text: "The API inserts the media row on the user's shard" },
+    { id: "job", text: "The API enqueues a resize job and returns 201" },
+    { id: "resize", text: "A worker generates each size and stores it" }
+  ]}
+  explanation="Everything before the 201 is about durability; everything after it is processing that can lag without the user losing anything."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: serving images">
+
+Popularity is heavily skewed: recent popular photos hit the CDN almost every time, the long tail of old photos rarely does. An **origin shield** — a regional mid-tier cache — collapses misses from many edges into one origin read. Old photos move to cheaper, erasure-coded storage: Facebook's Haystack packed photos into large files to avoid per-file metadata reads, and f4 later moved "warm" photos to erasure-coded storage to cut replication cost.
+
+<Choice
+  id="shield"
+  objective="size-photos"
+  prompt="A newly popular photo is requested at 200 CDN edges at once. What does an origin shield change?"
+  options={[
+    { id: "one-fetch", text: "The 200 edge misses become one origin fetch through the shield", correct: true, feedback: "Right. The shield is a cache in front of the origin that every edge shares." },
+    { id: "faster-edge", text: "Each edge serves hits faster", feedback: "Hits are unaffected; the shield only matters for misses." },
+    { id: "nothing", text: "Nothing; each edge still fetches from the origin", feedback: "That is the situation without a shield." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **Serve images from your own servers.** Full control, but 700 Gbit/s of egress from a few regions is slow far away and enormously expensive.
+- **Resize synchronously during upload.** Every size is ready immediately, but uploads now cost hundreds of milliseconds of CPU each and a spike saturates the API tier.
+- **Run your own blob store** (Haystack, f4). Worth it at Facebook's scale; most teams should use a managed object store with lifecycle tiers.
+
+<Choice
+  id="sync-resize"
+  objective="upload-pipeline"
+  prompt="Uploads triple during New Year's Eve. With synchronous resizing, what saturates first?"
+  options={[
+    { id: "api", text: "The API tier, because every upload request now holds a worker for the whole resize", correct: true, feedback: "Right. Asynchronous workers move that cost behind a queue, where a spike is just a longer backlog." },
+    { id: "cdn", text: "The CDN", feedback: "Views are unchanged; the extra load is uploads." },
+    { id: "db", text: "The metadata database", feedback: "Metadata writes are small; the CPU-heavy resize is the problem." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **The CDN edge goes down.** Requests fail until the DNS record expires, then the origin takes every view: object-store reads jump from the miss rate to the full rate and egress now leaves your origin. DNS TTL is your failover time.
+- **Uploads spike 3×.** Uploads are acknowledged as fast as before; the resize queue grows and thumbnails lag. Scale workers on queue depth.
+- **The object store slows 6×.** Most views are CDN hits and do not notice; misses slow down and the slowest exceed the API's storage timeout. The CDN's hit rate is a reliability feature, not only a cost one.
+
+<Choice
+  id="cdn-failover"
+  objective="photo-failures"
+  prompt="The CDN fails. DNS for the image domain has a 300-second TTL. How long can clients keep trying the dead CDN?"
+  options={[
+    { id: "ttl", text: "Up to the TTL, about 5 minutes — longer if resolvers ignore the TTL", correct: true, feedback: "Right. That is why CDN failover often uses multiple CDNs with health-based steering, not only DNS changes." },
+    { id: "instant", text: "No time; DNS updates instantly", feedback: "Resolvers cache records until the TTL expires." },
+    { id: "hour", text: "Exactly one hour", feedback: "The TTL sets the bound, here 300 seconds." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise: CDN with immutable URLs and an origin shield, object store with lifecycle tiers, resumable uploads acknowledged after durable storage, async processing, metadata sharded by user with time-and-shard IDs. Signals: CDN hit rate, origin egress, resize queue age. Then score each stage from 1 to 4.
+
+<Choice
+  id="ids-sort"
+  objective="shard-ids"
+  prompt="Why does it matter that media IDs sort by time?"
+  options={[
+    { id: "cursors", text: "Newest-first lists and cursor pagination need only an index on the ID", correct: true, feedback: "Right. 'ID less than X' is both the time order and the cursor." },
+    { id: "security", text: "It makes IDs unguessable", feedback: "Time-ordered IDs are more guessable, not less." },
+    { id: "cdn", text: "The CDN needs sorted keys", feedback: "CDNs do not care about key order." }
+  ]}
+/>
+
+</Step>

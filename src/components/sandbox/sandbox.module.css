@@ -164,3 +164,89 @@
 @keyframes portPulse {
   50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--accent) 10%, transparent); }
 }
+
+/* ---------- Experience pass: ports, drop target, connect feedback, coach marks ---------- */
+
+/* Ports: 14 px ring, 28 px hit area (WCAG 2.5.8) via an invisible halo that still receives the pointer. */
+.board :global(.react-flow__handle)::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+}
+/* Ports show on the node you're about to wire, so they read as grabbable. */
+.board :global(.react-flow__node:hover .react-flow__handle),
+.board :global(.react-flow__node.selected .react-flow__handle) {
+  border-color: var(--accent);
+}
+.board[data-connecting] :global(.react-flow__handle-left.connectingto.invalid) {
+  background: var(--danger);
+  border-color: var(--danger);
+  box-shadow: 0 0 0 6px color-mix(in oklab, var(--danger) 22%, transparent);
+}
+
+/* Library drag: the whole board answers as a drop target. */
+.board[data-dropping]::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: 5;
+  pointer-events: none;
+  border: 2px dashed color-mix(in oklab, var(--accent-2) 70%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--accent-2) 5%, transparent);
+}
+.ghost {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border: 2px dashed var(--accent-2);
+  background: color-mix(in oklab, var(--accent-2) 10%, var(--surface));
+  border-radius: 12px;
+  box-shadow: var(--elev-2);
+}
+
+/* Arrival mark where a new connection lands. */
+.ripple {
+  display: none;
+}
+
+/* Tour notes and the library explainer. */
+.tourNote,
+.explainer {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ripple {
+    display: inline;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ripple 620ms 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .tourNote {
+    animation: noteIn 260ms var(--ease-out, ease-out) both;
+  }
+  .explainer {
+    animation: noteIn 160ms 80ms var(--ease-out, ease-out) both;
+  }
+  .tourInk {
+    stroke-dasharray: 1;
+    animation: drawIn 640ms 120ms cubic-bezier(0.6, 0, 0.2, 1) both;
+  }
+  .tourHead {
+    animation-delay: 700ms;
+    animation-duration: 220ms;
+  }
+  .board[data-dropping]::after {
+    animation: noteIn 140ms ease-out both;
+  }
+}
+@keyframes ripple {
+  from { opacity: 0.9; transform: scale(0.4); }
+  to { opacity: 0; transform: scale(2.6); }
+}
+@keyframes noteIn {
+  from { opacity: 0; transform: translateY(4px); }
+}

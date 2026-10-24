@@ -1,0 +1,210 @@
+{/*
+id: news-feed
+slug: news-feed
+track: case-studies
+title: "Case study: News feed"
+description: "Design a news feed: fan-out on write versus fan-out on read, a queue that turns load spikes into delay, and idempotent fan-out under at-least-once delivery."
+objectives:
+  - id: fanout-math
+    text: Compute fan-out write amplification and the cost of a celebrity post
+  - id: push-vs-pull
+    text: Choose between fan-out on write, fan-out on read and a hybrid from the read/write ratio and follower distribution
+  - id: idempotent-fanout
+    text: Make fan-out idempotent under at-least-once delivery and paginate a live feed correctly
+  - id: feed-failures
+    text: Predict how the design behaves under a post surge, a worker crash and a cache flush
+requires: [queues, caching]
+activities: [R, Q]
+limitations:
+  - "Fan-out to ~200 followers is modelled as one batched write per post whose cost reflects the batch; follower feeds are not individual records."
+  - "Ranking, hydration of post bodies and the follow graph are discussed, not simulated."
+  - "The runnable cell runs 1,500 requests/s with 10% posts."
+sources:
+  - title: "Feeding Frenzy: Selectively Materializing Users' Event Feeds"
+    authors: "A. Silberstein, J. Terrace, B. F. Cooper, R. Ramakrishnan"
+    year: 2010
+    url: "https://doi.org/10.1145/1807167.1807224"
+  - title: "Timelines at Scale"
+    authors: "R. Krikorian (Twitter)"
+    year: 2013
+    url: "https://www.infoq.com/presentations/Twitter-Timeline-Scalability/"
+  - title: "Scaling Memcache at Facebook"
+    authors: "R. Nishtala et al."
+    year: 2013
+    url: "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Users publish posts and read a feed of recent posts from the accounts they follow, newest first, paginated. Feed reads p99 under 200 ms; reads outnumber posts about 100:1; a new post should appear in followers' feeds within a few seconds. **Posting must stay fast and available even when the feed pipeline lags** — staleness is acceptable, errors are not.
+
+<Choice
+  id="feed-question"
+  objective="push-vs-pull"
+  prompt="Which clarifying question most affects the fan-out design?"
+  options={[
+    { id: "followers", text: "What does the follower distribution look like — are there accounts with millions of followers?", correct: true, feedback: "Right. The heavy tail of follower counts is what breaks pure fan-out on write." },
+    { id: "length", text: "How long can a post be?", feedback: "Post size affects storage a little; it does not decide push vs pull." },
+    { id: "emoji", text: "Are reactions supported?", feedback: "A separate feature with its own counters." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Feed reads**: 300M daily users × 10 loads ÷ 86,400 ≈ **35k/s**, about 70k/s at peak.
+- **Posts**: 300M × 0.1 ÷ 86,400 ≈ **350/s**.
+- **Fan-out writes**: 350 posts/s × ~200 followers ≈ **70k feed inserts/s** — a 200× write amplification.
+- **Feed storage**: 300M feeds × 500 post IDs × 8 B ≈ **1.2 TB** of IDs. Feeds store IDs, not bodies.
+- **A celebrity post**: one account with 50M followers is 50M inserts — at 70k/s, about 12 minutes of the entire fan-out tier.
+
+<Choice
+  id="celebrity-cost"
+  objective="fanout-math"
+  prompt="The fan-out tier sustains 100,000 feed inserts/s. An account with 30M followers posts. How long does its fan-out take if it had the whole tier?"
+  options={[
+    { id: "5min", text: "About 5 minutes", correct: true, feedback: "Right. 30M ÷ 100k/s = 300 s — and everyone else's posts wait behind it." },
+    { id: "30s", text: "About 30 seconds", feedback: "30M ÷ 100k is 300 seconds, not 30." },
+    { id: "300ms", text: "About 300 ms", feedback: "That would need 100M inserts/s." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /v1/posts` with an `Idempotency-Key` (or a client-generated post ID) → 201.
+- `GET /v1/feed?cursor=` → 200 with posts and `nextCursor`. The cursor encodes the last post ID seen.
+- `POST /v1/follows/{userId}` → 204, optionally backfilling recent posts.
+
+**Cursor pagination** stays stable while new posts arrive. Offsets do not: if five posts arrive between page 1 and page 2, offset 20 now shows five posts the user already saw.
+
+<Choice
+  id="cursor"
+  objective="idempotent-fanout"
+  prompt="A user reads page 1 (20 posts); 5 new posts arrive; they request page 2 with offset=20. What do they see?"
+  options={[
+    { id: "repeat", text: "Five posts they already saw on page 1, followed by 15 new-to-them older posts", correct: true, feedback: "Right. New posts shift every offset. A cursor ('older than post X') does not move." },
+    { id: "fine", text: "Exactly the next 20 older posts", feedback: "Only if nothing was inserted at the top in between." },
+    { id: "new", text: "The five new posts", feedback: "New posts are at the top; page 2 starts 20 positions down." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model">
+
+- **posts**: the source of truth, sharded by author, so "posts by X" is one shard.
+- **feeds**: one precomputed list of post IDs per user (newest first, capped at ~500) in a key-value store. Post bodies are hydrated from a post cache at read time.
+- **follows**: follower → followee, indexed both ways, read by the fan-out workers.
+
+<Choice
+  id="ids-not-bodies"
+  objective="fanout-math"
+  prompt="Why do feeds store post IDs rather than full posts?"
+  options={[
+    { id: "amplification", text: "A post is copied into hundreds of feeds; copying 8-byte IDs instead of kilobyte bodies cuts fan-out storage and bandwidth by orders of magnitude, and edits happen in one place", correct: true, feedback: "Right. Hydration reads the body once per read from a cache instead of storing it 200 times." },
+    { id: "privacy", text: "For privacy", feedback: "Visibility checks happen at hydration either way; the reason is amplification." },
+    { id: "sorting", text: "IDs sort faster", feedback: "Sorting is a minor benefit; the size of 200 copies is the main one." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design: fan-out on write">
+
+Posting writes the post and publishes one message to a **fan-out queue**, then returns 201. Fan-out workers read the follower list and write the post ID into each follower's feed. Feed reads go through a cache to the feed store: one key lookup per read.
+
+The queue is what keeps posting fast: a surge in posts becomes a deeper queue and a few seconds of extra staleness, not slow or failed requests.
+
+<Ordering
+  id="post-path"
+  objective="push-vs-pull"
+  prompt="Order what happens when a user posts."
+  items={[
+    { id: "store", text: "The API stores the post in the posts database" },
+    { id: "publish", text: "The API publishes one fan-out message and returns 201" },
+    { id: "consume", text: "A fan-out worker takes the message from the queue" },
+    { id: "write", text: "The worker writes the post ID into each follower's feed" },
+    { id: "ack", text: "The worker acknowledges the message" }
+  ]}
+  explanation="The request ends at the durable queue; fan-out happens afterwards, and the acknowledgement comes last so a crash causes redelivery rather than loss."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: push, pull or hybrid">
+
+Fan-out on write costs posts/s × average followers in writes, but a read is one lookup. Fan-out on read costs feed reads/s × accounts followed in lookups, but posting is free. With 100 reads per post and a few hundred followers, push wins for ordinary accounts. A celebrity breaks push, so **hybrid** systems skip fan-out above a follower threshold and merge celebrity posts at read time (see the Twitter timeline case study). Inactive users can be skipped during fan-out and rebuilt on their next visit.
+
+<Choice
+  id="hybrid"
+  objective="push-vs-pull"
+  prompt="Most accounts have a few hundred followers, but a few have tens of millions. Reads are 100× posts. Which design?"
+  options={[
+    { id: "hybrid", text: "Push for ordinary accounts, pull for accounts above a follower threshold, merged at read time", correct: true, feedback: "Right. Reads stay cheap and the worst-case fan-out is bounded." },
+    { id: "push", text: "Pure fan-out on write", feedback: "Every celebrity post becomes minutes of fan-out work that delays everyone else's." },
+    { id: "pull", text: "Pure fan-out on read", feedback: "Every one of the 100× reads becomes a scatter-gather over hundreds of authors." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives you can run">
+
+- **Fan-out on read.** Each feed read becomes a scatter-gather of indexed queries, one per posts shard. In the simulator that is 8 queries per read; the posts database cannot keep up and most reads fail on the same hardware that serves the push design comfortably.
+- **Appending post IDs instead of idempotent writes.** Natural, but a worker that crashes after writing and before acknowledging gets the message again and appends the post twice. Run the worker-crash scenario against it: the engine reports a duplicated effect.
+
+<Choice
+  id="append-duplicate"
+  objective="idempotent-fanout"
+  prompt="The queue delivers at least once. How should a fan-out worker write a post into a follower's feed?"
+  options={[
+    { id: "set", text: "Insert the post ID into a set or sorted set keyed by post ID, so a redelivery is a no-op", correct: true, feedback: "Right. Idempotent writes make at-least-once delivery safe." },
+    { id: "append", text: "Append the post ID to the feed list", feedback: "A redelivered message appends it twice." },
+    { id: "exactly-once", text: "Configure the queue for exactly-once delivery and append", feedback: "Exactly-once delivery into an external store needs an idempotent write anyway." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **A 4× surge.** Posts go from 150/s to 600/s, above the workers' ~400/s. Posting stays fast; the fan-out queue absorbs the excess and consumer lag rises to about a second, then drains.
+- **Fan-out workers crash** for 0.6 s. Feeds stop updating, then catch up; in-flight messages are redelivered and the idempotent writes create no duplicates.
+- **The feed cache is flushed.** Reads fall through to the feed store, which is sized for them. Precomputed feeds make a cache loss cheap.
+
+<Choice
+  id="surge-signal"
+  objective="feed-failures"
+  prompt="During the post surge, which metric shows users are affected?"
+  options={[
+    { id: "lag", text: "Fan-out consumer lag: how old the oldest unprocessed post is", correct: true, feedback: "Right. Requests still succeed; the user-visible symptom is staleness, which consumer lag measures directly." },
+    { id: "errors", text: "The API's error rate", feedback: "It stays at zero — the queue absorbs the surge." },
+    { id: "latency", text: "Feed read latency", feedback: "Reads are one lookup and do not depend on the fan-out backlog." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise: push fan-out through a durable queue, idempotent feed writes, feeds of capped ID lists hydrated from caches, cursor pagination, a celebrity threshold with read-time merge. Set a **freshness SLO** on fan-out lag and alert on it. Then score each stage from 1 to 4.
+
+<Choice
+  id="delete-post"
+  objective="idempotent-fanout"
+  prompt="A user deletes a post that was already fanned out to 300 feeds. What is the usual approach?"
+  options={[
+    { id: "filter", text: "Mark it deleted at the source and filter deleted IDs out during hydration", correct: true, feedback: "Right. One write instead of 300, and correct even while fan-out is still in progress." },
+    { id: "unfan", text: "Fan out a delete to all 300 feeds before acknowledging", feedback: "Slow, and racy if the original fan-out is still running." },
+    { id: "nothing", text: "Leave it; feeds are caches", feedback: "Showing deleted content is a correctness and privacy bug." }
+  ]}
+/>
+
+</Step>

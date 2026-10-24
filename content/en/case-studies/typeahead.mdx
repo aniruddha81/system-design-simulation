@@ -1,0 +1,231 @@
+{/*
+id: typeahead
+slug: typeahead
+track: case-studies
+title: "Case study: Typeahead / autocomplete"
+description: "Design a sub-50 ms search typeahead system: in-memory radix tries with precomputed top-k completions per node, front-tier prefix caching, and asynchronous stream aggregation."
+objectives:
+  - id: size-typeahead
+    text: Estimate keystroke QPS, compiled trie memory footprint, and query-log sampling rates
+  - id: precompute-topk
+    text: Explain why caching top-k completions at every trie node turns subtree scans into O(L) lookups
+  - id: decouple-updates
+    text: Separate the sub-50 ms read path from asynchronous query-log aggregation and trie snapshot swaps
+  - id: typeahead-failures
+    text: Predict system behaviour during breaking-news hotspots, cache restarts, and aggregator pauses
+requires: [caching, streams, partitioning]
+activities: [R, Q]
+limitations:
+  - "The runnable cell simulates 3,000 requests/s over 15,000 prefixes with a 100 ms deadline."
+  - "Trie lookups are modelled as O(1) key-value reads on materialised prefix keys (`pfx:{prefixKey}`)."
+  - "Client-side keystroke debouncing and personalised re-ranking are discussed in the text."
+sources:
+  - title: "The Life of a Typeahead Query"
+    authors: "AK. Singh (Facebook Engineering)"
+    year: 2010
+    url: "https://engineering.fb.com/2010/05/17/web/the-life-of-a-typeahead-query/"
+  - title: "Prefix-Based Autocomplete at Scale"
+    authors: "D. Tunkelang"
+    year: 2019
+    url: "https://queryunderstanding.com/autocomplete-394059210e2d"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+As a user types into a search bar, **typeahead (autocomplete)** predicts the top $k$ (typically 5–10) query completions after every keystroke. Because human typing speed is ~150–200 ms per character, suggestions feel broken unless the round-trip finishes in under **100 ms** (meaning under **50 ms server-side p99**).
+
+**Functional**: given a prefix string `q`, return the top $k$ completions ranked by popularity and recency; log completed searches to update rankings; filter blocked or offensive phrases rapidly.
+
+**Non-functional**: p99 server latency < 50 ms; extreme read-to-write asymmetry (~10 keystroke reads per completed search); high availability; eventual consistency (minutes) for popularity updates, but fast propagation for safety blocklists.
+
+<Choice
+  id="typeahead-latency-driver"
+  objective="precompute-topk"
+  prompt="Why is the latency budget for typeahead much tighter than for a full search results page?"
+  options={[
+    { id: "keystroke-pace", text: "Suggestions are only useful if they render before the user finishes typing the next character (~100 ms end to end)", correct: true, feedback: "Right. A suggestion that arrives after the user has already typed three more characters is useless." },
+    { id: "http-timeout", text: "Browsers abort GET requests after 50 ms by default", feedback: "Browsers wait seconds or minutes; the constraint is human typing speed." },
+    { id: "payload-size", text: "Typeahead responses are several megabytes each", feedback: "A top-10 JSON payload is only ~500 bytes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **5 billion searches per day** and an average of **6 characters typed per search**:
+
+- **Keystroke read QPS**: (5B × 6) ÷ 86,400 s ≈ **350,000 requests/s** average, ~700,000/s at peak (cut roughly in half if the client debounces rapid keystrokes by 50 ms).
+- **Write QPS (completed searches)**: 5B ÷ 86,400 s ≈ **58,000/s** raw, or **~5,800/s** after 10% sampling.
+- **Compiled trie memory**: 50 million active prefixes × ~500 B (prefix + top-10 strings + scores) ≈ **25 GB**.
+- **Key insight**: 25 GB fits **entirely in RAM** on a single modern server (or a handful of shards for redundancy and throughput).
+
+<Choice
+  id="trie-fits-in-ram"
+  objective="size-typeahead"
+  prompt="50 million distinct prefixes each store their precomputed top-10 completions (~500 bytes per prefix). How much RAM does the serving structure need?"
+  options={[
+    { id: "25gb", text: "About 25 GB — the entire dataset fits in memory on one machine or a few replicas", correct: true, feedback: "Right. 50M × 500 B = 25 GB. Never hit disk on the keystroke read path." },
+    { id: "25tb", text: "About 25 TB — requires hundreds of disk-backed shards", feedback: "50 × 10⁶ × 500 is 2.5 × 10¹⁰ bytes (25 GB), not 25 TB." },
+    { id: "25mb", text: "About 25 MB", feedback: "Off by 1,000×: 50M × 500 B is 25 GB." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the API">
+
+- `GET /v1/suggest?q={prefix}&limit=10&lang=en` → `200 { suggestions: [{ text, score }] }` with `Cache-Control: public, max-age=60`.
+  - Cap `prefix` length at ~50 characters.
+  - The client debounces ~50 ms, caches prefixes locally in memory for the session, and cancels in-flight requests if the user types another character.
+- `POST /v1/queries` → `200` when the user actually submits a search (`{ query, locale, ts }`).
+
+<Choice
+  id="what-to-log"
+  objective="size-typeahead"
+  prompt="When a user types `w`, `we`, `wea`, `weat`, `weather` and presses Enter, what should be logged to the ranking pipeline?"
+  options={[
+    { id: "completed-only", text: "Only the final submitted query ('weather'), optionally sampled at 1–10%", correct: true, feedback: "Right. Logging partial prefixes ('wea') would pollute rankings with incomplete words and multiply write volume by 6×." },
+    { id: "every-keystroke", text: "Every intermediate prefix so the trie knows which letters were typed", feedback: "The offline builder automatically attributes the final query 'weather' to all of its prefixes ('w', 'we', 'wea', ...)." },
+    { id: "nothing", text: "Nothing — autocomplete lists are curated manually", feedback: "Manual curation cannot track millions of queries and live trends." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the data">
+
+A naive trie stores frequencies only at terminal words: to answer `GET /suggest?q=sc`, you walk 2 edges to node `sc` ($O(L)$) and then **traverse every descendant leaf in the `sc*` subtree** ($O(V)$) to find the top 10 — millions of nodes for short prefixes!
+
+Instead, **precompute and store the top-k completions directly on every trie node** (or materialise every active prefix as a flat key `pfx:{prefix}` in an in-memory KV/trie store):
+
+- Lookup becomes $O(L)$ pointer steps (or $O(1)$ hash lookup) with zero subtree traversal and zero sorting at query time.
+- Compressing single-child chains into a **radix (Patricia) trie** further reduces node count and CPU cache misses.
+
+<Choice
+  id="cached-topk-complexity"
+  objective="precompute-topk"
+  prompt="If a trie caches the top 10 completions at every node, what is the read time complexity for a prefix of length L?"
+  options={[
+    { id: "o-l", text: "O(L) to walk the prefix (or O(1) if materialised in a prefix hash table), independent of subtree size", correct: true, feedback: "Right. Precomputing top-k on each node trades a small constant factor in memory for predictable microsecond reads." },
+    { id: "o-n-log-k", text: "O(V log k), where V is the number of words starting with the prefix", feedback: "That is the cost without node-level top-k caching." },
+    { id: "o-n", text: "O(N) over the entire dictionary", feedback: "That would be a full table scan." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+The architecture strictly separates the **read path** from the **write/aggregation path**:
+
+- **Read path**: `Client → Load Balancer → Suggest API → Hot-prefix Cache → In-memory Trie Shards`. Short prefixes (`a`, `s`, `th`, `wea`) hit the front cache; longer misses read an in-memory trie replica in < 1 ms.
+- **Write path**: `Client → Suggest API → Sampled Query Log (Queue) → Stream Aggregators + Trie Builder → Trie Shards`. Aggregators window query counts with exponential time decay and push updated prefix records or immutable trie snapshots asynchronously.
+
+<Ordering
+  id="typeahead-update-pipeline"
+  objective="decouple-updates"
+  prompt="Order the steps that turn completed user searches into updated typeahead suggestions."
+  items={[
+    { id: "submit", text: "The user presses Enter on a completed search query" },
+    { id: "enqueue", text: "The API publishes the sampled query event to the query log queue and returns 200 immediately" },
+    { id: "window", text: "Stream aggregators accumulate time-decayed query frequencies over tumbling windows" },
+    { id: "recompute", text: "The trie builder recomputes top-k lists for affected prefixes and applies the safety blocklist" },
+    { id: "swap", text: "In-memory trie shards load the updated prefix entries without blocking concurrent readers" }
+  ]}
+  explanation="Decoupling aggregation via a log queue ensures a slow trie rebuild or traffic spike in searches never adds latency to keystroke reads."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: time decay, trending overlays, and shard balance">
+
+### 1. Time-decayed scoring
+If you rank purely by all-time query count, `"2018 world cup"` outranks `"2026 world cup"` for years. Multiply historical counts by an exponential decay factor every hour/day:
+
+`score_new = score_old × λ + count_window` (e.g. `λ = 0.95`)
+
+so fresh queries naturally rise while evergreen queries stay strong.
+
+### 2. Two-speed updates: snapshots + trending overlay
+Rebuilding a 25 GB radix trie takes minutes. Run a full offline snapshot build every hour, and pair it with a small **streaming trending overlay** (top ~10,000 spiking prefixes over a 2-minute sliding window) merged at read time so breaking news appears within ~60 seconds.
+
+### 3. Avoiding hot-letter shard skew
+Sharding alphabetically (`a–d` on shard 1, `s–z` on shard 5) overloads the `s` and `c` shards. Instead, replicate the tiny top-level prefixes (length 1–3, only $36^3 = 46,656$ combinations!) on every front cache node, and hash-partition longer prefixes across shards.
+
+<Choice
+  id="why-not-mutate-in-place"
+  objective="decouple-updates"
+  prompt="Why should you avoid incrementing frequency counters and bubbling top-10 lists up the live serving trie on every search?"
+  options={[
+    { id: "root-contention", text: "Every update bubbles up to short prefixes ('t', 'th', 'the'), creating write locks on the exact nodes read by 60% of traffic", correct: true, feedback: "Right. Mutating hot ancestor nodes in place causes read/write lock contention and tail-latency spikes." },
+    { id: "ram-wear", text: "DRAM cells wear out after 10,000 writes", feedback: "DRAM has virtually unlimited write endurance (unlike NAND flash)." },
+    { id: "immutable-json", text: "JSON strings cannot be sorted in memory", feedback: "Tries store structured nodes in memory, not raw JSON strings." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **Uncached prefix scan (`typeahead-scan`)**: in the simulator, replacing the `O(1)` cached prefix lookup with an uncached `query` scan causes the store to saturate and goodput to drop below 85% against the 100 ms deadline.
+- **Relational database `LIKE 'prefix%'`**: even with a B-tree index on `query`, finding the top 10 by frequency for `q=s` must scan all rows starting with `s` unless every prefix's top-k is materialised.
+- **Browser-only local history**: zero server cost for repeat queries by the same user, which is why production search bars merge 2–3 local user history matches with the server's global top-k.
+
+<Choice
+  id="prefix-shard-strategy"
+  objective="precompute-topk"
+  prompt="Which sharding scheme avoids hot shards when serving the compiled trie?"
+  options={[
+    { id: "cache-short-hash-long", text: "Cache all 1–3 character prefixes in the front cache tier and shard prefixes by consistent hash of the prefix key", correct: true, feedback: "Right. Short prefixes are few enough to cache everywhere, and hashing longer prefixes spreads traffic uniformly." },
+    { id: "first-letter", text: "One shard per starting letter (26 shards, A through Z)", feedback: "Over 10% of English queries start with 'S' while < 0.2% start with 'X' or 'Z', leaving the 'S' shard overloaded." },
+    { id: "by-user", text: "Shard the global trie by userId", feedback: "A global prefix trie is shared across all users; sharding by userId would duplicate the entire 25 GB trie per shard." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Run the three failure scenarios in the simulator:
+
+- **Breaking news hotspot (`trending-event`)**: 40% of all keystrokes ask for the same hot prefix. Request coalescing and the front `prefixcache` absorb the hotspot with > 99% goodput.
+- **Hot-prefix cache restarts cold (`cache-flush`)**: `prefixcache` is killed for 300 ms and restarts empty. Requests fail during the kill window, then rapidly repopulate the Zipf head on recovery.
+- **Stream aggregator pause (`aggregator-down`)**: the `aggregator` workers are killed for a full second. Because reads hit `prefixcache` and `triestore` while `log` writes stop at the `querylog` queue, user-facing goodput stays at 100%.
+
+<Choice
+  id="aggregator-outage-impact"
+  objective="typeahead-failures"
+  prompt="The stream aggregator and trie-builder pipeline crashes for 15 minutes. What do users experience?"
+  options={[
+    { id: "stale-only", text: "Suggestions continue returning in < 50 ms from the existing in-memory trie; only new trending queries lag by 15 minutes", correct: true, feedback: "Right. Read availability is completely insulated from the asynchronous aggregation pipeline." },
+    { id: "search-down", text: "Users cannot submit searches because query logging fails", feedback: "Completed search events buffer in the durable querylog queue." },
+    { id: "empty-suggestions", text: "Typeahead returns empty arrays until the builder restarts", feedback: "The in-memory trie shards keep serving their last loaded snapshot." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Summarise the key trade-offs:
+1. **Memory for speed**: precomputing top-k at every prefix node turns a subtree scan into an $O(1)$ / $O(L)$ memory read.
+2. **Read/write separation**: never mutate the live trie on the request path; aggregate logs asynchronously with time decay and swap snapshots.
+3. **Fast safety kill-switch**: apply a lightweight blocklist filter at serving time so legal or safety removals happen in seconds rather than waiting for the next hourly trie build.
+
+<Choice
+  id="urgent-blocklist-removal"
+  objective="typeahead-failures"
+  prompt="Legal requires a defamatory autocomplete suggestion to disappear globally within 30 seconds, but full trie snapshot rebuilds take 45 minutes. How do you handle this?"
+  options={[
+    { id: "serve-time-filter", text: "Push the blocked phrase to a small in-memory blocklist checked by the Suggest API before returning results, and invalidate the front cache", correct: true, feedback: "Right. Filtering the top-10 candidate list against an in-memory blocklist at serving time takes nanoseconds and takes effect immediately." },
+    { id: "stop-service", text: "Shut down typeahead globally for 45 minutes while rebuilding the trie", feedback: "A lightweight serve-time filter avoids any downtime." },
+    { id: "wait-build", text: "Tell Legal that immutable snapshots cannot be changed for 45 minutes", feedback: "Always pair slow batch indexes with a small real-time filter for urgent removals." }
+  ]}
+/>
+
+</Step>

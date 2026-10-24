@@ -1,0 +1,218 @@
+{/*
+id: proximity-service
+slug: proximity-service
+track: case-studies
+title: "Case study: Proximity service (Yelp nearby)"
+description: "Design a read-heavy nearby search service: geohash and quadtree spatial indexes that fit in memory on every replica, 9-cell neighbour lookups, and async CDC updates."
+objectives:
+  - id: size-proximity
+    text: Estimate search QPS, business dataset size and why the entire geo index fits in memory without sharding
+  - id: spatial-cells
+    text: Explain geohash boundary issues, 9-cell neighbour queries and when to use a quadtree for uneven density
+  - id: read-heavy-cache
+    text: Design a multi-tier read path with cell caching and replicated in-memory geo indexes fed asynchronously from the database
+  - id: proximity-failures
+    text: Predict system behaviour during a hot-cell event, a bad index rollout or background index rebuild slowdowns
+requires: [partitioning, caching]
+activities: [R, M, Q]
+limitations:
+  - "The simulated cell uses fixed 6-character geohash keys; adaptive quadtree splitting is explored in the interactive spatial model below."
+  - "Business updates invalidate the detail cache immediately while the search index trails by its configured replication lag (~500 ms)."
+  - "Full-text keyword ranking (BM25 + distance) is omitted to focus on spatial indexing and read scaling."
+sources:
+  - title: "Geohash (Wikipedia & Gustavo Niemeyer's specification)"
+    authors: "G. Niemeyer"
+    year: 2008
+    url: "https://en.wikipedia.org/wiki/Geohash"
+  - title: "S2 Geometry Library Overview"
+    authors: "Google"
+    year: 2017
+    url: "http://s2geometry.io/about/overview"
+  - title: "PostgreSQL GiST and SP-GiST Spatial Indexing (PostGIS Manual)"
+    authors: "PostGIS Project"
+    year: 2023
+    url: "https://postgis.net/workshops/postgis-intro/indexing.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Find businesses within a given radius of a point (optionally filtered by category), view business details, and let business owners add or edit listings.
+
+**Non-functional**: search p99 under **~100 ms**; heavily skewed toward reads (**~5,000 searches/s** vs **~1 write/s**); high read availability; and **eventual consistency** for search is acceptable (an owner's edit can take a few minutes to appear in radius searches, though the detail page should reflect it right away).
+
+<Choice
+  id="uber-vs-proximity"
+  objective="read-heavy-cache"
+  prompt="How does a proximity service (Yelp nearby) differ fundamentally from Uber's driver supply index?"
+  options={[
+    { id: "static-places-read-heavy", text: "Restaurants rarely move (~1 write/s vs 5,800 reads/s), so the index can be heavily cached and replicated as a read-optimised view", correct: true, feedback: "Right. With a 5,000:1 read-to-write ratio and static locations, you optimise entirely for fast reads and rebuild or patch the index asynchronously." },
+    { id: "write-heavy-pings", text: "Businesses send GPS updates every 4 seconds at 250,000 writes/s", feedback: "Brick-and-mortar businesses stay put; only moving vehicles generate a location firehose." },
+    { id: "atomic-lock-per-search", text: "Every search must atomically lock all returned restaurants so no other user can view them", feedback: "Viewing a restaurant listing is a read-only, side-effect-free operation." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+Assume **200M businesses** worldwide and **100M daily active users** running 5 searches/day:
+
+- **Search rate**: 500M ÷ 86,400 ≈ **5,800 searches/s** average, **~15,000/s** at peak.
+- **Write rate**: ~100k business edits/day ≈ **1 write/s**.
+- **Dataset size**: 200M businesses × ~1 KB of details ≈ **200 GB** in the primary database.
+- **Geo index size**: 200M × ~30 B (`businessId` + geohash + `lat`/`lng`) ≈ **6 GB** total. That fits in RAM on a single machine!
+- **Index replicas**: at ~5,000 queries/s per in-memory replica, **3–4 full replicas per region** carry peak traffic without sharding the index at all.
+
+<Choice
+  id="shard-or-replicate-index"
+  objective="size-proximity"
+  prompt="The entire world's geo index for 200 million businesses is about 6 GB, and peak load is 15,000 queries/s. How should you scale the geo index?"
+  options={[
+    { id: "replicate-in-memory", text: "Keep the full 6 GB index in memory on every geo-index replica and add read replicas for throughput — no sharding needed", correct: true, feedback: "Right. Sharding a 6 GB dataset adds cross-shard scatter-gather for boundary queries when any modern server has 64+ GB of RAM." },
+    { id: "shard-by-name", text: "Shard the geo index across 100 machines by business name", feedback: "Sharding by name forces every spatial query to fan out to all 100 shards." },
+    { id: "disk-scan", text: "Scan the 200 GB table from disk on every request", feedback: "Full-table scans at 15,000/s will saturate the database immediately." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `GET /v1/search?lat&lng&radius&category&cursor` (radius ≤ 20 km) → **200** `{ businesses[], next }`.
+- `GET /v1/businesses/{id}` → **200** `{ details }`.
+- `PUT /v1/businesses/{id}` → **200**. Writes the database and invalidates `biz:{id}` in the cache immediately so the owner sees their edit on the detail page; the geo index catches up asynchronously.
+
+<Choice
+  id="owner-read-your-writes"
+  objective="read-heavy-cache"
+  prompt="A restaurant owner updates their opening hours via PUT /v1/businesses/{id} and immediately reloads the business detail page. How do you ensure they see the new hours even though the geo search index updates asynchronously?"
+  options={[
+    { id: "invalidate-detail-cache", text: "Serve GET /v1/businesses/{id} from the primary database through a cache key (biz:{id}) that PUT invalidates synchronously", correct: true, feedback: "Right. Separating the detail lookup (by ID) from the spatial search index gives immediate read-your-writes on details without coupling writes to the geo index." },
+    { id: "rebuild-world-sync", text: "Rebuild the entire 6 GB geo index synchronously inside the PUT request before returning 200", feedback: "That would make every edit slow and fragile when the spatial coordinates did not even change." },
+    { id: "wait-an-hour", text: "Show stale hours on the detail page for an hour", feedback: "Owners think their save failed if the detail page still shows old text." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model">
+
+- **businesses** (`db`): `businessId`, `name`, `geohash` (length 6 ≈ 1.2 km × 0.6 km), `lat`, `lng`, `category`, `rating`, `details`, sharded by `businessId`.
+- **geoindex**: an in-memory read-optimised replica mapping `geohash → list of (businessId, lat, lng)`, fed from `db` via change-data-capture (CDC).
+- **cellcache**: caches both popular cell search results (`cell:{geohash}`, 60 s TTL) and individual business details (`biz:{id}`).
+
+<Choice
+  id="geohash-length-choice"
+  objective="spatial-cells"
+  prompt="Why is a length-6 geohash (~1.2 km × 0.6 km) a good default cell size for a 1 km 'nearby restaurants' search?"
+  options={[
+    { id: "matches-radius", text: "The cell plus its 8 immediate neighbours cover a ~3.6 km × 1.8 km box, which cleanly encloses a 1 km radius without scanning too many distant businesses", correct: true, feedback: "Right. Match the geohash precision to the search radius so 9 cell lookups cover the circle with minimal excess candidates." },
+    { id: "exact-circle", text: "A length-6 geohash is a perfect 1 km circle", feedback: "Geohashes are rectangles in latitude/longitude space, never circles." },
+    { id: "one-business-per-cell", text: "Length 6 guarantees at most one business per cell worldwide", feedback: "A single block in Manhattan can hold hundreds of businesses inside one length-6 cell." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+Requests enter through a load balancer to stateless **Search API** servers.
+- **Nearby search** uses cache-aside on `cellcache` (`cell:{geohash}`); on a miss it queries `geoindex` for the target cell and its 8 neighbours, filters candidates by exact Haversine distance, caches the result for 60 seconds, and returns.
+- **Detail view** uses cache-aside on `cellcache` (`biz:{id}`), falling back to `db`.
+- **Owner update** writes `db` and deletes `biz:{id}` from `cellcache`; `geoindex` pulls the change asynchronously.
+
+<Ordering
+  id="nearby-search-flow"
+  objective="read-heavy-cache"
+  prompt="Put the steps of an uncached nearby search in order."
+  items={[
+    { id: "compute-cells", text: "The Search API converts (lat, lng, radius) into the centre geohash cell and its 8 neighbouring cells" },
+    { id: "check-cache", text: "The Search API checks the cell cache and misses" },
+    { id: "query-geoindex", text: "The Search API fetches candidate businesses for those cells from an in-memory geo-index replica" },
+    { id: "filter-distance", text: "The Search API filters out candidates whose exact distance exceeds the radius and sorts the rest" },
+    { id: "populate-cache", text: "The Search API stores the cell result in the cache with a 60-second TTL and returns 200" }
+  ]}
+  explanation="Caching at the cell level absorbs hot urban areas (like Times Square), while the in-memory geo index keeps cache misses under a few milliseconds."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: boundary effects and adaptive cells">
+
+Two points 10 metres apart on opposite sides of a geohash division line can have completely different prefixes (just as `0999` and `1000` share no prefix in base 10). Querying only the user's own cell misses restaurants right across the street. That is why every search **always queries the centre cell plus its 8 neighbours**, then filters by exact Euclidean/Haversine distance.
+
+Fixed geohash cells have uneven occupancy: one cell in midtown Manhattan holds thousands of cafes while a cell in the desert holds zero. A **quadtree** (or Google's **S2** hierarchy) recursively subdivides a square until every leaf holds at most $k$ businesses — giving tiny leaves downtown and huge leaves in rural areas. Experiment with geohash rings vs quadtree subdivision in the interactive player below:
+
+<SpatialPlayer />
+
+<Choice
+  id="boundary-bug-question"
+  objective="spatial-cells"
+  prompt="A user standing on 5th Avenue searches within 500 m, but a coffee shop 20 m away on the other side of the street is missing from the results. What bug did the engineer write?"
+  options={[
+    { id: "only-centre-cell", text: "They queried only the user's single geohash cell instead of the cell and its 8 neighbours", correct: true, feedback: "Right. Any point near a cell edge is closer to points in the adjacent cell than to the far side of its own cell; querying all 9 cells fixes the boundary cliff." },
+    { id: "ttl-too-short", text: "The cell cache TTL was 60 seconds instead of 1 hour", feedback: "A shorter TTL makes results fresher, not missing." },
+    { id: "too-many-replicas", text: "They deployed 3 geo-index replicas instead of 1", feedback: "Replicating a read-only index does not drop businesses across the street." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **No geo index: scan the business table.** The runnable `proximity-scan` alternative removes `geoindex` and queries `db` directly on cache misses. Every miss scans 20,000 rows, saturating the database worker pool and dropping goodput below 90%.
+- **Quadtree instead of fixed geohash cells.** Balances candidate count per leaf across dense cities and sparse countryside; built in memory at startup in a few seconds and patched in place. Slightly more code than a B-tree index on a `geohash` column.
+- **Database-native spatial index (PostGIS R-tree / GiST).** Zero extra infrastructure and supports arbitrary polygons. Great up to a few thousand queries/s per read replica — often the best V1 before extracting a dedicated in-memory geo index.
+
+<Choice
+  id="quadtree-vs-geohash"
+  objective="spatial-cells"
+  prompt="What problem does an in-memory quadtree solve that a fixed-length geohash index does not?"
+  options={[
+    { id: "density-adaptation", text: "It adapts cell size to point density, subdividing dense downtown blocks into tiny leaves while keeping sparse rural areas in large leaves", correct: true, feedback: "Right. Every leaf holds at most k businesses, bounding the work per cell lookup regardless of whether the query is in Tokyo or Wyoming." },
+    { id: "no-ram-needed", text: "It stores 200 million points in zero bytes of RAM", feedback: "A quadtree still holds the points and tree pointers in memory (~a few gigabytes)." },
+    { id: "eliminates-db", text: "It replaces the primary database for billing and owner authentication", feedback: "The quadtree is still a derived spatial index, not the source of truth." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **Everyone searches Times Square** (30% of searches hit one hot cell on New Year's Eve). The hot cell sits in `cellcache` and costs just one `geoindex` query per minute; the rest of the uniform long-tail misses are easily handled by the index replicas.
+- **The geo index is unavailable** (a bad index build kills `geoindex` for 0.5 s). Popular cached cells keep answering from `cellcache` and business detail pages keep working from `db`, while uncached searches time out. Roll out new index builds blue/green beside the old index and swap atomically.
+- **Index replicas slow down 5×** (background index rebuild competes for CPU). Cache hits do not notice; misses take ~10 ms longer instead of ~2 ms, and because `cellcache` absorbs the hot cells, `geoindex` stays well below saturation.
+
+<Choice
+  id="safe-index-rollout"
+  objective="proximity-failures"
+  prompt="A nightly full rebuild of the geo index produces a corrupted file that crashes the index process on load. How do you prevent an outage like the `index-down` scenario?"
+  options={[
+    { id: "blue-green-index", text: "Build and smoke-test the new index in a shadow process or separate memory slot, then atomically swap the pointer while keeping the previous index for instant rollback", correct: true, feedback: "Right. Because the index is only ~6 GB and read-only, blue/green swapping with validation checks makes bad builds a non-event." },
+    { id: "remove-cache", text: "Delete the cell cache before loading the new index", feedback: "Flushing the cache right when the index might fail removes your only safety net for hot cells." },
+    { id: "stop-writes", text: "Block business owners from editing listings at night", feedback: "Blocking 1 write/s does not stop a buggy index builder from crashing replicas." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Recap why this design is so clean: **read-to-write asymmetry (5,000:1)** and a **small spatial footprint (~6 GB)** let every replica hold the full geo index in memory, **9-cell geohash lookups** (or a **quadtree**) solve boundary and density problems, and **cell-level caching** makes viral locations free. Track **search p99 latency**, **cell cache hit rate**, and **CDC index lag**. Score each stage from 1 to 4.
+
+<Choice
+  id="when-postgis-is-enough"
+  objective="size-proximity"
+  prompt="You are launching v1 of a proximity feature with 500,000 businesses and 200 searches/s. What is the most pragmatic architecture?"
+  options={[
+    { id: "postgis-plus-cache", text: "A PostgreSQL database with a PostGIS GiST index (or indexed geohash column), one read replica, and a short-TTL cell cache", correct: true, feedback: "Right. PostGIS handles hundreds of spatial queries/s on a single node with zero custom indexing code; build the dedicated in-memory quadtree when traffic demands it." },
+    { id: "hundred-shard-custom", text: "A 100-node custom C++ distributed quadtree cluster on day one", feedback: "500,000 points is ~15 MB — sharding it across 100 nodes is pure operational overhead." },
+    { id: "full-scan-v1", text: "No index at all; compute Haversine distance in Python over all 500,000 rows per request", feedback: "Scanning 500k rows in application code at 200/s is 100 million distance calculations per second." }
+  ]}
+/>
+
+</Step>

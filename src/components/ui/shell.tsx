@@ -75,6 +75,8 @@ const NAV = [
   { href: "/learn", label: "Learn" },
   { href: "/sandbox", label: "Sandbox" },
   { href: "/challenges", label: "Challenges" },
+  { href: "/case-studies", label: "Case studies" },
+  { href: "/interview", label: "Interview" },
   { href: "/reference", label: "Reference" },
   { href: "/progress", label: "Progress" },
   { href: "/settings", label: "Settings" },

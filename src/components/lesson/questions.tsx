@@ -1,11 +1,58 @@
 "use client";
 
-import { motion } from "motion/react";
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { formatNumber, formatPercent } from "@/lib/format";
-import { diagnose, generate, isCorrect, parseAnswer, randomSeed, rng, seedFrom, templates, type Variant } from "@/lib/content/variants";
+import type { Variant } from "@/lib/content/variants";
 import { ids, saveProgress } from "./progress";
 import { useLesson, useStepDone } from "./stepper";
+
+type VariantsModule = typeof import("@/lib/content/variants");
+let cachedVariants: VariantsModule | null = null;
+
+function useVariantsModule(): VariantsModule | null {
+  const [mod, setMod] = useState<VariantsModule | null>(() => cachedVariants);
+  useEffect(() => {
+    if (mod) return;
+    let alive = true;
+    import("@/lib/content/variants").then((m) => {
+      cachedVariants = m;
+      if (alive) setMod(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [mod]);
+  return mod;
+}
+
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 0x100000000;
+  };
+}
+
+function seedFrom(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return h >>> 0 || 1;
+}
+
+function randomSeed(): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0] || 1;
+}
+
+function parseAnswer(raw: string): number | null {
+  const cleaned = raw.trim().replace(/,/g, "").replace(/%$/, "").trim();
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
 
 // ---------- shared pieces ----------
 
@@ -17,31 +64,25 @@ function Card({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-/** Spring check on correct, shake on wrong; under reduced motion only the crossfade remains. */
+/** Check on correct, alert on wrong. */
 function Feedback({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: ok ? 0.96 : 1 }}
-      animate={ok ? { opacity: 1, scale: 1 } : { opacity: 1, x: [0, -8, 7, -5, 3, 0] }}
-      transition={ok ? { type: "spring", stiffness: 520, damping: 22 } : { duration: 0.42, ease: "easeOut" }}
-      className={`mt-4 flex gap-3 rounded-md border p-4 text-[0.9375rem] leading-relaxed ${
+    <div
+      className={`mt-4 flex gap-3 rounded-md border p-4 text-[0.9375rem] leading-relaxed transition-opacity ${
         ok ? "border-success/40 bg-success/10" : "border-danger/40 bg-danger/10"
       }`}
     >
-      <motion.span
+      <span
         aria-hidden
-        initial={{ scale: ok ? 0.4 : 1 }}
-        animate={{ scale: 1 }}
-        transition={{ type: "spring", stiffness: 600, damping: 15 }}
         className={`grid size-6 shrink-0 place-items-center rounded-full text-sm font-bold ${ok ? "bg-success text-bg" : "bg-danger text-bg"}`}
       >
         {ok ? "✓" : "✕"}
-      </motion.span>
+      </span>
       <div>
         <p className="font-semibold">{ok ? "Correct" : "Not quite"}</p>
         <div className="text-muted [&_strong]:text-fg">{children}</div>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -178,11 +219,9 @@ export function Ordering({ id, prompt, items, explanation }: { id: string; objec
       <Prompt id={promptId}>{prompt}</Prompt>
       <ol aria-labelledby={promptId} className="grid gap-2">
         {order.map((item, i) => (
-          <motion.li
-            layout
+          <li
             key={item.id}
-            transition={{ type: "spring", stiffness: 500, damping: 38 }}
-            className={`flex min-h-12 items-center gap-3 rounded-md border bg-surface-2 py-1.5 pl-3 pr-1.5 ${
+            className={`flex min-h-12 items-center gap-3 rounded-md border bg-surface-2 py-1.5 pl-3 pr-1.5 transition-colors ${
               submitted ? (placed[i] ? "border-success/50" : "border-danger/50") : "border-border"
             }`}
           >
@@ -206,7 +245,7 @@ export function Ordering({ id, prompt, items, explanation }: { id: string; objec
                 </button>
               </span>
             )}
-          </motion.li>
+          </li>
         ))}
       </ol>
       <div aria-live="polite">
@@ -242,21 +281,23 @@ export function Ordering({ id, prompt, items, explanation }: { id: string; objec
 
 // ---------- Numeric variants ----------
 
-function formatAnswer(v: Variant): string {
-  const t = templates[v.templateId];
+function formatAnswer(mod: VariantsModule, v: Variant): string {
+  const t = mod.templates[v.templateId];
   return `${formatNumber(v.answer, v.answer < 100 ? 1 : 0)} ${t.unit}`;
 }
 
 function NumericForm({
+  mod,
   variant,
   onAnswer,
   disabled,
 }: {
+  mod: VariantsModule;
   variant: Variant;
   onAnswer: (value: number) => void;
   disabled: boolean;
 }) {
-  const t = templates[variant.templateId];
+  const t = mod.templates[variant.templateId];
   const [text, setText] = useState("");
   const [invalid, setInvalid] = useState(false);
   const inputId = useId();
@@ -302,20 +343,31 @@ function NumericForm({
 
 export function VariantQuestion({ template: templateId }: { template: string }) {
   const done = useStepDone();
-  const t = templates[templateId];
+  const mod = useVariantsModule();
   // First variant is seeded from the id so server and client agree; later ones are random.
   const [seed, setSeed] = useState(() => seedFrom(templateId));
   const [result, setResult] = useState<{ ok: boolean; value: number } | null>(null);
-  const variant = generate(t, seed);
+
+  if (!mod) {
+    return (
+      <Card label="Numeric question">
+        <p className="text-sm text-muted">Loading question…</p>
+      </Card>
+    );
+  }
+
+  const t = mod.templates[templateId];
+  const variant = mod.generate(t, seed);
 
   return (
     <Card label="Numeric question">
       <NumericForm
         key={seed}
+        mod={mod}
         variant={variant}
         disabled={result !== null}
         onAnswer={(value) => {
-          const ok = isCorrect(t, variant, value);
+          const ok = mod.isCorrect(t, variant, value);
           setResult({ ok, value });
           if (ok) done();
         }}
@@ -325,11 +377,11 @@ export function VariantQuestion({ template: templateId }: { template: string }) 
           <Feedback ok={result.ok}>
             {result.ok ? (
               <p>
-                The solver&apos;s answer is <strong>{formatAnswer(variant)}</strong>.
+                The solver&apos;s answer is <strong>{formatAnswer(mod, variant)}</strong>.
               </p>
             ) : (
               <>
-                <p>{diagnose(t, variant, result.value)}</p>
+                <p>{mod.diagnose(t, variant, result.value)}</p>
                 <p className="mt-2">
                   <a href={`#step-${t.step}`} className="text-accent underline underline-offset-4">
                     Re-read this step
@@ -363,6 +415,7 @@ const PASS = 0.8;
 
 export function MasteryCheck({ templates: templateIds, count }: { templates: string[]; count: number }) {
   const done = useStepDone();
+  const mod = useVariantsModule();
   const { lessonId, revision, stepIds } = useLesson();
   const [items, setItems] = useState<Variant[] | null>(null);
   const [results, setResults] = useState<{ ok: boolean; value: number }[]>([]);
@@ -370,9 +423,11 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
   const [showing, setShowing] = useState(false); // feedback for the latest answer is on screen
   const finished = items !== null && results.length === items.length && !showing;
 
-  const start = () => {
+  const start = async () => {
+    const m = mod ?? (await import("@/lib/content/variants"));
+    cachedVariants = m;
     // Random 32-bit seeds: effectively never a variant seen before; retries never reuse items.
-    setItems(Array.from({ length: count }, (_, i) => generate(templates[templateIds[i % templateIds.length]], randomSeed())));
+    setItems(Array.from({ length: count }, (_, i) => m.generate(m.templates[templateIds[i % templateIds.length]], randomSeed())));
     setResults([]);
     setShowing(false);
   };
@@ -381,16 +436,16 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
     const next = [...results, { ok, value }];
     setResults(next);
     setShowing(true);
-    if (next.length === items!.length) save(items!, next);
+    if (next.length === items!.length && mod) save(mod, items!, next);
   };
 
-  const save = (variants: Variant[], res: { ok: boolean }[]) => {
+  const save = (m: VariantsModule, variants: Variant[], res: { ok: boolean }[]) => {
     const score = res.filter((r) => r.ok).length / res.length;
     const now = Date.now();
     void saveProgress({ itemId: ids.lesson(lessonId), kind: "lesson", mastery: score }, revision);
     const byObjective = new Map<string, boolean[]>();
     variants.forEach((v, i) => {
-      const o = templates[v.templateId].objective;
+      const o = m.templates[v.templateId].objective;
       byObjective.set(o, [...(byObjective.get(o) ?? []), res[i].ok]);
     });
     for (const [o, oks] of byObjective) {
@@ -402,14 +457,14 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
     done();
   };
 
-  if (!items) {
+  if (!items || !mod) {
     return (
       <Card label="Mastery check">
         <p className="mb-2 font-display text-2xl">Mastery check</p>
         <p className="mb-4 text-muted">
           {count} questions on fresh variants. One attempt each, no time limit. Score {formatPercent(PASS, 0)} or more to master the lesson.
         </p>
-        <button type="button" className="btn btn-primary" onClick={start}>
+        <button type="button" className="btn btn-primary" onClick={() => void start()}>
           Start the check
         </button>
       </Card>
@@ -418,7 +473,7 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
 
   if (finished) {
     const score = results.filter((r) => r.ok).length / items.length;
-    const missedSteps = [...new Set(items.filter((_, i) => !results[i].ok).map((v) => templates[v.templateId].step))].filter((s) =>
+    const missedSteps = [...new Set(items.filter((_, i) => !results[i].ok).map((v) => mod.templates[v.templateId].step))].filter((s) =>
       stepIds.includes(s),
     );
     const passed = score >= PASS;
@@ -445,7 +500,7 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
             )}
           </Feedback>
         </div>
-        <button type="button" className="btn mt-4" onClick={start}>
+        <button type="button" className="btn mt-4" onClick={() => void start()}>
           Retake with new variants
         </button>
       </Card>
@@ -454,7 +509,7 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
 
   const currentIndex = showing ? index - 1 : index;
   const v = items[currentIndex];
-  const t = templates[v.templateId];
+  const t = mod.templates[v.templateId];
   const last = results[currentIndex];
 
   return (
@@ -462,17 +517,17 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
       <p className="mb-4 text-sm text-muted">
         Question <span className="num text-fg">{currentIndex + 1}</span> of <span className="num">{items.length}</span>
       </p>
-      <NumericForm key={`${currentIndex}-${v.seed}`} variant={v} disabled={showing} onAnswer={(value) => record(isCorrect(t, v, value), value)} />
+      <NumericForm key={`${currentIndex}-${v.seed}`} mod={mod} variant={v} disabled={showing} onAnswer={(value) => record(mod.isCorrect(t, v, value), value)} />
       <div aria-live="polite">
         {showing && last && (
           <Feedback ok={last.ok}>
             {last.ok ? (
               <p>
-                The solver&apos;s answer is <strong>{formatAnswer(v)}</strong>.
+                The solver&apos;s answer is <strong>{formatAnswer(mod, v)}</strong>.
               </p>
             ) : (
               <>
-                <p>{diagnose(t, v, last.value)}</p>
+                <p>{mod.diagnose(t, v, last.value)}</p>
                 <p className="mt-2">
                   <a href={`#step-${t.step}`} className="text-accent underline underline-offset-4">
                     Review the step that teaches this

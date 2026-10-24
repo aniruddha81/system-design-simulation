@@ -1,0 +1,216 @@
+{/*
+id: pastebin
+slug: pastebin
+track: case-studies
+title: "Case study: Pastebin"
+description: "Design a paste service where the payload, not the request rate, drives the design: metadata in a database, content in an object store, hot pastes in a cache."
+objectives:
+  - id: size-pastebin
+    text: Estimate content and metadata storage separately and size a cache in bytes
+  - id: split-storage
+    text: Split metadata and content across stores and order the writes safely
+  - id: expiry-design
+    text: Design expiry, burn-after-read and cleanup without full scans or races
+  - id: pastebin-failures
+    text: Predict the effect of a slow or lossy object store and choose where retries are safe
+requires: [estimation, caching]
+activities: [R, Q]
+limitations:
+  - "The runnable design is one reduced cell at about 2,000 requests/s; storage totals are discussed, not simulated."
+  - "The object store is modelled as unlimited concurrency with a latency distribution; real stores also throttle per prefix."
+  - "Burn-after-read and expiry are discussed in the text; the simulator does not expire records."
+sources:
+  - title: "Amazon S3 FAQs (durability and storage classes)"
+    authors: "Amazon Web Services"
+    url: "https://aws.amazon.com/s3/faqs/"
+  - title: "HTTP Semantics (RFC 9110)"
+    authors: "R. Fielding, M. Nottingham, J. Reschke"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9110"
+  - title: "Exponential Backoff And Jitter"
+    authors: "M. Brooker"
+    year: 2015
+    url: "https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Users paste text (typically ~10 KB, up to 10 MB), get back an unguessable ID, and share the link. Pastes can expire (from ten minutes to never) or be **burn-after-read**. Signed-in users can list and delete their pastes.
+
+Non-functional: reads p99 under 200 ms for typical pastes, 99.9% read availability, and an acknowledged paste is never lost. Because storage grows forever, **cost per GB** is a first-class requirement.
+
+<Choice
+  id="pastebin-question"
+  objective="size-pastebin"
+  prompt="Which clarifying question most changes the storage design?"
+  options={[
+    { id: "size", text: "What are the typical and maximum paste sizes?", correct: true, feedback: "Right. Ten kilobytes per item times billions of items is what pushes content out of the database." },
+    { id: "theme", text: "Is dark mode required?", feedback: "Not an architecture question." },
+    { id: "lang", text: "Which languages need syntax highlighting?", feedback: "That is rendering, done client-side or at read time; it does not change storage." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+Assume **10M new pastes a day** and **10 reads per paste**.
+
+- **Writes**: 10M ÷ 86,400 ≈ **116/s**, about 230/s at peak. **Reads**: about 1,160/s, 2,300/s at peak.
+- **Content**: 10M × 10 KB × 365 × 5 years ≈ **183 TB**. In an object store at $0.023/GB-month that is about $4k a month.
+- **Metadata**: 18B rows × ~300 B ≈ **5.5 TB**.
+- **Egress**: 2,300/s × 10 KB ≈ 23 MB/s at peak.
+- **Cache**: the hottest 20% of a day's reads is 0.2 × 100M × 10 KB ≈ **200 GB**. Each entry is 20× bigger than a short link, so size the cache in **bytes**, not entries.
+
+<Choice
+  id="cache-bytes"
+  objective="size-pastebin"
+  prompt="You want to cache 2 million hot pastes averaging 10 KB, plus key overhead. Roughly how much memory is that?"
+  options={[
+    { id: "20gb", text: "About 20 GB", correct: true, feedback: "Right. 2M × ~10 KB ≈ 20 GB; key and allocator overhead adds a little." },
+    { id: "20mb", text: "About 20 MB", feedback: "That is 2 million × 10 bytes. The content is 10 kilobytes per paste." },
+    { id: "2tb", text: "About 2 TB", feedback: "That is 100× too much: 2M × 10 KB = 20 GB." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /v1/pastes` with `content`, `syntax`, `expiresIn`, `burnAfterRead` and an `Idempotency-Key` → **201** with the ID; **413** too large (rejected at the gateway before the body is read); **429** over quota.
+- `GET /p/{id}` → **200** text; **404**; **410** expired.
+- `DELETE /v1/pastes/{id}` → **204**: delete metadata, schedule the blob for deletion, invalidate caches.
+
+IDs are random 8-character base-62 strings (about 2 × 10¹⁴ values), never counters: pastes often contain secrets, so IDs must not be enumerable.
+
+<Choice
+  id="paste-ids"
+  objective="expiry-design"
+  prompt="Why must paste IDs be random rather than sequential?"
+  options={[
+    { id: "enumerate", text: "Sequential IDs let anyone walk through other people's pastes, which often contain secrets", correct: true, feedback: "Right. Unlisted pastes are only private if their IDs are unguessable." },
+    { id: "collide", text: "Sequential IDs collide more often", feedback: "Counters never collide. The problem is that they are predictable." },
+    { id: "shorter", text: "Random IDs are shorter", feedback: "They are usually longer, to keep collisions and guessing unlikely." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model: two stores">
+
+- **pastes** (database): `id`, `userId`, `title`, `syntax`, `blobKey`, `createdAt`, `expiresAt`, with indexes on `userId` and `expiresAt`. Small rows that need indexes.
+- **blobs** (object store): `blobKey → content`. Cheap per GB and designed for very high durability, but tens of milliseconds per read.
+
+**Write order matters.** Write the blob first, then the metadata. A crash in between leaves an unreferenced blob that a sweeper deletes. The opposite order can leave a paste whose content does not exist — a 404 for a paste the user was told was saved.
+
+<Ordering
+  id="create-order"
+  objective="split-storage"
+  prompt="Order the steps of creating a paste so that a crash at any point never leaves a paste that cannot be read."
+  items={[
+    { id: "validate", text: "Reject the request with 413 if it exceeds the size limit" },
+    { id: "blob", text: "Write the content to the object store under a new blobKey" },
+    { id: "meta", text: "Insert the metadata row that points at blobKey" },
+    { id: "ack", text: "Return 201 with the paste ID" }
+  ]}
+  explanation="Blob before metadata: the only crash leftover is an orphaned blob, which a background sweeper can delete safely."
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+A load balancer spreads requests over stateless API servers. Reads go **cache → metadata → blob**: a hit returns the cached paste; a miss reads metadata, then the blob, then fills the cache. Pastes are immutable, so the cache never needs invalidating except on delete or expiry. Creates write the blob, then the metadata.
+
+Blob reads retry with exponential backoff and jitter. That is safe because a read has no side effects. The blob write does not retry here: without an idempotency key, a retried create could store a second copy.
+
+<Choice
+  id="immutable-cache"
+  objective="split-storage"
+  prompt="Why can the paste cache use a long TTL without serving stale content?"
+  options={[
+    { id: "immutable", text: "Pastes never change after creation, so a cached copy can only become wrong by deletion or expiry", correct: true, feedback: "Right. Immutable content caches perfectly; only deletes and expiry need invalidation." },
+    { id: "lru", text: "LRU eviction removes stale entries first", feedback: "LRU removes cold entries, not stale ones." },
+    { id: "replicas", text: "The database replicates synchronously", feedback: "Replication does not affect what a separate cache holds." }
+  ]}
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: expiry and burn-after-read">
+
+**Expiry**: check `expiresAt` on every read and return 410, so expired pastes disappear immediately. A background job walks the `expiresAt` index in small batches and deletes metadata, then blobs. Object stores also offer lifecycle rules that delete by age, which removes most of the sweeper's work for fixed TTLs.
+
+**Burn-after-read** needs an atomic read-and-delete — a conditional delete on the metadata row. With a separate read and delete, two readers who arrive together can both see the paste.
+
+<Choice
+  id="burn-race"
+  objective="expiry-design"
+  prompt="Two people open a burn-after-read paste at the same moment. How do you guarantee only one sees it?"
+  options={[
+    { id: "conditional", text: "Delete the metadata row with a conditional delete; only the request whose delete succeeds returns the content", correct: true, feedback: "Right. The atomic delete is the decision point; the loser gets 404." },
+    { id: "read-then-delete", text: "Read the paste, then delete it", feedback: "Both readers can read before either deletes." },
+    { id: "ttl", text: "Set a 1-second TTL after the first read", feedback: "Anyone who reads within that second still sees it." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **Content in the database.** One system, one transaction, no orphans. Fine below a few TB; at 183 TB it means many more shards, slower backups and replicas that copy every byte.
+- **A CDN for public pastes.** Immutable public pastes cache perfectly at the edge. Private and burn-after-read pastes must bypass it, and deletes need a purge.
+- **No retries on blob reads.** Run the lossy-link scenario against it: every lost packet becomes a failed read, where the reference design's retries hide almost all of them.
+
+<Choice
+  id="db-content"
+  objective="split-storage"
+  prompt="When is storing paste content directly in the database the better choice?"
+  options={[
+    { id: "small", text: "When total content is small (a few TB at most) and operational simplicity matters more than storage cost", correct: true, feedback: "Right. The object store wins on cost and operations at large scale, not always." },
+    { id: "never", text: "Never; content always belongs in an object store", feedback: "For a small service, one database is simpler and perfectly adequate." },
+    { id: "fast", text: "When reads must be faster than 1 ms", feedback: "Neither store gives that for 10 KB reads; the cache does." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **The object store slows down 8×** (120 ms per read). Cache hits are untouched; misses slow down and API workers spend longer waiting, so their utilisation rises. A slow dependency consumes your concurrency even though it is not your CPU.
+- **Packet loss between one API server and the object store** (10%). Blob reads retry with backoff and nearly all succeed; a few creates fail because they do not retry.
+- **A paste goes viral** (40% of reads). It is served from the cache after the first read; the long tail is what keeps the object store busy.
+
+<Choice
+  id="retry-safety"
+  objective="pastebin-failures"
+  prompt="10% of packets to the object store are being lost. Which requests is it safe to retry automatically?"
+  options={[
+    { id: "reads", text: "Blob reads: they have no side effects", correct: true, feedback: "Right. Reads are idempotent. Writes need an idempotency key (or a deterministic blob key) before they can be retried safely." },
+    { id: "all", text: "Every request, reads and writes alike", feedback: "A retried create without an idempotency key can store the paste twice." },
+    { id: "none", text: "None; retries always make outages worse", feedback: "Bounded retries with backoff and jitter on idempotent requests are the standard fix for transient loss." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Name the risks: storage cost growth (lifecycle tiers for old pastes), abuse and leaked credentials (rate limits, size caps at the gateway, secret scanning), and the slow-dependency problem (timeouts shorter than your deadline, bounded retries). Then score each stage from 1 to 4 against the rubric.
+
+<Choice
+  id="slow-dependency"
+  objective="pastebin-failures"
+  prompt="During the object-store slowdown, API CPU is low but API worker utilisation is high. Why?"
+  options={[
+    { id: "waiting", text: "Workers are blocked waiting for slow object-store reads, so each request holds a worker longer", correct: true, feedback: "Right. Little's law: in-flight work = rate × time in system. Longer waits mean more busy workers at the same rate." },
+    { id: "cpu", text: "Syntax highlighting got slower", feedback: "Nothing changed in the API's own work." },
+    { id: "cache", text: "The cache was flushed", feedback: "The cache is untouched in this scenario." }
+  ]}
+/>
+
+</Step>

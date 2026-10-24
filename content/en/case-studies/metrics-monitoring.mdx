@@ -1,0 +1,228 @@
+{/*
+id: metrics-monitoring
+slug: metrics-monitoring
+track: case-studies
+title: "Case study: Metrics monitoring and alerting"
+description: "Design a planet-scale time-series metrics and alerting system with Gorilla chunk compression, cardinality protection, and resilient alerting."
+objectives:
+  - id: size-tsdb
+    text: Estimate active time-series cardinality, sample ingestion rate, and storage savings from Gorilla delta-of-delta and XOR compression
+  - id: control-cardinality
+    text: Explain why label cardinality — not sample rate — is the primary scaling limit of a time-series database
+  - id: scale-tsdb-pipeline
+    text: Design a decoupled ingestion, in-memory head chunk, and step-aligned query caching pipeline
+  - id: alert-reliably
+    text: Predict how the monitoring and alerting pipeline survives incident query storms, ingester restarts, and alert flapping
+requires: [observability, caching, queues]
+activities: [R, Q]
+limitations:
+  - "The simulated cell runs 3,000 requests/s (85% batched writes, 15% range queries) over 15,000 series chunks."
+  - "Gorilla bit-packing is analysed in the estimates and deep dive; the operational engine models chunk size in bytes."
+sources:
+  - title: "Gorilla: A Fast, Scalable, In-Memory Time Series Database"
+    authors: "T. Pelkonen et al. (Facebook)"
+    year: 2015
+    url: "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf"
+  - title: "Prometheus TSDB: Writing a Time Series Database from Scratch"
+    authors: "F. Reinartz"
+    year: 2017
+    url: "https://fabxc.org/tsdb/"
+  - title: "Site Reliability Engineering, Ch. 6: Monitoring Distributed Systems"
+    authors: "B. Beyer, C. Jones, J. Petoff, N. Murphy"
+    year: 2016
+    url: "https://sre.google/sre-book/monitoring-distributed-systems/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what a metrics system must survive">
+
+A metrics monitoring system (like Prometheus, Cortex/Mimir, or Datadog) has a cruel operational property: **it experiences its highest load at the exact moment your production infrastructure is failing**. When an outage hits, autoscalers spin up new pods (multiplying metric series), and 200 engineers open Grafana dashboards on 5-second auto-refresh.
+
+**Functional**: ingest time-series samples `(metricName, labels{}, timestampMs, float64Value)` at 10-second intervals; serve range queries with label selectors (`service="checkout", status="500"`), aggregations, and downsampled rollups; evaluate alerting rules every 15–30 seconds and dispatch deduplicated notifications.
+
+**Non-functional**: sustain **85–95% write traffic** (millions of samples/s) without blocking monitored services; serve dashboard and alert queries in **under 500 ms p99**; and isolate the alerting path so alerts still fire during a dashboard query storm.
+
+<Choice
+  id="metrics-vs-logs"
+  objective="control-cardinality"
+  prompt="What distinguishes a time-series metric from a structured log event?"
+  options={[
+    { id: "bounded-numeric", text: "Metrics are numeric counters/gauges/histograms over a bounded set of label combinations, pre-aggregated at regular intervals", correct: true, feedback: "Right. Because a metric series tracks one numeric stream per label set, its cost scales with the number of distinct label combinations (cardinality), not individual user requests." },
+    { id: "metrics-have-stacktraces", text: "Metrics store full exception stack traces and per-request payloads", feedback: "That is the job of logs and distributed traces." },
+    { id: "metrics-are-slower", text: "Metrics can only be queried once a day in batch jobs", feedback: "Metrics drive real-time 15-second alerting." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Calculate cardinality, sample rate, and Gorilla compression">
+
+Suppose we monitor **200,000 hosts/pods**, each emitting **250 distinct time series** every **10 seconds**:
+
+- **Active time series (cardinality)**: `200,000 × 250 = 50 million active series`.
+- **Sample rate**: `50,000,000 ÷ 10 s = 5 million samples/s`. Batching 1,000 samples per HTTP request reduces network traffic to **5,000 batched requests/s**.
+- **Raw vs Gorilla compressed storage**: a raw `(int64 timestamp, float64 value)` pair is **16 bytes** (`5M/s × 16 B × 86,400 ≈ 6.9 TB/day`). With Facebook Gorilla compression (delta-of-delta timestamps + XOR floats), average sample size drops to **~1.37 bytes/sample** — **~590 GB/day** (a **12× reduction**!).
+- **In-memory head chunk**: keeping the latest 2 hours of chunks + label index for 50M series in RAM takes **~65 GB** across the ingester fleet.
+
+<Choice
+  id="metrics-gorilla-math"
+  objective="size-tsdb"
+  prompt="At 5 million samples/s, how much daily storage does Gorilla compression (~1.37 B/sample) save compared to raw 16-byte `(timestamp, float64)` pairs?"
+  options={[
+    { id: "twelve-x", text: "It shrinks daily volume from ~6.9 TB/day down to ~590 GB/day (~12× smaller)", correct: true, feedback: "Right. `5M × 86,400 = 432B samples/day`. At 1.37 B that is ~592 GB vs ~6.91 TB raw." },
+    { id: "two-x", text: "About 2× smaller (~3.5 TB/day)", feedback: "Delta-of-delta timestamps and XOR float encoding achieve ~11–12× compression on real telemetry." },
+    { id: "no-savings", text: "Floating-point numbers cannot be compressed losslessly", feedback: "XORing consecutive IEEE 754 floats that change slowly produces long runs of leading and trailing zero bits." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design batched ingestion and step-aligned queries">
+
+- `POST /v1/metrics/write`: accepts a Snappy-compressed Protobuf batch of ~1,000 samples `{ labels[], samples[{ ts, val }] }` → **200 OK**, or **429 Too Many Requests** if the tenant exceeds their active-series cardinality quota.
+- `GET /v1/query_range?query=sum(rate(http_requests_total{job="api"}[5m]))&start=...&end=...&step=15s` → **200** `{ resultType: "matrix", result: [...] }`.
+- `POST /v1/rules`: registers an alerting expression (`expr`, `for: "5m"`, `labels`, `annotations`).
+
+Why **align `start` and `end` to `step`**? If `step=15s`, the query frontend snaps `start` and `end` to multiples of 15 seconds (`12:00:00`, `12:00:15`) and caches the immutable historical sub-intervals. When 200 engineers hit refresh during an outage, 99% of their 6-hour query window is served straight from the query cache!
+
+<Choice
+  id="metrics-step-align"
+  objective="scale-tsdb-pipeline"
+  prompt="Why does the query frontend snap `start` and `end` timestamps to multiples of `step` (e.g., 15 seconds) before checking the query cache?"
+  options={[
+    { id: "coalesce-dashboards", text: "Without step alignment, two engineers refreshing at `12:00:02` and `12:00:04` generate completely different cache keys and miss the cache on the entire 6-hour range", correct: true, feedback: "Right. Snapping to step boundaries and splitting queries into cached time blocks turns an incident dashboard storm into cache hits." },
+    { id: "gorilla-requires-15s", text: "Gorilla chunks can only be decompressed at 15-second boundaries", feedback: "Gorilla chunks iterate from the start of the 2-hour block; step alignment is for query caching." },
+    { id: "reduce-precision", text: "It deletes raw samples that are not on a 15-second boundary", feedback: "Raw samples are preserved; `step` only defines the evaluation timestamps of the range query." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model series IDs, the inverted label index, and chunks">
+
+A time-series database is **not** a single table of `(metric, labels, ts, value)`. It splits metadata from sample bytes:
+1. **Series Table & Inverted Index**: each canonical sorted label set (`__name__="cpu_usage", host="web-1", zone="us-east-a"`) hashes to a 64-bit `seriesId`. An **inverted index** (just like a search engine!) maps each `label=value` pair to a sorted postings list of `seriesId`s:
+   - `job="api"` → `[101, 102, 108, 450]`
+   - `status="500"` → `[102, 450, 999]`
+   Intersecting those two sorted integer lists (`[102, 450]`) finds the matching series in microseconds.
+2. **Compressed Chunks (`seriesId → 2-hour chunk`)**: inside each 2-hour block, samples for `seriesId 102` are stored contiguously in a ~1–2 KB Gorilla-compressed byte array.
+
+<Choice
+  id="metrics-cardinality-bomb"
+  objective="control-cardinality"
+  prompt="A developer adds `user_id` (10 million distinct users) as a label on `http_requests_total`. What breaks first?"
+  options={[
+    { id: "cardinality-oom", text: "Every distinct `user_id` creates a brand-new `seriesId`, allocating millions of in-memory head chunks and inverted-index entries until the ingesters OOM", correct: true, feedback: "Right. That is a cardinality explosion. High-cardinality identifiers belong in logs or traces, never in metric labels." },
+    { id: "network-bandwidth", text: "The 8-byte user ID saturates the 10 Gbps network links", feedback: "The sample rate barely changes; it is the number of active series in RAM and the inverted index that explodes." },
+    { id: "xor-fails", text: "Gorilla XOR compression cannot compress counters", feedback: "Gorilla compresses counters very well; the problem is having 10M separate chunks instead of 1." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the ingestion, storage, and query pipeline">
+
+1. **Distributors (`dist1`, `dist2`)**: validate batched writes, enforce per-tenant cardinality limits, and append batches to the **Partitioned Metric Stream** (`walqueue`, partitioned by `seriesId`).
+2. **TSDB Ingesters (`ingester`)**: consume partitions, append samples to in-memory Gorilla head chunks, and flush immutable 2-hour blocks + downsampled rollups (`1m`, `1h`) to the **Time-Series Store** (`tsdb` / object storage).
+3. **Query & Alert Path**: dashboards and the alert rule evaluator query through the **Query & Step Cache** (`qcache`), merging cached historical blocks with live data from the ingesters.
+
+<Ordering
+  id="metrics-write-to-read"
+  objective="scale-tsdb-pipeline"
+  prompt="Order the lifecycle of a metric sample from host collection to long-term range query."
+  items={[
+    { id: "agent-batch", text: "Local agent scrapes or collects metrics and sends a compressed batch of ~1,000 samples to a Distributor" },
+    { id: "wal-stream", text: "Distributor checks cardinality quotas and appends the batch to the seriesId's partition in the durable metric stream" },
+    { id: "head-chunk", text: "Ingester consumes the batch and compresses `(ts, value)` into the seriesId's in-memory 2-hour Gorilla head chunk" },
+    { id: "block-flush", text: "Every 2 hours, the ingester compacts and flushes immutable chunks and the inverted label index to long-term block storage" }
+  ]}
+  explanation="Batching at the edge and buffering in an append-only stream lets ingesters compress samples in RAM and write only large sequential 2-hour blocks to storage."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: Gorilla compression and resilient alerting">
+
+### How Gorilla packs a sample into ~1.37 bytes
+Within one series (`seriesId 102` scraped every 10,000 ms):
+- **Timestamps (delta-of-delta)**: if $t_1 = 10000$, $t_2 = 20000$, $t_3 = 30000$, the deltas are $10000, 10000$, so the *delta-of-delta* is $10000 - 10000 = 0$. Gorilla writes a single `0` bit when `dod == 0` (96% of all scrapes!). Small jitter (`[-63, 64]`) takes 9 bits.
+- **Values (XOR)**: XOR the new 64-bit IEEE float with the previous float. If the gauge has not changed, `xor == 0` → write a single `0` bit! If it changed slightly, most leading and trailing bits are zero, so write only the meaningful middle bits.
+
+### Alerting without false pages or silent death
+- **Query the head chunk**: alert rules (`rate(errors[5m]) > 0.01`) only need the last 5–15 minutes of data, which lives entirely in the ingesters' in-memory head chunks.
+- **Hysteresis (`for: 5m`)**: a rule must evaluate true on every tick for 5 consecutive minutes before transitioning `PENDING → FIRING`, filtering out single-scrape blips.
+- **Dead-man's switch**: an always-firing heartbeat alert pings the external paging provider every minute; if the paging service stops hearing the heartbeat for 3 minutes, it pages on-call that the monitoring system itself is down.
+
+<Choice
+  id="metrics-alert-isolation"
+  objective="alert-reliably"
+  prompt="During an incident, engineers run expensive 30-day ad-hoc queries that overload the historical query tier. How do you ensure alerting rules still fire on time?"
+  options={[
+    { id: "isolate-rule-eval", text: "Evaluate alerting rules on a dedicated pool (or priority lane) that reads only the in-memory 2-hour head chunks, isolated from ad-hoc historical queries", correct: true, feedback: "Right. Alert expressions almost always look at the last 1–15 minutes; isolating them from cold historical scans keeps alerting rock-solid during incidents." },
+    { id: "pause-alerts", text: "Pause alert evaluation whenever dashboard QPS is high", feedback: "An incident is the worst possible time to pause alerts!" },
+    { id: "eval-on-client", text: "Evaluate alerts inside engineers' web browsers", feedback: "Alerts must fire 24/7 even when no browser is open." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Compare the alternatives">
+
+- **Row-per-sample in a B-tree SQL database (`metrics-sql-rows`)**: runnable in the simulator. Storing each sample as an indexed SQL row without stream buffering and chunk compression saturates the database and drops goodput below 70%.
+- **Pull (Prometheus scrape) vs Push (agents / remote-write)**: pull gives trivial target-down detection (`up == 0`) and central rate control; push works across firewalls and ephemeral jobs. Modern architectures scrape locally via Prometheus/OpenTelemetry collectors and **push batched remote-write streams** to central TSDB clusters.
+- **Downsampling tiers**: keep 10-second raw chunks for 15 days, 1-minute `(min, max, sum, count)` rollups for 90 days, and 1-hour rollups for 2 years so multi-month capacity graphs scan 360× fewer points.
+
+<Choice
+  id="metrics-downsample-aggs"
+  objective="size-tsdb"
+  prompt="When downsampling 10-second samples into 1-hour rollup chunks, why should you store `(min, max, sum, count)` instead of just the 1-hour `average`?"
+  options={[
+    { id: "preserve-spikes-and-mean", text: "`min` and `max` preserve short latency/CPU spikes that an average hides, and `sum / count` lets you accurately combine averages across multiple hosts or hours", correct: true, feedback: "Right. Averaging averages of different sizes is mathematically wrong, and a 5-minute 100% CPU spike disappears if you only keep a 1-hour mean." },
+    { id: "less-storage", text: "Four numbers take less space than one average", feedback: "They take 4× the space of a single number, which is still tiny at 1-hour resolution." },
+    { id: "gorilla-requires-four", text: "Gorilla compression only works on 4-tuples", feedback: "Gorilla compresses each rollup stream independently." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+1. **Incident dashboard storm (`incident-dashboard-storm`)**: traffic doubles across both metric ingestion and dashboard queries. The partitioned write stream and step-aligned query cache keep goodput above 99%.
+2. **Ingester rolling restart (`ingester-restart`)**: `ingester` workers restart from t = 1.3 s to 1.8 s. Distributors continue accepting metric batches into `walqueue`, and ingesters catch up as soon as they recover.
+3. **Query cache cold start (`query-cache-cold`)**: `qcache` is flushed at t = 1.5 s. Queries fall through to the TSDB chunk store and refill the cache in milliseconds while writes continue unaffected.
+
+<Choice
+  id="metrics-ingester-crash-wal"
+  objective="alert-reliably"
+  prompt="An ingester holding 90 minutes of uncompressed/unflushed 2-hour head chunks in RAM crashes. How does the system avoid losing those 90 minutes of metrics?"
+  options={[
+    { id: "wal-and-quorum", text: "Every sample was appended to the partitioned write-ahead log (and/or replicated across 3 ingesters on the hash ring) before being acknowledged", correct: true, feedback: "Right. Just like a database memtable, the in-memory head chunk is backed by a disk WAL or durable stream plus quorum replication (`R=2, W=2`)." },
+    { id: "re-scrape-past", text: "Prometheus re-scrapes the last 90 minutes from the target hosts", feedback: "Targets only expose their *current* metric values at `/metrics`, not a 90-minute history." },
+    { id: "accept-loss", text: "In-memory TSDBs always lose up to 2 hours of data on every deploy", feedback: "Losing 2 hours of recent metrics on every deploy would blind all alerting rules." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Close with the three golden rules of observability systems:
+1. **Enforce cardinality guardrails at the door**: per-tenant series limits and automatic dropping of unbounded labels protect the shared cluster from a single bad deploy.
+2. **Batch everything on the write path**: agents batch 500–2,000 samples per request; ingesters pack 2 hours of samples into one Gorilla chunk.
+3. **Zero shared fate with production**: run the monitoring and alerting pipeline in an independent failure domain with a dead-man's switch heartbeat.
+
+<Choice
+  id="metrics-shared-fate"
+  objective="alert-reliably"
+  prompt="Your company's Alertmanager routes notifications through the internal corporate chat server, which runs on the same Kubernetes cluster as production. Why is that dangerous?"
+  options={[
+    { id: "shared-fate-outage", text: "When the Kubernetes cluster fails, the chat server goes down with it, silencing the very alerts meant to wake up the team", correct: true, feedback: "Right. Alerting must avoid shared fate with the monitored infrastructure and use an external heartbeat (dead-man's switch) to detect pipeline failure." },
+    { id: "chat-too-fast", text: "Chat messages arrive faster than SMS", feedback: "Speed is good; shared failure dependencies are the hazard." },
+    { id: "promql-incompatible", text: "PromQL cannot format strings for chat webhooks", feedback: "Alertmanager templates support any webhook format." }
+  ]}
+/>
+
+</Step>

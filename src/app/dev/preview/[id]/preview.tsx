@@ -10,6 +10,7 @@ import { widgetSchemas, type WidgetName } from "@/lib/content/schema";
 import { diagnose, generate, isCorrect, randomSeed, seedFrom, templateIds, templates } from "@/lib/content/variants";
 import { generateHashRingVariant, generateIsolationVariant, solveHashRingVariant, solveIsolationVariant } from "@/models";
 import type { ModelName } from "@/components/models/ModelQuestion";
+import * as modelWidgets from "@/components/models";
 import { focusedModelNames, focusedQuestion, displayAnswer } from "@/components/models/question-data";
 import { useMDXComponents } from "../../../../../mdx-components";
 
@@ -61,7 +62,7 @@ export function Preview({ id, ids }: { id: string; ids: string[] }) {
   const [seed, setSeed] = useState(1);
   const [template, setTemplate] = useState(templateIds[0]);
   const [model, setModel] = useState<Ctx["model"]>("hashRing");
-  const widgets = useMDXComponents() as Record<string, ComponentType<Record<string, unknown>>>;
+  const widgets = { ...useMDXComponents(), ...modelWidgets } as unknown as Record<string, ComponentType<Record<string, unknown>>>;
   const isWidget = id in widgetSchemas;
   const name = id as WidgetName;
   const props = isWidget ? SAMPLES[name]({ seed, template, model }) : {};

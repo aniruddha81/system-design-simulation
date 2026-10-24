@@ -1,0 +1,209 @@
+{/*
+id: distributed-cache
+slug: distributed-cache
+track: case-studies
+title: "Case study: Distributed cache"
+description: "Design a Memcached or Redis cache tier: partitioning, hot keys, invalidation races, and surviving a node that restarts empty."
+objectives:
+  - id: size-cache-tier
+    text: Size a cache tier from the database's capacity and predict the load when a node is lost
+  - id: cache-partitioning
+    text: Partition keys across cache nodes and handle hot keys
+  - id: invalidation
+    text: Keep cached data correct with delete-on-write and leases
+  - id: cache-failures
+    text: Predict what a cold restart, a slow cache and write-heavy hot keys do to the database
+requires: [caching, partitioning]
+activities: [C, M, R, Q]
+limitations:
+  - "The simulated cache tier is one component; per-node failure and hot-shard overload are discussed but not simulated."
+  - "Coalescing is modelled as per-key waiting for the first fill; leases' stale-set protection is discussed only."
+  - "The runnable cell runs 4,000 requests/s over 10,000 keys with an 8-worker database."
+sources:
+  - title: "Scaling Memcache at Facebook"
+    authors: "R. Nishtala et al."
+    year: 2013
+    url: "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+  - title: "Consistent hashing and random trees"
+    authors: "D. Karger et al."
+    year: 1997
+    url: "https://doi.org/10.1145/258533.258660"
+  - title: "Metastable Failures in Distributed Systems"
+    authors: "N. Bronson, A. Aghayev, A. Charapko, T. Zhu"
+    year: 2021
+    url: "https://doi.org/10.1145/3458336.3465286"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+get, set with TTL, and delete for keys up to 250 B and values up to 1 MB, used cache-aside by many services. Sub-millisecond p99. The requirement that drives everything: **the hit rate must stay high enough that the database never sees more than its capacity** — including right after a cache node restarts.
+
+<Choice
+  id="cache-real-constraint"
+  objective="size-cache-tier"
+  prompt="What number should you ask for first when designing a cache tier?"
+  options={[
+    { id: "db-capacity", text: "The database's read capacity compared with the peak read rate", correct: true, feedback: "Right. Their ratio sets the minimum hit rate, which sets cache size and failure handling." },
+    { id: "ram-price", text: "The price of RAM", feedback: "Cost matters, but only after you know how much cache the database needs." },
+    { id: "value-format", text: "Whether values are JSON or protobuf", feedback: "Serialisation affects size a little; it does not drive the design." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Load**: 1M reads/s at peak; the database can take ~50k reads/s, so the hit rate must stay **≥ 95%**.
+- **Working set**: 100M objects × ~1 KB ≈ 100 GB.
+- **Nodes**: 100 GB ÷ ~25 GB usable per node = 4 by memory; 1M ops/s ÷ ~200k per node = 5 by throughput. **Plan 8.**
+- **Losing one of 8 nodes**: an eighth of the keys miss at once, about **125k extra reads/s** — 2.5× the database's capacity unless misses are coalesced or the node is replaced warm.
+
+<HitRateCalculator />
+
+<Choice
+  id="node-loss"
+  objective="size-cache-tier"
+  prompt="A cache tier of 10 equal nodes serves 500k reads/s at a 98% hit rate. One node restarts empty. Roughly how many reads/s reach the database right after?"
+  options={[
+    { id: "59k", text: "About 59,000/s", correct: true, feedback: "Right. Normal misses are 2% × 500k = 10k/s; the empty node adds its tenth of the hits, 0.1 × 490k ≈ 49k/s." },
+    { id: "10k", text: "About 10,000/s", feedback: "That is the normal miss rate, before the node restarted." },
+    { id: "50k", text: "About 50,000/s", feedback: "That is the empty node's share of all traffic; add the misses the other nodes were already sending." },
+    { id: "500k", text: "500,000/s", feedback: "Only one node in ten restarted, not the whole tier." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+`get(key)` returns the value or a miss; `set(key, value, ttl)` stores with a TTL that has random jitter, so keys written together do not expire together; `delete(key)` is what writers call after committing to the database. Keys are namespaced and versioned, such as `profile:v3:{id}`, so a schema change invalidates everything by changing the prefix.
+
+<Choice
+  id="ttl-jitter"
+  objective="invalidation"
+  prompt="Why add random jitter to TTLs?"
+  options={[
+    { id: "sync-expiry", text: "Keys filled at the same time would otherwise all expire at the same time — a small stampede on a timer", correct: true, feedback: "Right. Jitter spreads expiry and refills over time." },
+    { id: "security", text: "So attackers cannot predict expiry", feedback: "Not the reason; the concern is load." },
+    { id: "memory", text: "To use less memory", feedback: "Jitter does not change memory use." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Partitioning the keys">
+
+Clients, or a proxy such as mcrouter or twemproxy, map each key to a node with **consistent hashing**: adding or removing one of n nodes remaps about 1/n of the keys, where hash mod n remaps almost all of them and empties the whole cache at once. Redis Cluster uses 16,384 fixed hash slots assigned to nodes — a directory variant of the same idea.
+
+<HashRingPlayer seed={3} />
+
+<Choice
+  id="mod-n"
+  objective="cache-partitioning"
+  prompt="You grow a cache tier from 8 to 9 nodes using hash(key) mod n. What happens?"
+  options={[
+    { id: "flush", text: "About 8 of every 9 keys map to a different node, so the hit rate collapses as if the cache were flushed", correct: true, feedback: "Right. That is why caches use consistent hashing or hash slots." },
+    { id: "ninth", text: "About 1/9 of keys move to the new node", feedback: "That is consistent hashing. With mod n almost every key moves." },
+    { id: "none", text: "Nothing moves until keys expire", feedback: "Clients compute the new mapping immediately; old entries become unreachable." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+Application servers run cache-aside: get from the cache; on a miss read the database and set the value. Writers update the database and then **delete** the key. The cache tier has many nodes partitioned by consistent hashing, possibly behind a proxy layer that handles routing, connection pooling and replication of hot keys.
+
+<Ordering
+  id="write-path"
+  objective="invalidation"
+  prompt="Order a profile update so that readers cannot keep an old value indefinitely."
+  items={[
+    { id: "commit", text: "Commit the new profile to the database" },
+    { id: "delete", text: "Delete profile:42 from the cache" },
+    { id: "miss", text: "The next reader misses and reads the new row" },
+    { id: "fill", text: "That reader sets profile:42 in the cache" }
+  ]}
+  explanation="Delete after commit, never update the cache directly: two concurrent writers updating the cache can leave the older value there; a delete is order-safe."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: races, leases and hot keys">
+
+Cache-aside has a classic race: a reader misses and reads v1; a writer commits v2 and deletes the key; the reader then sets **v1**, which stays until TTL. Facebook's memcache paper fixes it with **leases**: a miss returns a token, a delete invalidates outstanding tokens, and a set with an invalid token is ignored. Leases also throttle the stampede, because only the token holder fills a key.
+
+**Hot keys** can exceed one node's capacity. Replicate them under several names and read a random one, keep a small in-process cache with a TTL of a second or two, or detect and pin them to dedicated replicas.
+
+<Choice
+  id="stale-set"
+  objective="invalidation"
+  prompt="A reader fetched v1 from the database, a writer then committed v2 and deleted the key, and now the reader sets v1. What prevents v1 from being cached?"
+  options={[
+    { id: "lease", text: "A lease: the delete invalidated the reader's token, so its set is rejected", correct: true, feedback: "Right. The lease ties the right to fill a key to there being no intervening delete." },
+    { id: "ttl", text: "A short TTL", feedback: "A TTL bounds how long v1 stays, but v1 is still cached and served until then." },
+    { id: "lru", text: "LRU eviction", feedback: "Eviction removes cold keys, and this one is being read." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **No request coalescing.** In the simulated cell, with ~4 ms fills, it changes surprisingly little: most post-restart misses are distinct long-tail keys. Coalescing pays when one key is very hot relative to fill time — overlapping misses ≈ that key's request rate × fill time.
+- **Write-through (update on write).** Reads after writes hit at once, but concurrent writers can leave the older value cached.
+- **Replicated cache** (every node holds every key). No misses on node loss and perfect hot-key spreading, but capacity is one node's memory. Good for small, very hot data such as configuration.
+
+<Choice
+  id="coalesce-when"
+  objective="cache-partitioning"
+  prompt="A single key is read 10,000 times a second and a fill takes 50 ms. Without coalescing, how many database queries does one miss on that key cause?"
+  options={[
+    { id: "500", text: "About 500", correct: true, feedback: "Right. 10,000/s × 0.05 s of overlapping misses. With coalescing it is one." },
+    { id: "1", text: "One", feedback: "That is what coalescing achieves; without it every reader during the fill also misses." },
+    { id: "10000", text: "10,000", feedback: "Only the reads that arrive during the 50 ms fill overlap." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **Cold restart.** Hit rate drops to zero and the 8-worker database gets everything for a moment; the hot set refills within a few hundred milliseconds and only the tail pays.
+- **Restart while the database is slow** (a migration is running). The cold cache sends the database four times what it can serve; rejected reads never fill the cache, so the cache stays cold and the database stays overloaded — a **metastable failure** that does not recover by itself.
+- **A slow cache** (8 ms against a 5 ms timeout). Every read pays the timeout, then goes to the database: a slow cache is worse than a dead one.
+- **Writes triple on popular keys.** Invalidations knock hot keys out over and over; the database runs near saturation.
+
+<Choice
+  id="metastable"
+  objective="cache-failures"
+  prompt="After the restart-with-slow-database scenario, the migration finishes but the system stays overloaded. Which change breaks the loop?"
+  options={[
+    { id: "shed", text: "Shed load until the cache warms: bounded queues, propagated deadlines so abandoned requests are not served, or gradually shifting traffic back", correct: true, feedback: "Right. The loop is sustained by work that cannot succeed; removing it lets fills complete and the hit rate recover." },
+    { id: "retry", text: "Retry failed database reads immediately", feedback: "Retries add load to an overloaded database: they deepen the loop." },
+    { id: "short-ttl", text: "Shorten cache TTLs", feedback: "More expiry means more misses." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise: consistent-hash partitioning, cache-aside with delete-on-write and leases, TTL jitter, coalescing, hot-key replication, gutter pools and warm-up for node loss. Size the database for the **worst plausible hit rate**, not the average. Signals: hit rate per node, database headroom, and eviction rate. Then score each stage from 1 to 4.
+
+<Choice
+  id="size-for-worst"
+  objective="size-cache-tier"
+  prompt="The average hit rate is 99%. What should the database be sized for?"
+  options={[
+    { id: "worst", text: "The miss rate during the worst plausible event, such as losing a cache node or a deploy that changes key prefixes", correct: true, feedback: "Right. Average hit rate hides exactly the events that take databases down." },
+    { id: "average", text: "1% of peak traffic", feedback: "That works until the first cache node restarts." },
+    { id: "full", text: "100% of peak traffic, always", feedback: "Safe, but then the cache adds nothing but latency savings; there are cheaper ways to survive node loss." }
+  ]}
+/>
+
+</Step>

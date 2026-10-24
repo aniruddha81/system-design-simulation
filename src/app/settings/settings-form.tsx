@@ -3,7 +3,6 @@
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { downloadBackup, restoreFromFile } from "@/components/lesson/progress";
 import { setPref, usePref } from "@/components/ui/shell";
-import { resetAllData } from "@/lib/persistence";
 
 function Radios<T extends string>({
   legend,
@@ -174,13 +173,15 @@ export function SettingsForm() {
             className="btn text-danger"
             disabled={resetText !== "RESET ALL DATA"}
             onClick={() =>
-              resetAllData(resetText).then(
-                () => {
-                  setResetText("");
-                  setStatus("All data erased. A backup was downloaded first.");
-                },
-                (err: Error) => setStatus(`Reset failed: ${err.message}`),
-              )
+              import("@/lib/persistence")
+                .then((m) => m.resetAllData(resetText))
+                .then(
+                  () => {
+                    setResetText("");
+                    setStatus("All data erased. A backup was downloaded first.");
+                  },
+                  (err: Error) => setStatus(`Reset failed: ${err.message}`),
+                )
             }
           >
             Reset all data

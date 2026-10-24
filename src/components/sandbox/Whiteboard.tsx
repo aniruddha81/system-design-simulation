@@ -1,7 +1,7 @@
 "use client";
 import "@xyflow/react/dist/style.css";
 import {
-  Background, BackgroundVariant, Controls, MiniMap, ReactFlow, useReactFlow, ViewportPortal, type NodeChange,
+  Background, BackgroundVariant, Controls, MiniMap, ReactFlow, useConnection, useReactFlow, ViewportPortal, type NodeChange,
 } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
 import type { ComponentKind, Design, GroupSpec, NodeId } from "@/engine/types";
@@ -15,7 +15,7 @@ import {
   KIND_LABEL, nextId, parseClip, pasteClip, placeNames, updateNode, type Align,
 } from "./design-ops";
 import { selectedNodeIds, useAnnotations, useDesign, useDesignApi } from "./design-store";
-import { KIND_COLOR, KINDS } from "./kinds";
+import { KIND_COLOR, KINDS, KindSwatch } from "./kinds";
 import { DRAG_MIME, dragging, Library, setDragging } from "./Library";
 import { PacketOverlay } from "./PacketOverlay";
 import styles from "./sandbox.module.css";
@@ -96,7 +96,8 @@ export function Whiteboard(props: {
   const [tool, setTool] = useState<Tool>("select");
   const [connectFrom, setConnectFrom] = useState<NodeId | null>(null);
   const [connecting, setConnecting] = useState(false);
-  const [showLibrary, setShowLibrary] = useState(true);
+  // Narrow boards start with the library folded so the drawing stays visible.
+  const [showLibrary, setShowLibrary] = useState(() => (typeof matchMedia === "function" ? !matchMedia("(max-width: 1023px)").matches : true));
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [drop, setDrop] = useState<{ x: number; y: number; edgeId?: string; ok?: boolean; text?: string } | null>(null);
   const [laying, setLaying] = useState(false);
@@ -212,6 +213,11 @@ export function Whiteboard(props: {
       }
       return out;
     }, `drag:${gesture.current}`);
+  }
+
+  /** Why a port-to-port link would be refused, in words (shown at the cursor while dragging). */
+  function refusal(from: NodeId, to: NodeId) {
+    return connect(api.getState().design, from, to).error;
   }
 
   function doConnect(from: NodeId, to: NodeId) {
@@ -363,6 +369,7 @@ export function Whiteboard(props: {
     <div
       data-board={runKey}
       data-connecting={connecting || tool === "connect" || undefined}
+      data-dropping={(drop && !drop.edgeId) || undefined}
       className={`${styles.board} relative h-full min-h-0 w-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--accent)`}
       tabIndex={0}
       aria-label="Whiteboard. Shortcuts: V select, H pan, A connect, P pen, T text, N note, F frame, L auto-layout. Arrow keys move the selection, Space adds the focused component to it, Ctrl+A selects all, Ctrl+D duplicates, Ctrl+C and Ctrl+V copy and paste, Enter opens the inspector, C connects, Delete removes."
@@ -418,8 +425,15 @@ export function Whiteboard(props: {
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onConnect={(c) => doConnect(c.source, c.target)}
+        isValidConnection={(c) => !refusal(c.source, c.target)}
+        connectionRadius={36}
         onConnectStart={() => setConnecting(true)}
-        onConnectEnd={() => setConnecting(false)}
+        onConnectEnd={(_, c) => {
+          setConnecting(false);
+          if (c.isValid !== false || !c.toNode || !c.fromNode) return;
+          const [s, t] = c.fromHandle?.type === "target" ? [c.toNode.id, c.fromNode.id] : [c.fromNode.id, c.toNode.id];
+          notify(refusal(s, t) ?? INPUT_HINT);
+        }}
         onNodeDragStart={() => gesture.current++}
         onNodeDragStop={(_, n, dragged) => {
           settleIntoFrames(dragged.filter((x) => x.type === "component").map((x) => x.id).concat(n.type === "component" ? [n.id] : []));
@@ -459,21 +473,36 @@ export function Whiteboard(props: {
         proOptions={{ hideAttribution: true }}
       >
         {/* Engineer's notebook: fine grid with a heavier rule every 5 squares. */}
-        <Background id="minor" variant={BackgroundVariant.Lines} gap={GRID} lineWidth={0.5} color="var(--paper-grid, var(--grid-line))" />
-        <Background id="major" variant={BackgroundVariant.Lines} gap={GRID * 5} lineWidth={1} color="var(--paper-grid, var(--grid-line))" />
-        <MiniMap<BoardNode> pannable zoomable nodeColor={(n) => (n.type === "component" ? KIND_COLOR[n.data.spec.kind] : "transparent")} nodeStrokeWidth={0} ariaLabel="Minimap" />
+        <Background id="minor" variant={BackgroundVariant.Lines} gap={GRID} lineWidth={1} color="var(--grid-ink, var(--grid-line))" />
+        <Background id="major" variant={BackgroundVariant.Lines} gap={GRID * 5} lineWidth={1} color="var(--grid-ink-major, var(--grid-line))" />
+        {design.nodes.length > 0 && (
+          <MiniMap<BoardNode> className="max-md:hidden!" pannable zoomable nodeColor={(n) => (n.type === "component" ? KIND_COLOR[n.data.spec.kind] : "transparent")} nodeStrokeWidth={0} ariaLabel="Minimap" />
+        )}
         <Controls showInteractive={false} position="bottom-left" style={{ left: showLibrary ? 268 : 12 }} />
+        <ConnectionHint refusal={refusal} />
         <AnnotationLayer tool={tool} onDone={() => setTool("select")} />
         {drop && !drop.edgeId && (
           <ViewportPortal>
-            <div className={`${styles.ghost} pointer-events-none absolute`} style={{ transform: `translate(${drop.x}px, ${drop.y}px)`, width: NODE_W, height: NODE_H }} />
+            <div className={`${styles.ghost} pointer-events-none absolute`} style={{ transform: `translate(${drop.x}px, ${drop.y}px)`, width: NODE_W, height: NODE_H }}>
+              {dragging.kind && (
+                <>
+                  <KindSwatch kind={dragging.kind} size={30} />
+                  <span className="text-[13px] font-medium leading-tight text-(--text)">Drop to add {KIND_LABEL[dragging.kind].toLowerCase()}</span>
+                </>
+              )}
+            </div>
           </ViewportPortal>
         )}
       </ReactFlow>
       <PacketOverlay runKey={runKey} reducedMotion={props.reducedMotion} />
 
       {/* Floating tool palette */}
-      <div role="toolbar" aria-label="Board tools" className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-(--radius) border border-(--border) bg-(--surface) p-1 shadow-(--elev-2)">
+      {/* Centred in the free strip beside the library; scrolls sideways when the board is narrow. */}
+      <div
+        className="pointer-events-none absolute left-3 right-3 top-16 z-20 flex justify-center md:left-(--lib) md:top-3"
+        style={{ ["--lib" as string]: showLibrary ? "17.5rem" : "11rem" }}
+      >
+      <div role="toolbar" aria-label="Board tools" className="pointer-events-auto flex max-w-full items-center gap-0.5 overflow-x-auto rounded-(--radius) border border-(--border) bg-(--surface) p-1 shadow-(--elev-2)">
         {TOOLS.map((t) => (
           <button
             key={t.tool}
@@ -499,10 +528,11 @@ export function Whiteboard(props: {
           {look === "sketch" ? "✎ Sketch" : "▭ Clean"}
         </button>
       </div>
+      </div>
 
       {/* Selection toolbar: align / distribute / duplicate */}
       {sel.size >= 2 && (
-        <div role="toolbar" aria-label={`${sel.size} components selected`} className="absolute left-1/2 top-16 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-(--radius) border border-(--accent) bg-(--surface) p-1 shadow-(--elev-2)">
+        <div role="toolbar" aria-label={`${sel.size} components selected`} className="absolute left-1/2 top-16 z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-(--radius) border border-(--accent) max-md:top-28 bg-(--surface) p-1 shadow-(--elev-2)">
           <span className="px-2 text-xs text-(--text)">{sel.size} selected</span>
           {ALIGN.map((a) => (
             <button key={a.how} type="button" className={iconBtn} onClick={() => align(a.how)} aria-label={a.label} title={a.label}>
@@ -517,13 +547,13 @@ export function Whiteboard(props: {
       )}
 
       {tool === "connect" && (
-        <p role="status" className="absolute left-1/2 top-16 z-20 -translate-x-1/2 rounded-full border border-(--border) bg-(--surface) px-3 py-1 text-xs text-(--text)">
+        <p role="status" className="absolute left-1/2 top-16 z-20 -translate-x-1/2 rounded-full max-md:top-28 border border-(--border) bg-(--surface) px-3 py-1 text-xs text-(--text)">
           {connectFrom ? `From ${label(design, connectFrom)} — now pick the component it calls` : "Pick the caller, then the component it calls"}
         </p>
       )}
 
       {/* Library */}
-      <div className="absolute bottom-3 left-3 top-3 z-20 flex w-64 flex-col rounded-(--radius) border border-(--border) bg-(--surface) shadow-(--elev-2) data-[collapsed]:bottom-auto" data-collapsed={!showLibrary || undefined}>
+      <div className="absolute bottom-3 left-3 top-3 z-20 flex w-64 flex-col rounded-(--radius) border border-(--border) bg-(--surface) shadow-(--elev-2) data-[collapsed]:bottom-auto data-[collapsed]:w-40" data-collapsed={!showLibrary || undefined}>
         <button
           type="button"
           aria-expanded={showLibrary}
@@ -542,11 +572,31 @@ export function Whiteboard(props: {
         )}
       </div>
 
-      {design.nodes.length === 0 && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center pl-64">
-          <div className="max-w-xs text-center">
-            <p className="text-base font-medium text-(--text)">Start with a client</p>
-            <p className="mt-1 text-sm text-(--text-muted)">Drag it from the library, then a service, and draw an arrow from one to the other.</p>
+      {design.nodes.length === 0 && !drop && (
+        <div className={`pointer-events-none absolute inset-0 z-10 grid place-items-center p-6 ${showLibrary ? "md:pl-72" : ""}`}>
+          <div className="relative max-w-sm text-center">
+            {showLibrary && (
+              <svg className="absolute -left-28 top-2 hidden overflow-visible md:block" width="96" height="60" viewBox="0 0 96 60" fill="none" aria-hidden="true" style={{ stroke: "var(--accent-2)" }}>
+                <path d="M92 40 C70 52 34 50 8 18" strokeWidth="1.8" strokeLinecap="round" pathLength={1} className="draw-on" />
+                <path d="M7 31 L8 18 L20 22" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+            <p className="font-mono text-[11px] uppercase tracking-wider text-(--accent)">Fig. 0 · a blank page</p>
+            <p className="mt-2 font-(family-name:--font-display) text-2xl leading-tight text-(--text)">
+              Every system starts with a <span className="marker">client</span>.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-(--ink-2,var(--text))">
+              Drag one from Components, add a service, then pull an arrow from the client&apos;s right-hand dot to the service.
+            </p>
+            {(!props.allowedKinds || props.allowedKinds.includes("client")) && (
+              <button
+                type="button"
+                onClick={() => addAt("client", viewportCenter())}
+                className="pointer-events-auto mt-4 h-9 rounded-(--radius-sm) border border-(--rule,var(--border)) bg-(--surface) px-3.5 text-sm font-medium text-(--text) shadow-(--elev-1) hover:bg-(--surface-2) focus-visible:outline-2 focus-visible:outline-(--accent)"
+              >
+                + Add a client for me
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -579,4 +629,24 @@ export function Whiteboard(props: {
 
 function label(d: Design, id: NodeId) {
   return d.nodes.find((n) => n.id === id)?.label ?? id;
+}
+
+const INPUT_HINT = "Arrows end on a component's left-hand dot (its input).";
+
+/** While dragging a connection over a component that can't accept it, say why at the cursor. */
+function ConnectionHint({ refusal }: { refusal: (from: NodeId, to: NodeId) => string | undefined }) {
+  const c = useConnection();
+  if (!c.inProgress || !c.toNode || c.isValid !== false) return null;
+  const [s, t] = c.fromHandle.type === "target" ? [c.toNode.id, c.fromNode.id] : [c.fromNode.id, c.toNode.id];
+  return (
+    <ViewportPortal>
+      <p
+        role="status"
+        className="pointer-events-none absolute z-50 max-w-60 rounded-(--radius-sm) border border-(--danger) bg-(--surface) px-2.5 py-1.5 text-xs font-medium text-(--danger) shadow-(--elev-2)"
+        style={{ transform: `translate(${c.to.x + 14}px, ${c.to.y + 14}px)` }}
+      >
+        ✕ {refusal(s, t) ?? INPUT_HINT}
+      </p>
+    </ViewportPortal>
+  );
 }

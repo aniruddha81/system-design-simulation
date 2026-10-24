@@ -1,0 +1,234 @@
+{/*
+id: google-docs
+slug: google-docs
+track: case-studies
+title: "Case study: Collaborative editor (Google Docs)"
+description: "Design a real-time collaborative document editor: Operational Transformation vs sequence CRDTs, append-only operation logs with idempotent opIds, and snapshot compaction."
+objectives:
+  - id: size-collab
+    text: Estimate operation rates, op-log storage growth, snapshot compaction cadence, and cursor broadcast fan-out
+  - id: ot-vs-crdt
+    text: Compare server-ordered Operational Transformation (OT) and sequence CRDTs (RGA) for concurrent text edits
+  - id: oplog-compaction
+    text: Combine an append-only operation log with periodic object-store snapshots and client opId deduplication
+  - id: collab-failures
+    text: Predict system behaviour under dropped WebSocket acks, compactor outages, and hot all-hands documents
+requires: [crdts, idempotency, queues]
+activities: [R, M, Q]
+limitations:
+  - "The runnable cell simulates 2,000 requests/s over 10,000 documents; the embedded CrdtPlayer lets you step through OT index transformation vs RGA CRDT merges directly."
+  - "Ephemeral cursor and selection broadcasts are discussed in the text rather than persisted in the simulated stores."
+sources:
+  - title: "High-Latency, Low-Bandwidth Windowing in the Jupiter Collaboration System"
+    authors: "D. A. Nichols, P. Curtis, M. Dixon, J. Lamping"
+    year: 1995
+    url: "https://dl.acm.org/doi/10.1145/215585.215706"
+  - title: "Conflict-Free Replicated Data Types"
+    authors: "M. Shapiro, N. Preguiça, C. Baquero, M. Zawirski"
+    year: 2011
+    url: "https://hal.inria.fr/inria-00609399/"
+  - title: "How Figma's Multiplayer Technology Works"
+    authors: "E. Wallace (Figma)"
+    year: 2019
+    url: "https://www.figma.com/blog/how-figmas-multiplayer-technology-works/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+A collaborative editor lets dozens of users type into the same document simultaneously, apply local keystrokes with **zero perceived latency**, and converge to the **exact same document text** once all operations arrive.
+
+**Functional**: real-time concurrent text editing; live collaborator cursors and selections; offline edits that merge cleanly on reconnect; version history and point-in-time document restore.
+
+**Non-functional**: optimistic local typing (0 ms UI wait) with remote propagation under ~150 ms; **strong eventual convergence**; zero lost or duplicated operations across flaky WebSocket reconnects; cap active concurrent writers per document at ~100 while scaling read-only viewers to thousands.
+
+<Choice
+  id="optimistic-typing-why"
+  objective="ot-vs-crdt"
+  prompt="Why must a collaborative editor apply the user's keystroke locally before waiting for the server's acknowledgement?"
+  options={[
+    { id: "human-perception", text: "Waiting 100 ms for a server round trip on every keystroke makes typing laggy and unusable; local edits must apply immediately and reconcile asynchronously", correct: true, feedback: "Right. And because two users both apply their edits locally before hearing about each other's edit, their operations arrive out of order and must be transformed or merged." },
+    { id: "websocket-half-duplex", text: "WebSockets can only send data once every 5 seconds", feedback: "WebSockets are full-duplex and low-latency, but network speed-of-light RTT is still 30–150 ms." },
+    { id: "browser-dom", text: "Browser textareas forbid programmatic updates from a server", feedback: "Browsers allow DOM updates at any time; human typing latency is the reason." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **5 million concurrent active editors** who send a batched operation every **2 seconds**:
+
+- **Operation write rate**: 5M ÷ 2 s ≈ **2.5 million ops/s** globally (~150 B per op).
+- **Operation log growth**: 2.5M/s × 150 B × 86,400 s ≈ **32 TB/day** of raw operations before compaction.
+- **Snapshot compaction**: compacting every ~100–500 operations into a materialised snapshot (~50 KB) in object storage bounds document load time to **1 snapshot read + < 100 tail ops**.
+- **Cursor broadcast fan-out**: $K$ editors in one document moving cursors 5 times/s generate $5 \times K^2$ messages/s ($K = 50 \Rightarrow 12,500$ messages/s per hot doc). Because cursor positions are obsolete 200 ms later, they are broadcast in memory over WebSockets and **never written to disk**.
+
+<Choice
+  id="cursor-traffic-math"
+  objective="size-collab"
+  prompt="50 editors in the same document each broadcast 4 cursor movements per second to the other 49 editors. Why must cursor updates never be written to the operation log database?"
+  options={[
+    { id: "ephemeral-quadratic", text: "Cursor traffic scales quadratically (50 × 49 × 4 ≈ 9,800 msgs/s for one doc) and is obsolete in 250 ms — persisting it would swamp the database with throwaway state", correct: true, feedback: "Right. Separate durable document mutations (op log) from ephemeral presence/cursor state (in-memory WebSocket fan-out)." },
+    { id: "cursors-too-large", text: "Each cursor position is 10 MB of JSON", feedback: "A cursor payload is only ~32 bytes; the issue is the quadratic rate and zero archival value." },
+    { id: "db-no-ints", text: "Databases cannot store integer character offsets", feedback: "They can, but storing ephemeral cursor offsets wastes write IOPS." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the protocol and API">
+
+- `WS op { docId, opId, baseRev, delta }` → server transforms `delta` against any operations committed since `baseRev`, appends it as `serverRev`, replies `ack { opId, serverRev }` to the sender, and broadcasts `{ serverRev, author, transformedDelta }` to all other session peers.
+- `GET /v1/documents/{docId}` → `200 { snapshotRev, snapshotContent, tailOps[] }` (where `tailOps` are operations with `rev > snapshotRev`).
+- `WS presence { docId, cursor, selection }` → best-effort broadcast to connected peers.
+
+In **Jupiter-style OT** (used by Google Docs), each client keeps **at most one unacknowledged operation batch in flight** to the server while buffering newer local keystrokes, simplifying transformation to a 1D server-revision history instead of an arbitrary $N$-way state space.
+
+<Choice
+  id="jupiter-single-inflight"
+  objective="ot-vs-crdt"
+  prompt="Why does the Google Docs (Jupiter) protocol allow a client only one unacknowledged operation batch in flight at a time?"
+  options={[
+    { id: "linear-revision", text: "It guarantees a simple client/server state machine where the server only transforms incoming ops against the linear tail of revisions since `baseRev`", correct: true, feedback: "Right. Classic decentralised OT without a single sequencer and single-in-flight rule (dOPT) notoriously failed on 3-way concurrency puzzles." },
+    { id: "tcp-limit", text: "TCP sockets drop packets if two messages are sent without an application ack", feedback: "TCP pipelines arbitrary streams; the constraint is keeping OT state tracking simple and bug-free." },
+    { id: "save-ram", text: "Clients cannot buffer more than one character in RAM", feedback: "Clients buffer all subsequent keystrokes locally and send them as a single combined batch once the in-flight batch is acked." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the data">
+
+- **oplog**: keyed by `(docId, rev)`, storing `{ opId, authorId, delta, ts }`. Partitioned by `docId` so loading the tail of operations since the last snapshot is a single contiguous partition range read.
+- **snapshots**: keyed by `(docId, snapshotRev)` in object storage, holding compacted document state so opening an old document never replays 2 million historical keystrokes from `rev = 0`.
+- **opdedup**: keyed by `(docId, opId)` with a 24h TTL so a client retrying after a dropped WebSocket connection does not apply its buffered insert twice.
+
+<Choice
+  id="snapshot-plus-tail"
+  objective="oplog-compaction"
+  prompt="A document has accumulated 250,000 operations over six months. How does the system open it in under 100 ms without writing a full 100 KB snapshot on every single keystroke?"
+  options={[
+    { id: "periodic-compaction", text: "Write small operations to the op log on every edit, compact a snapshot every ~100 ops asynchronously, and load the latest snapshot plus < 100 tail ops on open", correct: true, feedback: "Right. Exactly like a database WAL + checkpoint: fast append-only writes on the hot path and bounded replay on read." },
+    { id: "replay-all", text: "Replay all 250,000 operations from rev 0 on every page load", feedback: "Fetching and replaying 250k operations takes seconds of CPU and network time." },
+    { id: "full-blob-write", text: "Overwrite the entire 100 KB document in S3 on every keystroke", feedback: "Writing 100 KB per keystroke amplifies storage bandwidth ~700× and loses concurrent edits." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+In the reference design:
+
+1. Clients connect via **WebSocket gateways** (`gw1`, `gw2`) behind a **consistent-hash load balancer** so collaborators on `docId` route to the active **Document session service** (`collab`).
+2. On `edit`, `collab` checks **Client opId dedup** (`opdedup`), appends the operation to the **Operation log store** (`opstore`), and publishes a compaction trigger to the **Snapshot compaction queue** (`compaction`).
+3. **Snapshot compactors** (`compactor`) asynchronously fold tail operations into the **Document snapshots** object store (`snapstore`).
+4. On `load`, `collab` checks the **Active document cache** (`doccache`) and on a miss loads the latest snapshot from `snapstore` plus tail operations from `opstore`.
+
+<Ordering
+  id="edit-and-compact-flow"
+  objective="oplog-compaction"
+  prompt="Order the steps when a collaborator submits an edit operation."
+  items={[
+    { id: "route", text: "WebSocket gateway routes the op for docId to the authoritative document session server" },
+    { id: "dedup", text: "Session server checks opId in the dedup store to ensure a reconnect retry is not applied twice" },
+    { id: "transform-append", text: "Session server transforms the op against ops since baseRev and appends it as the next serverRev in opstore" },
+    { id: "ack-broadcast", text: "Session server acks the sender and broadcasts the transformed op to connected peers" },
+    { id: "async-compact", text: "Background compactor worker folds accumulated ops into a new object-store snapshot" }
+  ]}
+  explanation="Serialising through the document's session server makes revision assignment atomic; deduplicating before append prevents duplicate text on reconnect; compacting asynchronously keeps edits fast."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: Operational Transformation vs Sequence CRDTs">
+
+When Alice and Bob start from `"BCD"` (`rev 1`):
+- Alice inserts `"A"` at index `0` $\rightarrow$ `"ABCD"`.
+- Concurrently, Bob deletes index `1` (`"C"`) $\rightarrow$ `"BD"`.
+
+If Alice's `"insert(0, 'A')"` is applied first on the server (`rev 2`), Bob's `"delete(1)"` arrives referencing `baseRev = 1`. Because Alice inserted a character **before** index `1`, `"C"` has shifted to index `2`!
+- **Operational Transformation (OT)** shifts Bob's index (`1 + 1 = 2`) before applying it, producing `"ABD"` on all replicas.
+- **Sequence CRDTs (RGA / Yjs / Automerge)** instead assign every character a globally unique, immutable ID `(clientId, lamportClock)` and specify insertions relative to the **ID of the left neighbour** (not a mutable integer index) and deletions as a tombstone on that ID. Because IDs never shift, operations commute in any order without a central server!
+
+Experiment with **RGA (Sequence CRDT)** and **Server-ordered OT** in the interactive player below:
+
+<CrdtPlayer />
+
+<Choice
+  id="ot-index-shift"
+  objective="ot-vs-crdt"
+  prompt="Starting from 'CAT', Alice sends Insert(0, 'S') ('SCAT') and Bob concurrently sends Delete(2) (intending to delete 'T'). If Alice's op is applied first, what must OT transform Bob's op into?"
+  options={[
+    { id: "delete-3", text: "Delete(3), because Alice's insertion at index 0 shifted every subsequent character right by 1", correct: true, feedback: "Right. Without transforming Delete(2) → Delete(3), Bob's operation would delete 'A' instead of 'T', leaving 'SCT' instead of 'SCA'." },
+    { id: "delete-1", text: "Delete(1), shifting left by 1", feedback: "An insertion to the left increases indices to its right, so 2 shifts to 3, not 1." },
+    { id: "unchanged", text: "Delete(2) unchanged", feedback: "Index 2 in 'SCAT' is now 'A', so leaving it unchanged deletes the wrong character." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **No operation deduplication (`docs-no-dedup`)**: in the simulator, running the `lost-acks` scenario against the alternative without `opdedup` causes retried operations to append twice, triggering a `duplicateEffect` violation.
+- **Full snapshot write on every edit (`docs-sync-snapshot`)**: writing the full snapshot to object storage synchronously on every edit slows down writes and drops goodput below 98%.
+- **OT vs CRDT trade-off**: Google Docs uses server-ordered OT (small payloads, no tombstones, requires a central session server per doc); Figma and Yjs-based editors use CRDTs (natural offline/peer-to-peer merges, at the cost of tracking character IDs and periodically pruning tombstones).
+
+<Choice
+  id="crdt-tradeoff"
+  objective="ot-vs-crdt"
+  prompt="What is the main storage cost of sequence CRDTs (such as RGA) compared to central-server OT?"
+  options={[
+    { id: "tombstones-and-ids", text: "Every character carries a unique metadata ID and deleted characters remain as tombstones until garbage-collected", correct: true, feedback: "Right. Run-length encoding (as in Yjs) compresses contiguous runs of insertions, but metadata and tombstones are the core CRDT trade-off." },
+    { id: "no-offline", text: "CRDTs cannot be used offline", feedback: "Offline editing and peer-to-peer convergence are CRDTs' greatest strengths." },
+    { id: "single-server", text: "CRDTs require a single global database lock per keystroke", feedback: "CRDTs merge commutatively without central coordination." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Run the three failure scenarios in the simulator:
+
+- **Lost WebSocket acknowledgements (`lost-acks`)**: responses from `collab` to `gw1` drop for 80 ms after operations are already recorded in `opstore`. Gateway 1 retries with the same `opId`; `opdedup` suppresses duplicates (`clean: true`).
+- **Compactor crash (`compactor-down`)**: `compactor` workers die for 700 ms. Live editing and loading continue at > 99% goodput because edits only need `opstore` and loads replay a slightly longer tail of operations until compactors catch up.
+- **Company all-hands doc (`all-hands-doc`)**: 30% of traffic targets one hot document. `doccache` serves loads and the consistent-hashed session service serialises edits in memory.
+
+<Choice
+  id="too-many-writers"
+  objective="collab-failures"
+  prompt="5,000 employees open the company all-hands document at once. How do you prevent $5,000^2$ cursor broadcasts and transformation stalls?"
+  options={[
+    { id: "cap-writers-fanout-readers", text: "Admit the first ~100 users as active read-write editors on the session server and place the remaining 4,900 on a read-only pub/sub fan-out tier without cursor broadcast", correct: true, feedback: "Right. Google Docs caps active editors (~100) and serves excess viewers from a read-only broadcast tree." },
+    { id: "shard-paragraphs", text: "Put every character of the document on a different database shard", feedback: "Sharding by character would require cross-shard transactions on every word." },
+    { id: "disable-ot", text: "Turn off OT when more than 10 users join", feedback: "Turning off OT would immediately corrupt the document." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Review the four pillars of your design:
+1. **Convergence engine**: single-server Jupiter OT (with single in-flight batch per client) or sequence CRDTs (RGA/Yjs).
+2. **Idempotent WAL + checkpoints**: append small operations keyed by `(docId, opId)` to `oplog` and compact asynchronously into `snapshots`.
+3. **Stateful session routing**: consistent-hash `docId` to one session owner with lease-based failover.
+4. **Separate ephemeral plane**: keep cursors and presence in memory and cap active editors per document.
+
+<Choice
+  id="session-server-failover"
+  objective="collab-failures"
+  prompt="The collaboration server holding the in-memory session for `docId = 42` crashes. How does the replacement server resume without losing acknowledged edits?"
+  options={[
+    { id: "reload-snapshot-and-tail", text: "Acquire the lease for doc 42, load its latest snapshot plus all committed tail ops from `opstore`, and have reconnecting clients resend any unacked op with its `opId`", correct: true, feedback: "Right. Because every acked op was appended to `opstore` before acking and clients retain unacked ops with `opId`, the new session server reconstructs exact state." },
+    { id: "ask-one-browser", text: "Overwrite the server database with whichever browser tab reconnects first", feedback: "An offline or lagging browser tab could overwrite newer committed edits from other users." },
+    { id: "rollback-to-snapshot", text: "Discard all edits since the last hourly snapshot", feedback: "That would violate the zero-lost-acked-edits requirement." }
+  ]}
+/>
+
+</Step>

@@ -1,0 +1,209 @@
+{/*
+id: key-value-store
+slug: key-value-store
+track: case-studies
+title: "Case study: Key-value store"
+description: "Design a Dynamo-style key-value store: a consistent-hash ring, N replicas per key, and R and W quorums that trade consistency for latency and availability."
+objectives:
+  - id: size-kv
+    text: Size a replicated store by storage and by throughput, including the replication factor
+  - id: ring-placement
+    text: Explain consistent hashing, virtual nodes and preference lists, and the data moved when a node joins
+  - id: quorum-choice
+    text: Choose N, R and W for a consistency requirement and explain why R + W greater than N gives read-your-writes
+  - id: kv-failures
+    text: Predict the effect of packet loss, slow replicas and a partitioned coordinator
+requires: [replication, partitioning]
+activities: [M, R, Q]
+limitations:
+  - "The simulated ring is one component whose worker count is the cluster's capacity; individual member failures are not simulated."
+  - "Hinted handoff and read repair are modelled; Merkle-tree anti-entropy and vector-clock siblings are discussed but not simulated."
+  - "The runnable cell runs 2,000 requests/s over 10,000 keys."
+sources:
+  - title: "Dynamo: Amazon's Highly Available Key-value Store"
+    authors: "G. DeCandia et al."
+    year: 2007
+    url: "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+  - title: "Consistent hashing and random trees: distributed caching protocols for relieving hot spots on the World Wide Web"
+    authors: "D. Karger et al."
+    year: 1997
+    url: "https://doi.org/10.1145/258533.258660"
+  - title: "Cassandra: a decentralized structured storage system"
+    authors: "A. Lakshman, P. Malik"
+    year: 2010
+    url: "https://doi.org/10.1145/1773912.1773922"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 40
+*/}
+
+<Step id="requirements" title="Requirements">
+
+`put(key, value)`, `get(key)` and `delete(key)` for values up to ~1 MB (typically ~1 KB), optionally a conditional put on a version. Single-digit-millisecond p99 inside a region; writes accepted whenever a quorum is reachable; consistency tunable per request; scale to tens of TB and about a million operations a second by adding nodes.
+
+<Choice
+  id="kv-cap"
+  objective="quorum-choice"
+  prompt="A shopping cart must accept 'add to cart' even during a network partition, and can merge conflicting versions later. Which side of the trade-off does it want?"
+  options={[
+    { id: "ap", text: "Availability: accept writes on any reachable replicas and reconcile afterwards", correct: true, feedback: "Right. That is exactly the case Dynamo was built for." },
+    { id: "cp", text: "Consistency: reject writes unless a majority leader is reachable", feedback: "That refuses carts during partitions — the outcome Amazon wanted to avoid." },
+    { id: "neither", text: "Neither; a partition never happens inside one data centre", feedback: "Partitions, slow links and dead switches happen in every data centre." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Data**: 10B keys × ~1 KB ≈ 10 TB, **30 TB** with N = 3.
+- **Nodes for storage**: 30 TB ÷ ~2 TB usable each (room for compaction) ≈ **15**.
+- **Nodes for throughput**: 1M ops/s with 70% reads at R = 2 and 30% writes sent to N = 3 replicas ≈ 2.3M replica operations/s ÷ ~100k per node ≈ **23**. Plan about 30 for headroom and node loss.
+- **Joining a node**: consistent hashing moves about 1/31 of the data (about 1 TB), where hash mod N would move almost all of it.
+
+<Choice
+  id="kv-nodes"
+  objective="size-kv"
+  prompt="Storage alone needs 15 nodes and throughput alone needs 23. How many do you provision?"
+  options={[
+    { id: "30", text: "About 30: the larger of the two, plus headroom to lose a node and absorb compaction", correct: true, feedback: "Right. Provision for the binding constraint, then for failure and maintenance." },
+    { id: "15", text: "15, because storage is the expensive part", feedback: "Then the cluster runs at about 150% of its throughput capacity." },
+    { id: "38", text: "38: storage nodes plus throughput nodes", feedback: "The same nodes provide both storage and throughput; you do not add them." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `GET /kv/{key}?consistency=quorum|one` → 200 with value and version, or 404.
+- `PUT /kv/{key}` with an optional `If-Match: version` → 200 with the new version, or 409 on a version mismatch.
+- `DELETE /kv/{key}` → writes a **tombstone**, garbage-collected after a grace period (10 days here) so a replica that was down cannot resurrect the value.
+
+A plain put is an idempotent overwrite, so the coordinator can retry it safely after a timeout.
+
+<Choice
+  id="tombstones"
+  objective="kv-failures"
+  prompt="Why does a delete write a tombstone instead of removing the value immediately?"
+  options={[
+    { id: "resurrect", text: "A replica that missed the delete would otherwise hand the old value back during repair", correct: true, feedback: "Right. The tombstone is newer than the value, so repair propagates the delete instead of the value." },
+    { id: "speed", text: "Tombstones are faster to write", feedback: "Speed is not the reason; correctness under repair is." },
+    { id: "undo", text: "So users can undo deletes", feedback: "Tombstones are an internal mechanism, garbage-collected after a grace period." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Placing keys on a ring">
+
+Each key hashes to a token on a ring. Its N = 3 replicas are the next three **distinct** nodes clockwise: the preference list. Each physical node owns many **virtual nodes** (64 here, 256 by default in Cassandra), so load spreads evenly and a failed node's keys spread across all survivors instead of one neighbour. Try it: add and remove nodes and watch how few keys move.
+
+<HashRingPlayer seed={7} />
+
+<Choice
+  id="vnodes"
+  objective="ring-placement"
+  prompt="Why give each physical node many virtual nodes on the ring?"
+  options={[
+    { id: "spread", text: "To even out the load and spread a failed node's keys over many survivors", correct: true, feedback: "Right. One token per node gives uneven arcs and dumps a dead node's load on one neighbour." },
+    { id: "more-replicas", text: "To store more replicas of each key", feedback: "The replication factor N decides that; virtual nodes only decide placement." },
+    { id: "faster-hash", text: "To make hashing faster", feedback: "Lookups get slightly more work, not less." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+Clients reach stateless **coordinators** through a load balancer. A coordinator hashes the key, sends the write to all N replicas and acknowledges after W of them reply; a read asks R replicas and returns the highest version. **Hinted handoff** writes to the next healthy node when an owner is down and hands the data back later; **read repair** fixes stale replicas a read touches.
+
+<Ordering
+  id="put-path"
+  objective="ring-placement"
+  prompt="Order the steps of a put with N = 3 and W = 2."
+  items={[
+    { id: "hash", text: "Coordinator hashes the key to a token on the ring" },
+    { id: "list", text: "Coordinator finds the preference list: the next 3 distinct nodes" },
+    { id: "send", text: "Coordinator sends the write to all 3 replicas" },
+    { id: "ack", text: "Coordinator acknowledges the client after 2 replicas confirm" },
+    { id: "third", text: "The third replica applies the write when it arrives" }
+  ]}
+  explanation="W counts acknowledgements, not deliveries: all N replicas receive the write, and the client waits only for the fastest W."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: quorums">
+
+If **R + W > N**, every read set overlaps the last write set in at least one replica, so a read sees the latest acknowledged write. N = 3, R = W = 2 tolerates one slow or dead replica on both paths; R = 1, W = 3 makes reads fast and writes fragile; **R = W = 1 is fastest but only eventually consistent**. Quorum overlap is not linearizability: concurrent writes still produce siblings that need versions (vector clocks in Dynamo, timestamps in Cassandra).
+
+<Choice
+  id="quorum-pick"
+  objective="quorum-choice"
+  prompt="N = 3. A user must always read their own last write, and you want to tolerate one slow replica on both reads and writes. Which R and W?"
+  options={[
+    { id: "22", text: "R = 2, W = 2", correct: true, feedback: "Right. 2 + 2 > 3, so read and write sets overlap, and each path tolerates one slow replica." },
+    { id: "11", text: "R = 1, W = 1", feedback: "1 + 1 ≤ 3: a read can land on a replica the write never reached." },
+    { id: "13", text: "R = 1, W = 3", feedback: "Overlaps, but every write waits for the slowest replica and fails if any one is down." },
+    { id: "31", text: "R = 3, W = 1", feedback: "Overlaps, but every read waits for the slowest replica." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **Weak quorums, R = W = 1.** Lowest latency, but run the baseline against it: the engine reports stale reads — acknowledged writes invisible to later reads.
+- **Leader per shard with Raft or Paxos** (etcd, TiKV, Spanner). Linearizable and conflict-free, but writes wait for a majority and stall during elections, and a minority partition cannot write.
+- **Round-robin load balancing** in front of the coordinators. Ignores how busy each coordinator is, which matters in the partition scenario below.
+
+<Choice
+  id="raft-tradeoff"
+  objective="quorum-choice"
+  prompt="What do you give up by moving from Dynamo-style quorums to a Raft leader per shard?"
+  options={[
+    { id: "availability", text: "Write availability during partitions and leader elections", correct: true, feedback: "Right. A minority side cannot write, and writes pause while a new leader is elected." },
+    { id: "consistency", text: "Consistency", feedback: "Raft gains consistency; that is the point of it." },
+    { id: "durability", text: "Durability", feedback: "Committed Raft entries are on a majority of replicas, so durability is at least as good." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **5% packet loss** between a coordinator and the ring: lost requests time out after 30 ms and are retried with backoff. Put is an idempotent overwrite, so retries are safe and nearly every request succeeds; the tail gets fatter.
+- **The ring slows 6×** (compaction or a noisy neighbour): p99 roughly quadruples but everything finishes inside the 200 ms deadline, because the ring has spare workers.
+- **Coordinator 2 loses its path to the ring** but still passes health checks — a gray failure. The **least-connections** balancer rescues most requests: stuck requests keep coordinator 2's connection count high, so new requests go to coordinator 1. With round robin, half of all requests would keep falling into the hole.
+
+<Choice
+  id="gray-coordinator"
+  objective="kv-failures"
+  prompt="A coordinator passes its health check but cannot reach any storage node. What is the most robust fix?"
+  options={[
+    { id: "deep", text: "Make the health check exercise the dependency (a real quorum read), so the coordinator is removed from rotation", correct: true, feedback: "Right. A shallow 'process is up' check cannot see a gray failure." },
+    { id: "retry", text: "Retry more times inside the coordinator", feedback: "Every retry goes over the same broken path." },
+    { id: "bigger", text: "Add workers to the coordinator", feedback: "More workers just hold more stuck requests." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise: consistent-hash ring with virtual nodes, N = 3 and R = W = 2 by default with per-request overrides, hinted handoff and read repair for availability, Merkle-tree anti-entropy for keys nobody reads, tombstones with a grace period. Risks: compaction-induced latency, hot keys on one preference list, gray failures. Then score each stage from 1 to 4.
+
+<Choice
+  id="kv-hot-key"
+  objective="ring-placement"
+  prompt="One key receives 20% of all reads. Adding nodes to the ring does not help. Why?"
+  options={[
+    { id: "same-replicas", text: "The key always maps to the same N replicas, so its load cannot spread beyond them", correct: true, feedback: "Right. Hot keys need caching, read replicas for that key, or key splitting — not more ring members." },
+    { id: "vnodes", text: "There are too few virtual nodes", feedback: "Virtual nodes spread many keys; a single key still lives on one preference list." },
+    { id: "quorum", text: "R is too low", feedback: "Raising R makes each read touch more replicas — more load, not less." }
+  ]}
+/>
+
+</Step>

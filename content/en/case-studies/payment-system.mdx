@@ -1,0 +1,246 @@
+{/*
+id: payment-system
+slug: payment-system
+track: case-studies
+title: "Case study: Payment system & ledger"
+description: "Design a Stripe-grade payment system: end-to-end Idempotency-Key deduplication, immutable double-entry bookkeeping, transactional outbox sagas, and T+1 settlement reconciliation."
+objectives:
+  - id: size-payments
+    text: Estimate payment TPS, immutable ledger growth, idempotency store sizing, and external PSP latency bounds
+  - id: enforce-idempotency
+    text: Prevent double charges across network timeouts and retries using atomic Idempotency-Key state transitions
+  - id: double-entry-ledger
+    text: Model money movements as append-only double-entry ledger postings in integer minor units
+  - id: payment-sagas-reconciliation
+    text: Coordinate local ledger commits with external PSP calls via the transactional outbox, sagas, and reconciliation
+requires: [idempotency, sagas, transactions]
+activities: [R, M, Q]
+limitations:
+  - "The runnable cell simulates 1,800 requests/s over 10,000 payment accounts and showcases the duplicateEffect invariant under lost acknowledgements."
+  - "External card network settlement files (T+1 batch reconciliation) are discussed in the text."
+  - "The embedded TwoPhasePlayer lets you compare 2PC locking against sagas and the transactional outbox directly."
+sources:
+  - title: "Designing Robust and Predictable APIs with Idempotency"
+    authors: "B. Leach (Stripe Engineering)"
+    year: 2017
+    url: "https://stripe.com/blog/idempotency"
+  - title: "Buchhaltung: Plain-Text and Double-Entry Accounting at Scale (Books at Square)"
+    authors: "Square Engineering"
+    year: 2019
+    url: "https://developer.squareup.com/blog/books-an-immutable-double-entry-accounting-database-service/"
+  - title: "Life Beyond Distributed Transactions: An Apostate's Opinion"
+    authors: "P. Helland"
+    year: 2016
+    url: "https://dl.acm.org/doi/10.1145/3012426.3025012"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+A payment system (like Stripe, Adyen, or Square) accepts charge and refund requests from merchants, coordinates with external card networks / Payment Service Providers (PSPs), and maintains an authoritative financial ledger. When a network packet drops, **retrying a payment must never charge the customer twice**, and **no acknowledged payment may ever vanish**.
+
+**Functional**: authorize, capture, and refund payments; maintain an **immutable double-entry ledger** (`SUM(debits) == SUM(credits)`) for every balance change; support client-supplied `Idempotency-Key`s; run daily T+1 reconciliation against external PSP settlement files.
+
+**Non-functional**: zero duplicate charges (`duplicateEffect`); zero lost acknowledged transactions; store all amounts in **integer minor units** (`amountCents` + ISO currency, never floating point); full append-only audit trail.
+
+<Choice
+  id="money-representation"
+  objective="double-entry-ledger"
+  prompt="Why must a payment system store monetary amounts as integer minor units (e.g. `1999` cents + `'USD'`) rather than IEEE-754 `float` or `double`?"
+  options={[
+    { id: "binary-rounding", text: "Base-2 floating-point cannot represent `0.10` or `0.01` exactly (`0.1 + 0.2 == 0.30000000000000004`), causing cumulative rounding drift across ledger sums", correct: true, feedback: "Right. Exact integer minor units (or fixed-scale decimal types) paired with an explicit currency code guarantee zero rounding drift." },
+    { id: "floats-slow", text: "Modern CPUs do not have hardware floating-point units", feedback: "CPUs have fast FPUs; the problem is base-2 representation error on base-10 currency fractions." },
+    { id: "json-no-floats", text: "JSON syntax forbids decimal points", feedback: "JSON allows numbers with decimal points, though APIs often pass integer cents or decimal strings to avoid float parsing issues." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **500 million payments per day** (~5,800 TPS average, **~20,000 TPS** peak during flash sales):
+
+- **Ledger postings**: each payment writes ~4 immutable ledger rows (debit buyer clearing, credit merchant payable, credit platform fee, settlement entry) $\Rightarrow$ **2 billion rows/day** × 200 B ≈ **400 GB/day** (~150 TB/year).
+- **Idempotency key footprint**: 500M keys/day × 128 B ≈ **64 GB/day** — easily fits in an in-memory + transactional store with a 24–48 hour TTL.
+- **External PSP latency**: card network rails take **200–1,000 ms** p99, whereas local database transactions take **2–5 ms**.
+- **Crucial consequence**: if a database connection pool of 200 connections held a DB transaction open during a 500 ms PSP call, the entire database would cap out at `200 ÷ 0.5 s = 400 TPS`! Never hold DB locks across external network calls.
+
+<Choice
+  id="db-lock-across-psp"
+  objective="size-payments"
+  prompt="A payment service has 200 database connections. If each charge opens a DB transaction, holds a row lock while calling an external card network (500 ms), and then commits, what is the maximum throughput?"
+  options={[
+    { id: "400-tps", text: "At most 400 TPS (200 connections ÷ 0.5 s), starving the database even though CPU utilisation is near zero", correct: true, feedback: "Right. By Little's law (L = λW), holding a connection for 500 ms caps throughput at 400 TPS. Record `AUTH_IN_PROGRESS` in a 2 ms local transaction, release the connection, call the PSP, and record the outcome in a second 2 ms transaction." },
+    { id: "100k-tps", text: "100,000 TPS, because the database is waiting on network I/O", feedback: "Waiting on external HTTP inside an open transaction still occupies the connection and holds row locks for the full 500 ms." },
+    { id: "unlimited", text: "Unlimited, because SQL transactions multiplex over one connection", feedback: "A SQL connection can run only one active transaction at a time." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the API">
+
+Every state-changing endpoint requires an **`Idempotency-Key` header** generated by the caller (e.g. UUIDv4 tied to the checkout order ID):
+
+- `POST /v1/payments` (`Idempotency-Key: <uuid>`, `{ amountCents, currency, merchantId, paymentMethod }`) → `200 { paymentId, status, ledgerTxId }`.
+  - If the key was already completed, return the **stored response payload** without executing again.
+  - If a first request with that key is currently `IN_PROGRESS`, return `409 Conflict` (or hold briefly until completion).
+  - If the caller reuses the same key with a **different** `amountCents` or `merchantId`, reject with `422 Unprocessable Entity`.
+- `POST /v1/payments/{id}/refunds` (`Idempotency-Key: <uuid>`, `{ amountCents }`) → appends compensating reversal entries.
+- `GET /v1/payments/{id}` → `200 { paymentId, status, amountCents, entries[] }`.
+
+<Choice
+  id="idempotency-key-mismatch"
+  objective="enforce-idempotency"
+  prompt="A buggy merchant integration sends `POST /v1/payments` for 1,000 cents with `Idempotency-Key: abc`, and 5 seconds later sends a different order for 9,500 cents reusing `Idempotency-Key: abc`. What should the payment API do?"
+  options={[
+    { id: "reject-422", text: "Compare the hash of the incoming request parameters against the stored `requestHash` for key `abc` and reject with 422", correct: true, feedback: "Right. Silently returning the 1,000-cent success response for a 9,500-cent charge would hide a bug and undercharge the order." },
+    { id: "charge-9500", text: "Charge the card 9,500 cents and overwrite key `abc`", feedback: "Overwriting the key defeats idempotency and risks double charging." },
+    { id: "return-200-silently", text: "Return 200 OK from the 1,000-cent charge without checking the parameters", feedback: "Stripe's API explicitly hashes request parameters and returns an error when an idempotency key is reused with different parameters." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the double-entry ledger">
+
+Never track money with a mutable `UPDATE accounts SET balance = balance + 1000` statement alone. Instead, model three core tables in your ACID database:
+
+1. **`idempotency_keys`**: `(merchantId, idempotencyKey) PRIMARY KEY, requestHash, status, responseBody, createdAt`.
+2. **`payments` (state machine)**: `paymentId, merchantId, amountCents, currency, status (CREATED → AUTHORIZED → CAPTURED → SETTLED | FAILED), version`.
+3. **`ledger_entries` (append-only double-entry log)**: `entryId, txId, accountId, direction ('DEBIT' | 'CREDIT'), amountCents, createdAt`.
+
+Every ledger transaction `txId` satisfies the zero-sum accounting invariant:
+
+`SUM(amountCents WHERE direction = 'DEBIT') == SUM(amountCents WHERE direction = 'CREDIT')`
+
+And if a charge is refunded, you **never** `DELETE` or `UPDATE` the original rows — you append a new compensating transaction with the opposite `DEBIT`/`CREDIT` directions.
+
+<Choice
+  id="why-append-only-ledger"
+  objective="double-entry-ledger"
+  prompt="When a customer refunds a $25.00 purchase, how is the refund recorded in the ledger?"
+  options={[
+    { id: "compensating-entries", text: "Append a new ledger transaction that debits the merchant/fee accounts and credits the buyer clearing account for 2,500 cents, leaving the original charge entries untouched", correct: true, feedback: "Right. Append-only compensating entries preserve the complete audit history and keep `SUM(debits) == SUM(credits)` true at every point in time." },
+    { id: "delete-original", text: "Run `DELETE FROM ledger_entries WHERE paymentId = :id`", feedback: "Deleting committed financial rows destroys the audit trail and breaks already-closed daily accounting periods." },
+    { id: "update-to-zero", text: "Run `UPDATE ledger_entries SET amountCents = 0`", feedback: "Mutating historical ledger rows makes auditing and T+1 bank reconciliation impossible." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+Look at the reference design in the simulator:
+
+1. **Payment gateways** (`gw1`, `gw2`) terminate TLS, authenticate the merchant, and call the **Payment orchestrator** (`pay`) with a timeout and bounded retry policy (`backoff`).
+2. `pay` executes an atomic check-and-record against the **Idempotency key store** (`idemp`).
+3. If `dedupHit` is true, `pay` immediately returns `200` with the previously recorded result.
+4. Otherwise, `pay` appends the double-entry rows to the **Double-entry ledger DB** (`ledgerdb`), publishes the settlement/capture job to the **Transactional outbox queue** (`outbox`), and returns `200`.
+5. **PSP capture + reconciliation workers** (`settler`) consume `outbox` and update settlement state.
+
+<Ordering
+  id="idempotent-charge-flow"
+  objective="enforce-idempotency"
+  prompt="Order the steps when the payment orchestrator handles a `POST /v1/payments` request."
+  items={[
+    { id: "atomic-idemp", text: "Atomically check-and-insert `(merchantId, Idempotency-Key)` in the idempotency store" },
+    { id: "short-circuit-hit", text: "If the key already exists, return the stored response without touching the ledger or PSP" },
+    { id: "write-ledger-outbox", text: "Append balanced DEBIT/CREDIT entries to the ledger DB and enqueue the outbox event" },
+    { id: "ack-caller", text: "Store the final response against the idempotency key and return 200 to the gateway" },
+    { id: "async-settle", text: "Settlement worker processes the outbox event with the external PSP and reconciles T+1" }
+  ]}
+  explanation="Recording the idempotency key atomically before mutating the ledger guarantees that any retry after a lost response short-circuits cleanly."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: 2PC vs Sagas, Outbox, and Hot Accounts">
+
+### 1. Why Sagas + Transactional Outbox beat 2PC for external PSPs
+You cannot run Two-Phase Commit (2PC) across your internal database and Visa/Mastercard's HTTP API — card networks do not expose a `PREPARE` lock endpoint, and coordinator crashes in 2PC leave participants blocked holding locks. Instead, use a **Saga** driven by a **Transactional Outbox**:
+- Commit the ledger state transition and an `outbox` row in the **same local database transaction**.
+- A worker relays the outbox event to the external PSP (passing a deterministic PSP idempotency key derived from `paymentId`).
+- If a downstream step fails permanently, execute an explicit **compensating action** (void authorization or issue reversal ledger entries).
+
+Step through **2PC coordinator failures**, **Saga compensation**, and the **Transactional Outbox** in the interactive player below:
+
+<TwoPhasePlayer />
+
+### 2. Sharding hot merchant accounts
+If 5,000 customers per second buy from the same mega-merchant, updating a single `merchant_balance` row serialises all 5,000 transactions on one row lock! Because `ledger_entries` is **append-only**, inserts do not lock a single row; if you also enforce a real-time balance floor, split the hot account into $N = 16$ sub-accounts (`merchant#0` .. `merchant#15`) and route each credit to `merchant#(hash(paymentId) % 16)`.
+
+<Choice
+  id="outbox-vs-dual-write"
+  objective="payment-sagas-reconciliation"
+  prompt="Why is writing to `ledgerdb` and then calling `queue.publish()` as two separate network calls without an outbox unsafe?"
+  options={[
+    { id: "crash-between-writes", text: "If the process crashes after the DB commit but before `queue.publish()`, the ledger records the payment while settlement/notification never fires", correct: true, feedback: "Right. Writing the outbox row inside the same ACID database transaction as the ledger entries guarantees the message is never lost if the process crashes." },
+    { id: "queues-reject-json", text: "Message queues cannot carry integer amounts", feedback: "Queues carry arbitrary bytes; the issue is atomicity between the database commit and the queue publish." },
+    { id: "db-rolls-back-on-publish", text: "Publishing to a queue automatically rolls back committed SQL transactions", feedback: "A queue publish has no transactional link to a prior SQL commit unless coordinated via an outbox." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **No idempotency store (`payment-no-dedup`)**: in the simulator, switch to the `payment-no-dedup` alternative and run the `lost-acks` scenario. When responses from `pay` to `gw1` are dropped, `gw1` retries and the engine flags a **`duplicateEffect` invariant violation** (double charge!).
+- **Synchronous PSP call vs queued capture**: authorization typically happens synchronously while the user waits at checkout (still using the 3-step `IN_PROGRESS` $\rightarrow$ PSP call outside DB lock $\rightarrow$ `AUTHORIZED` pattern), while capture, settlement, and webhook delivery run asynchronously via the outbox queue.
+
+<Choice
+  id="check-then-act-idempotency-bug"
+  objective="enforce-idempotency"
+  prompt="A developer implements idempotency with `SELECT * FROM idemp WHERE key = :k`, and if 0 rows return, runs the charge and `INSERT`s the key at the end. Why does this still double-charge under concurrent retries?"
+  options={[
+    { id: "toctou-race", text: "Two concurrent requests with the same key both run `SELECT`, both see 0 rows before either finishes, and both execute the charge (check-then-act race)", correct: true, feedback: "Right. Idempotency requires an atomic conditional write (`INSERT ... ON CONFLICT DO NOTHING` or atomic `dedupStore`) BEFORE executing the side effect." },
+    { id: "select-too-slow", text: "`SELECT` on a primary key takes several minutes", feedback: "Primary-key `SELECT` takes under a millisecond; the bug is the non-atomic gap between checking and recording." },
+    { id: "uuid-collision", text: "Two different orders generate the exact same UUIDv4", feedback: "UUIDv4 collisions are astronomically unlikely; the duplicate comes from retrying the same order." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Run the three failure scenarios in the simulator:
+
+- **Lost acknowledgements (`lost-acks`)**: from `t = 1.5 s` to `1.58 s`, responses on the `pay → gw1` link are dropped after `pay` has already committed to `ledgerdb`. Gateway 1 times out and retries with the same key. The reference design's `idemp` store catches every retry (`clean: true`, zero violations), whereas the `payment-no-dedup` alternative violates `duplicateEffect`.
+- **Settlement worker crash (`settler-crash`)**: `settler` workers die for 600 ms. Charge acceptance stays above 99% goodput while outbox messages wait safely in `outbox`.
+- **Ledger database leader failover (`ledger-failover`)**: `ledgerdb` fails over to a semi-sync replica with fencing. Writes fail closed during the 500 ms election and zero acknowledged writes are lost.
+
+<Choice
+  id="lost-ack-behaviour"
+  objective="enforce-idempotency"
+  prompt="In the `lost-acks` scenario, the ledger DB has already committed the debit/credit pair when the response packet to `gw1` is dropped. What happens when `gw1`'s retry reaches `pay`?"
+  options={[
+    { id: "dedup-replays-200", text: "The atomic dedup store reports `dedupHit`, so `pay` skips the ledger write and returns 200 — the customer is charged exactly once", correct: true, feedback: "Right. That is the exact difference between at-least-once network retries and effectively-once financial mutations." },
+    { id: "double-debit", text: "The customer is debited a second time", feedback: "That happens only in the alternative design without the idempotency store." },
+    { id: "rollback-committed", text: "The database automatically un-commits the first transaction when the TCP ack drops", feedback: "Once a database transaction commits, a downstream TCP drop never rolls it back." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Close with **T+1 settlement reconciliation** — the final safety net of every real payment system. Every night, external card networks and banks provide settlement batch files listing every captured transaction and fee. An automated reconciliation job joins that file against `ledger_entries`:
+1. **In internal ledger, missing at PSP**: retry capture or void/reverse the pending ledger entry.
+2. **Charged at PSP, missing in internal ledger**: an unrecorded side effect after a crash — append the missing ledger entry or trigger an automatic refund.
+3. **Continuous invariant monitor**: verify `SUM(debits) == SUM(credits)` across every transaction and alert immediately on any discrepancy.
+
+<Choice
+  id="reconciliation-purpose"
+  objective="payment-sagas-reconciliation"
+  prompt="Even with idempotency keys and ACID transactions, why does every production payment system run a daily reconciliation job against external PSP settlement files?"
+  options={[
+    { id: "external-truth-drift", text: "External banking rails are a separate system of record that can experience timeout ambiguities, chargebacks, or fee adjustments; reconciliation detects and repairs any drift between internal and external truth", correct: true, feedback: "Right. Idempotency prevents internal bugs from double-charging, while reconciliation verifies that your ledger and the bank's ledger agree to the cent." },
+    { id: "replace-database", text: "So the payment system does not need its own database during the day", feedback: "You still need a real-time ledger DB during the day; reconciliation audits it against T+1 settlement files." },
+    { id: "compress-floats", text: "To convert integer cents back into floating-point numbers", feedback: "Never convert accounting ledgers into floats!" }
+  ]}
+/>
+
+</Step>

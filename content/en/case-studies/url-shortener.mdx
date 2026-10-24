@@ -1,0 +1,236 @@
+{/*
+id: url-shortener
+slug: url-shortener
+track: case-studies
+title: "Case study: URL shortener"
+description: "Design a URL shortener end to end: code generation without collisions, a cache-carried redirect path, and what happens when the cache or the database fails."
+objectives:
+  - id: size-shortener
+    text: Estimate write rate, read rate, storage and the code length a shortener needs
+  - id: generate-codes
+    text: Choose a code-generation scheme and justify it with collision and enumerability arguments
+  - id: carry-reads
+    text: Design a redirect path whose load the cache carries, and predict database load from the hit rate
+  - id: shortener-failures
+    text: Predict how the design behaves when the cache restarts or the database leader fails
+requires: [estimation, caching]
+activities: [R, Q]
+limitations:
+  - "The runnable design is one reduced cell (3,000 requests/s over 5,000 links), not the full 230k/s; Scale mode covers planet-scale numbers."
+  - "The simulator returns 200 for redirects; 301 vs 302 is a protocol choice discussed in the text."
+  - "Database read replicas add durability in the simulator but not read capacity: the store's worker count is the capacity."
+sources:
+  - title: "HTTP Semantics (RFC 9110)"
+    authors: "R. Fielding, M. Nottingham, J. Reschke"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9110"
+  - title: "Ticket Servers: Distributed Unique Primary Keys on the Cheap"
+    authors: "Flickr Engineering"
+    year: 2010
+    url: "https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-the-cheap/"
+  - title: "Snowflake (Twitter's ID generation service, archived source)"
+    authors: "Twitter"
+    year: 2010
+    url: "https://github.com/twitter-archive/snowflake"
+  - title: "Scaling Memcache at Facebook"
+    authors: "R. Nishtala et al."
+    year: 2013
+    url: "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+A URL shortener maps a long URL to a short code and redirects every click. It sounds trivial, which is why interviewers use it: the interesting parts only appear once you ask the right questions.
+
+**Functional**: create a code for a long URL (optionally a custom alias and an expiry), redirect `GET /{code}`, return 404 for unknown and 410 for expired codes, and let owners list and delete their links.
+
+**Non-functional**: redirects sit in front of every click, so they need a p99 under about 50 ms at the server and 99.99% availability. Creation can tolerate brief outages. A code must never map to two URLs, codes should not be trivially enumerable, and links must survive at least five years.
+
+<Choice
+  id="shortener-first-question"
+  objective="carry-reads"
+  prompt="Which clarifying question changes the design the most?"
+  options={[
+    { id: "ratio", text: "How many links are created per day, and how many clicks per link?", correct: true, feedback: "Right. The read-to-write ratio (here about 100:1) decides that the read path, not the write path, is the system to design." },
+    { id: "language", text: "Which programming language should the service use?", feedback: "Implementation language changes nothing about capacity, storage or failure behaviour." },
+    { id: "ui", text: "What colour is the 'shorten' button?", feedback: "Product details matter, but not for the architecture." },
+    { id: "https", text: "Should the redirect use HTTPS?", feedback: "Yes, it should — but that is a given, not a design driver." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **100M new links a day** and **100 clicks per link**.
+
+- **Writes**: 100M ÷ 86,400 s ≈ **1,160/s**, about 2,300/s at a 2× peak.
+- **Reads**: 100 × 1,160 ≈ **116k redirects/s**, about 230k/s at peak.
+- **Records**: 100M × 365 × 5 years ≈ **183 billion** links.
+- **Storage**: 183B × ~500 B ≈ **91 TB**, about 275 TB with three replicas.
+- **Code length**: 62⁶ ≈ 5.7 × 10¹⁰ is too few; 62⁷ ≈ 3.5 × 10¹² gives about 19× headroom. **Seven characters.**
+- **Cache**: if about 1B distinct links are read per day and the hottest 20% take about 80% of clicks, caching 200M entries × 500 B ≈ **100 GB** — a handful of cache nodes.
+- **Egress**: 116k/s × 500 B ≈ 58 MB/s. Bandwidth is not the constraint.
+
+<Choice
+  id="code-length"
+  objective="size-shortener"
+  prompt="You need 183 billion codes over five years using the characters a–z, A–Z and 0–9. What is the shortest code length that fits with headroom?"
+  options={[
+    { id: "six", text: "6 characters", feedback: "62⁶ ≈ 57 billion. You would run out in under two years at 100M links a day." },
+    { id: "seven", text: "7 characters", correct: true, feedback: "Right. 62⁷ ≈ 3.5 trillion, about 19× the 183 billion needed." },
+    { id: "ten", text: "10 characters", feedback: "That works, but every printed and typed link is three characters longer than it needs to be." },
+    { id: "five", text: "5 characters", feedback: "62⁵ ≈ 916 million: about nine days of links." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the API">
+
+- `POST /v1/urls` with `longUrl`, optional `customAlias` and `expiresAt`, and an `Idempotency-Key` header → **201** with the code; **409** if the alias is taken; **429** over quota.
+- `GET /{code}` → **301 or 302** with a `Location` header; **404** unknown; **410** expired.
+- `DELETE /v1/urls/{code}` (owner only) → **204**. Deleting must also delete the cached entry.
+
+A **301** is permanent: browsers and proxies may cache it, so repeat clicks never reach you. That saves load but loses click analytics and makes deletion unreliable. A **302** (or 307) sends every click to you. If analytics is the product, use 302.
+
+<Choice
+  id="redirect-status"
+  objective="carry-reads"
+  prompt="Marketing needs an accurate click count per link. Which redirect status do you return?"
+  options={[
+    { id: "302", text: "302 Found, so every click reaches the service", correct: true, feedback: "Right. Each click is counted, at the price of serving every redirect yourself." },
+    { id: "301", text: "301 Moved Permanently, to save load", feedback: "Browsers may cache a 301 and never ask again, so repeat clicks are invisible to you." },
+    { id: "200", text: "200 with an HTML page that redirects with JavaScript", feedback: "It counts clicks, but it is slower, breaks non-browser clients and hurts link previews." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the data">
+
+One table, keyed and sharded by `code`: `code`, `longUrl`, `userId`, `createdAt`, `expiresAt`. Every redirect is a point lookup on the shard key, so nothing fans out. A secondary index on `userId` serves "my links" — rare, and the only non-key access path.
+
+There are no joins and no multi-row transactions, so a key-value store fits as well as SQL. The trade-off: in a KV store you maintain the per-user index yourself, and alias uniqueness becomes a conditional write instead of a UNIQUE constraint.
+
+<Choice
+  id="shard-key"
+  objective="carry-reads"
+  prompt="Which shard key keeps every redirect on a single shard?"
+  options={[
+    { id: "code", text: "The short code", correct: true, feedback: "Right. The redirect request carries the code, so it maps straight to one shard." },
+    { id: "user", text: "The owner's userId", feedback: "Redirects do not know the owner; they would have to ask every shard." },
+    { id: "created", text: "The creation date", feedback: "All new writes would hit the newest shard, and redirects would not know which date to look in." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level design">
+
+Clients reach a load balancer in front of stateless API servers. Redirects use **cache-aside**: check the cache, and on a miss read the store and fill the cache. Creation writes the store directly. The store is a leader with replicas, semi-synchronous so an acknowledged link survives a leader failure, with fencing so an old leader cannot accept writes after failover.
+
+The cache is what carries the read load. In the simulated cell, 3,000 requests/s meet a store that can do about 2,700 reads/s: without the cache it saturates, with it the store runs at about a third of capacity.
+
+<Ordering
+  id="redirect-path"
+  objective="carry-reads"
+  prompt="Put the steps of a redirect that misses the cache in order."
+  items={[
+    { id: "lb", text: "The load balancer forwards GET /aZ3kQ9x to an API server" },
+    { id: "get", text: "The API server looks up url:aZ3kQ9x in the cache and misses" },
+    { id: "db", text: "The API server reads the row from the URL store" },
+    { id: "fill", text: "The API server writes the row to the cache" },
+    { id: "redirect", text: "The API server answers 302 with the long URL in Location" }
+  ]}
+  explanation="Cache-aside keeps the cache out of the write path: only misses touch the store, so the store's load is the request rate times the miss rate."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: generating codes">
+
+Three workable schemes:
+
+1. **Counter + base 62.** Give each API server a range of IDs (Flickr's ticket servers, or Snowflake-style timestamp + worker + sequence IDs), so there is no per-request coordination and no collision by construction. Sequential codes are enumerable, so pass the counter through a keyed bijective permutation before encoding.
+2. **Random 7 characters + insert-if-absent.** With n codes used out of N = 62⁷, the next insert collides with probability n ÷ N — about 5% when 183B are used. Retry on 409.
+3. **Hash and truncate** (MD5 or SHA-256 of the URL). It collides like random codes, and it also couples codes to URLs: two users shortening the same URL share a code, its analytics and its deletion.
+
+Custom aliases always need the insert-if-absent path, whatever scheme you pick for generated codes.
+
+<Choice
+  id="code-scheme"
+  objective="generate-codes"
+  prompt="Links are sometimes private documents, and the system runs 40 API servers. Which scheme fits best?"
+  options={[
+    { id: "range-permute", text: "Allocate ID ranges per server and pass IDs through a keyed permutation before base-62 encoding", correct: true, feedback: "Right. No coordination per request, no collisions, and codes are not guessable from each other." },
+    { id: "global-counter", text: "A single global counter in one database row", feedback: "Every create contends on one row: a bottleneck and a single point of failure, and codes are sequential." },
+    { id: "hash", text: "Hash the long URL and keep the first 7 characters", feedback: "Collisions are certain at this scale, so you still need check-and-retry, and identical URLs from different users collide." },
+    { id: "sequential", text: "Range allocation with plain sequential codes", feedback: "Fast and collision-free, but anyone can enumerate neighbouring links — bad for private documents." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives and their trade-offs">
+
+- **Key-value store instead of SQL.** Every access is by key, so a Dynamo-style store (N = 3, R = W = 2) scales writes horizontally without a resharding project. You lose the cheap owner index.
+- **No cache.** Simpler and always fresh, but the store must take the full read rate. In the simulator the no-cache variant saturates the store and most redirects miss their deadline.
+- **Hash truncation.** Free deduplication, but collisions and shared ownership.
+
+<Choice
+  id="no-cache"
+  objective="carry-reads"
+  prompt="The cache hit rate is 85% and redirects run at 116k/s. How many reads per second reach the store?"
+  options={[
+    { id: "17k", text: "About 17,400/s", correct: true, feedback: "Right. 116k × (1 − 0.85) ≈ 17.4k. Size the store for misses, and for the worst plausible hit rate." },
+    { id: "99k", text: "About 98,600/s", feedback: "That is the number of hits. Only misses reach the store." },
+    { id: "116k", text: "116,000/s", feedback: "That would be true without a cache." },
+    { id: "1k", text: "About 1,160/s", feedback: "That is the write rate, not the miss rate." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+The reference design runs in the simulator against three scenarios:
+
+- **The cache restarts empty.** Every redirect misses until the hot set refills. Coalescing and the skewed popularity refill it within a few hundred milliseconds; the cost is a tail-latency spike.
+- **One link goes viral** (30% of all clicks). The viral link costs one store read — it lives in the cache. The store gets busier from the long tail, not from the hot key.
+- **The store's leader dies.** Detection takes three missed 100 ms heartbeats plus a 200 ms election. Cache hits keep redirecting through the outage; misses and new links fail for about half a second. Semi-synchronous replication and fencing mean no acknowledged link is lost.
+
+<Choice
+  id="leader-failure"
+  objective="shortener-failures"
+  prompt="The URL store's leader is down for half a second before a replica is promoted. What do users see?"
+  options={[
+    { id: "hits-ok", text: "Redirects for cached links keep working; uncached redirects and new links fail until promotion", correct: true, feedback: "Right. The cache keeps serving its hot set; only paths that need the store fail." },
+    { id: "all-fail", text: "Every redirect fails, because the database is down", feedback: "Cache hits never touch the database, and they are most of the traffic." },
+    { id: "nothing", text: "Nothing — replicas serve everything instantly", feedback: "Detection and election take time; until a replica is promoted, the store is unavailable." },
+    { id: "lost", text: "Some recently created links are lost", feedback: "Not with semi-synchronous replication: a write is acknowledged only after a replica has it." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Close by naming the risks in order: **abuse** (rate-limit creation, scan URLs, keep a kill switch), **hot keys** on a sharded cache, and **cache invalidation on delete** — a deleted link that keeps redirecting until its TTL is the most common real bug. Then score yourself per stage: requirements, estimates, API, data model, high-level design, deep dive and wrap-up, from 1 (named the parts) to 4 (justified every choice with numbers and failure behaviour).
+
+<Choice
+  id="delete-bug"
+  objective="shortener-failures"
+  prompt="An owner deletes a link, but it keeps redirecting for an hour. What is the most likely cause?"
+  options={[
+    { id: "cache", text: "The delete removed the database row but not the cached entry, which lives until its TTL", correct: true, feedback: "Right. Deletes must invalidate the cache (and any CDN), or the cache keeps serving the old answer." },
+    { id: "replica", text: "Replication lag of an hour", feedback: "Replication lag is milliseconds to seconds, not an hour." },
+    { id: "dns", text: "DNS caching", feedback: "DNS caches the shortener's address, not individual codes." }
+  ]}
+/>
+
+</Step>

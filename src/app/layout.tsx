@@ -3,6 +3,7 @@ import { Fraunces, IBM_Plex_Mono, Schibsted_Grotesk } from "next/font/google";
 import Link from "next/link";
 import { ViewTransition } from "react";
 import { NavLinks, Providers, ThemeToggle } from "@/components/ui/shell";
+import { CommandPalette } from "@/components/search";
 import { SITE_NAME, SITE_URL } from "@/lib/content/schema";
 import "./globals.css";
 
@@ -52,17 +53,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </a>
         <Providers>
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
-            <nav aria-label="Main" className="mx-auto flex max-w-6xl flex-wrap items-end gap-x-6 px-4 lg:flex-nowrap">
+            <nav aria-label="Main" className="mx-auto flex max-w-6xl flex-wrap items-end gap-x-6 px-4">
               <Link href="/" className="group flex min-h-12 flex-1 items-center gap-2.5 self-center sm:min-h-14 sm:flex-none">
                 <Logo />
                 <span className="font-display text-[1.1875rem] leading-none tracking-tight">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
-              <div className="order-last -mx-4 w-[calc(100%+2rem)] px-2 lg:order-none lg:mx-0 lg:ml-auto lg:w-auto lg:px-0">
+              <div className="order-last -mx-4 w-[calc(100%+2rem)] px-2">
                 <NavLinks />
               </div>
               <div className="flex min-h-12 items-center self-center sm:min-h-14">
+                <CommandPalette />
                 <ThemeToggle />
               </div>
             </nav>

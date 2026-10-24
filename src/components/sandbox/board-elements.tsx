@@ -158,6 +158,7 @@ export function SketchEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosit
         {paths.map((d, i) => <path key={i} d={d} pathLength={1} className={draw} />)}
         <path d={head} className={draw} pathLength={1} />
       </g>
+      {data?.fresh && <circle cx={targetX - 2} cy={targetY} r={7} fill="none" strokeWidth={2} style={{ stroke: "var(--accent-2)" }} className={`${styles.ripple} motion-only`} pointerEvents="none" />}
       {data?.live && !insert && (
         <path d={sketch ? `M${sourceX},${sourceY} L${targetX},${targetY}` : bezier} fill="none" className={styles.flow} style={{ stroke: "var(--accent)" }} strokeWidth={1.5} pointerEvents="none" />
       )}

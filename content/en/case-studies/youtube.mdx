@@ -1,0 +1,217 @@
+{/*
+id: youtube
+slug: youtube
+track: case-studies
+title: "Case study: YouTube (video streaming)"
+description: "Design video streaming at scale: resumable chunked uploads, a parallel transcoding DAG for adaptive bitrate segments, and ISP-embedded caches delivering 100 Tbit/s."
+objectives:
+  - id: size-video
+    text: Estimate storage growth, transcoding compute, concurrent streams and egress bandwidth from watch time
+  - id: transcode-pipeline
+    text: Design a chunked upload and parallel transcoding DAG that produces adaptive bitrate segments
+  - id: abr-cdn
+    text: Explain how segmented adaptive bitrate streaming works with CDNs and origin shields
+  - id: video-failures
+    text: Predict what happens during a viral premiere, an upload surge or a CDN edge outage
+requires: [bandwidth, caching]
+activities: [R, Q]
+limitations:
+  - "The simulated cell models one CDN edge with an origin shield and a 2.5 Gbit/s origin uplink, not thousands of ISP-embedded appliances."
+  - "Live streaming (low-latency HLS/DASH and real-time ingest) is out of scope; this design covers video on demand."
+  - "DNS TTL is scaled to 300 ms so CDN failover completes within the 3-second simulation window."
+sources:
+  - title: "HTTP Live Streaming (RFC 8216)"
+    authors: "R. Pantos, W. May"
+    year: 2017
+    url: "https://www.rfc-editor.org/rfc/rfc8216"
+  - title: "Per-Title Encode Optimization"
+    authors: "Netflix Technology Blog"
+    year: 2015
+    url: "https://netflixtechblog.com/per-title-encode-optimization-7e99442b62a2"
+  - title: "High Quality Video Encoding at Scale"
+    authors: "Netflix Technology Blog"
+    year: 2015
+    url: "https://netflixtechblog.com/high-quality-video-encoding-at-scale-d159db052746"
+  - title: "Open Connect Overview"
+    authors: "Netflix"
+    year: 2021
+    url: "https://openconnect.netflix.com/en/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Accept video uploads up to hours long, transcode them into multiple resolutions and bitrates, and stream them with adaptive bitrate on any device with instant seeking. Track video metadata and eventually consistent view counts.
+
+**Non-functional**: playback starts in under ~2 s and does not rebuffer on a stable connection; uploaded videos are never lost (though processing can take minutes); and the delivery tier carries on the order of **100 Tbit/s** of egress at peak. Bandwidth, not request rate, is the primary constraint.
+
+<Choice
+  id="video-primary-constraint"
+  objective="size-video"
+  prompt="What separates video streaming from almost every other web system design?"
+  options={[
+    { id: "egress-bits", text: "Egress bandwidth in bits per second dominates: application servers and data-centre uplinks cannot carry the bytes without edge and ISP caches", correct: true, feedback: "Right. At ~2.5 Mbit/s per stream and tens of millions of concurrent viewers, moving the bytes is the entire architecture." },
+    { id: "db-writes", text: "Synchronous database transactions on every video frame", feedback: "Playback fetches static HTTP segments from caches; it does not write to a database per frame." },
+    { id: "cpu-playback", text: "Application servers must re-encode video on the fly for every viewer", feedback: "Videos are pre-transcoded into a rendition ladder once and served as static segments." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+Start from YouTube's public scale figures:
+
+- **Upload volume**: 500 hours of video uploaded per minute ≈ **30,000 video-hours per hour** of wall clock.
+- **Raw ingest**: 30,000 h/hour × ~1 GB/hour (1080p upload) ≈ **30 TB/hour** ≈ **0.7 PB/day** of originals.
+- **Stored renditions**: ~6 renditions (240p to 4K) totalling ~1.5× the upload size ≈ **1 PB/day** added before replication or erasure coding.
+- **Transcode compute**: 30,000 video-hours/hour × ~1 transcoder-hour per video-hour across the ladder → **tens of thousands of workers** busy continuously, parallelised per 4-second chunk.
+- **Concurrent viewers**: 1B hours watched/day ÷ 24 h ≈ **42M concurrent streams** on average.
+- **Egress**: 42M streams × ~2.5 Mbit/s average bitrate ≈ **100 Tbit/s** — served from ISP-embedded caches, not origin data centres.
+
+<Choice
+  id="concurrent-streams-calc"
+  objective="size-video"
+  prompt="Viewers watch 1 billion hours of video per day at an average bitrate of 2.5 Mbit/s. What is the average egress bandwidth?"
+  options={[
+    { id: "hundred-tbps", text: "About 100 Tbit/s (42M concurrent streams × 2.5 Mbit/s)", correct: true, feedback: "Right. 1B hours ÷ 24 hours ≈ 42M concurrent streams active at any instant; multiplying by 2.5 Mbit/s gives ~105 Tbit/s." },
+    { id: "one-tbps", text: "About 1 Tbit/s", feedback: "That is off by two orders of magnitude: 42M × 2.5 Mbit/s is ~105,000,000 Mbit/s ≈ 105 Tbit/s." },
+    { id: "ten-gbps", text: "About 10 Gbit/s", feedback: "10 Gbit/s supports only about 4,000 concurrent streams at 2.5 Mbit/s." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /upload` → `PUT /upload/{videoId}/chunk/{n}`: resumable chunked upload. Each chunk returns **201** once durable; clients poll or subscribe to `GET /videos/{id}` for processing status.
+- `GET /v/{id}/master.m3u8` (HLS) or `.mpd` (DASH): returns the manifest listing available renditions and their segment URLs.
+- `GET /v/{id}/{rendition}/{n}.m4s`: returns **200** with ~4 seconds of media (~256 KB at mid bitrate). Keys are **immutable**, so CDN edges cache them with a long TTL.
+
+<Choice
+  id="why-segmented-http"
+  objective="abr-cdn"
+  prompt="Why do modern video platforms serve 4-second HTTP segments (HLS/DASH) instead of streaming a single MP4 file over a custom protocol?"
+  options={[
+    { id: "abr-and-cdn", text: "Players can switch bitrate at any segment boundary as network throughput changes, and standard HTTP CDNs cache the immutable segments", correct: true, feedback: "Right. Adaptive bitrate prevents rebuffering, and plain HTTP objects let commodity CDN caches carry the traffic." },
+    { id: "less-storage", text: "Splitting into segments reduces total storage by 50%", feedback: "Segmentation adds a small container overhead; it does not shrink the encoded video." },
+    { id: "no-manifest", text: "It eliminates the need for any metadata or manifest file", feedback: "Segmented streaming requires a manifest (.m3u8 or .mpd) so the player knows which renditions and segments exist." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model">
+
+- **videos**: `videoId`, `ownerId`, `title`, `status`, `manifestKey`, keyed by `videoId` in the metadata database. View counts are aggregated asynchronously via a stream processor, never updated synchronously on every segment fetch.
+- **segments**: immutable blobs keyed by `(videoId, rendition, index)` in the object store; the manifest lists them.
+- **originals**: kept in colder, erasure-coded storage so the catalogue can be re-encoded when newer codecs (VP9, AV1) become worthwhile.
+
+<Choice
+  id="view-counter-design"
+  objective="size-video"
+  prompt="Why shouldn't the metadata database increment a video's view counter synchronously on every watch request?"
+  options={[
+    { id: "hot-row-contention", text: "Millions of viewers watching a popular video would contend on a single database row; view counts only need eventual consistency via an async log", correct: true, feedback: "Right. Row locks on a viral video would stall the database, whereas batching view events in memory or a stream is cheap and accurate enough." },
+    { id: "sql-no-integers", text: "Relational databases cannot store 64-bit counters", feedback: "Every database supports 64-bit integers; write contention on hot keys is the issue." },
+    { id: "cdn-counts", text: "The CDN automatically updates the SQL database on every cache hit", feedback: "CDNs serve static bytes at the edge; they emit access logs or beacons that an analytics pipeline aggregates asynchronously." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+DNS steers clients to the **CDN edge** (with an **origin shield** collapsing misses across edges). Playback requests hit the CDN; cache misses pass through the load balancer to stateless **origin servers**, which fetch segments from the **object store**. Uploads send chunks to the origin, which writes the raw chunk to the object store, updates **video metadata**, and publishes a job to the **transcode queue**. **Transcoder workers** pull chunks in batches, encode all renditions, and write the output segments back to the object store.
+
+<Ordering
+  id="video-upload-to-play"
+  objective="transcode-pipeline"
+  prompt="Put the steps from uploading a video chunk to a viewer streaming it in order."
+  items={[
+    { id: "put-chunk", text: "The creator uploads a raw chunk to the origin, which stores it in the object store" },
+    { id: "enqueue-job", text: "The origin records the chunk in metadata and publishes a job to the transcode queue" },
+    { id: "worker-encode", text: "A transcoder worker encodes the chunk into ~6 renditions and writes the .m4s segments to the object store" },
+    { id: "manifest-ready", text: "Once all chunks finish, the manifest is published and the video status becomes playable" },
+    { id: "edge-stream", text: "A viewer's player fetches the manifest and streams cached .m4s segments from the CDN edge" }
+  ]}
+  explanation="Decoupling upload ingestion from transcoding keeps uploads fast and durable while allowing chunks of a single video to be encoded in parallel across many workers."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: transcoding DAG and 100 Tbit/s delivery">
+
+1. **The transcoding pipeline.** A 2-hour upload cannot be encoded serially on one machine without making the creator wait hours. Split the upload at keyframes into 4-second chunks and run a job DAG (`split → encode per rendition → package → thumbnail → publish`). Because output segment keys are deterministic, retrying a failed task on another worker is idempotent. Short videos and popular creators get priority queues; long-tail re-encodes run in batch on spot/preemptible capacity.
+2. **Delivering 100 Tbit/s.** Even a regional CDN costs too much if every byte crosses transit backbones. Large video platforms place cache appliances directly inside ISP networks (Google Global Cache, Netflix Open Connect) and steer clients via DNS or manifest URLs to a nearby appliance that holds the video. Popular catalogue is pre-positioned during off-peak hours; long-tail misses pass through a regional origin shield so only one fetch reaches the object store.
+
+<Choice
+  id="chunk-parallel-transcode"
+  objective="transcode-pipeline"
+  prompt="A creator uploads a 60-minute video. How do you make it playable in under two minutes?"
+  options={[
+    { id: "split-keyframe-dag", text: "Split the video at keyframes into short chunks and encode chunks and renditions in parallel across a worker pool", correct: true, feedback: "Right. Nine hundred 4-second chunks can fan out across hundreds of workers and finish in seconds." },
+    { id: "faster-single-cpu", text: "Run FFmpeg on a single machine with a higher clock speed", feedback: "A single machine cannot encode 60 minutes of multi-resolution video in two minutes." },
+    { id: "skip-transcode", text: "Serve the creator's raw 4K upload file directly to all mobile viewers", feedback: "Raw uploads use non-streaming containers and bitrates that would stall most mobile connections." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **No origin shield.** Without a shield, every edge location that misses a segment fetches it from the origin independently. During a premiere across hundreds of edges, the origin receives hundreds of duplicate fetches for the same segment.
+- **Progressive download of one file.** Simplest to host, but locks everyone into a single bitrate: slow connections rebuffer, fast connections get blurry video, and seeking requires byte-range requests into a multi-gigabyte file.
+- **Per-title or per-shot encoding.** A fixed bitrate ladder wastes bits on cartoons and starves high-motion scenes. Netflix's per-title encoding analyses video complexity to pick a custom bitrate ladder per video — spending more compute once to save egress bandwidth on every view.
+
+<Choice
+  id="per-title-tradeoff"
+  objective="abr-cdn"
+  prompt="When does per-title encoding (spending extra CPU to tune the bitrate ladder for each video) pay off?"
+  options={[
+    { id: "popular-videos", text: "For videos watched thousands or millions of times, where bandwidth saved per view far outweighs the one-time encode CPU cost", correct: true, feedback: "Right. Egress scales with views while encoding happens once; popular videos amortise extra compute immediately." },
+    { id: "never-watched", text: "For archival uploads that are never watched", feedback: "Extra encoding CPU is pure waste if nobody streams the output." },
+    { id: "live-chat", text: "For text metadata and comment threads", feedback: "Per-title encoding applies to video bitstreams, not text." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **A video goes viral** (40% of requests target one video). Its segments sit in the CDN edge cache after the first fetch, so the origin barely notices the viral video itself; long-tail misses are what touch the origin uplink.
+- **The CDN edge fails and traffic falls back to the origin.** After the 300 ms DNS TTL expires, all 2,000 segments/s × 256 KB (≈ **4 Gbit/s**) hit the origin's **2.5 Gbit/s** uplink. The link saturates, the queue grows by ~200 MB/s, latency climbs past half a second within a second of failover, and playback stalls. For video, the CDN is not an optimisation: the origin uplink physically cannot carry the bytes.
+- **Uploads triple.** Chunk uploads still return 201 as soon as the raw bytes land in the object store; transcoding jobs queue up and new videos take longer to become playable while viewing is completely unaffected.
+
+<Choice
+  id="cdn-outage-bottleneck"
+  objective="video-failures"
+  prompt="In the simulator, when the CDN edge fails and 2,000 segment requests/s (256 KB each) fall back to the origin, what saturates first?"
+  options={[
+    { id: "origin-uplink", text: "The 2.5 Gbit/s origin uplink, because 2,000 × 256 KB/s is ~4 Gbit/s of egress", correct: true, feedback: "Right. Request rate is modest, but the byte volume exceeds the data-centre network link by 60%." },
+    { id: "metadata-db", text: "The video metadata SQL database", feedback: "Segment fetches read from the object store, not the metadata database." },
+    { id: "transcoders", text: "The transcoder worker pool", feedback: "Transcoders only process uploads; viewer traffic never touches them." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Check your design against the common mistakes: never serve video bytes from app servers, never encode a long video as one monolithic job, never update view counts synchronously per watch, and always size the delivery network in **bits per second** rather than requests per second. Watch three operational signals: **rebuffer rate**, **CDN / origin-shield hit ratio (by bytes)**, and **transcode queue lag**. Then score yourself from 1 to 4 on each rubric stage.
+
+<Choice
+  id="upload-surge-signal"
+  objective="video-failures"
+  prompt="Uploads spike 3× during a major event. Which metric tells you whether creators are waiting too long for their videos to become playable?"
+  options={[
+    { id: "transcode-queue-age", text: "Transcode queue depth and oldest-job age", correct: true, feedback: "Right. Upload requests still succeed quickly; the backlog sits in the transcode queue until workers drain it." },
+    { id: "cdn-hit-rate", text: "CDN edge cache hit rate", feedback: "The CDN serves viewer playback and is unaffected by the transcode backlog." },
+    { id: "dns-latency", text: "DNS resolution latency", feedback: "DNS steering does not measure batch transcoding progress." }
+  ]}
+/>
+
+</Step>

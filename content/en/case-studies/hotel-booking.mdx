@@ -1,0 +1,229 @@
+{/*
+id: hotel-booking
+slug: hotel-booking
+track: case-studies
+title: "Case study: Hotel booking"
+description: "Design a hotel reservation system with fast cached availability search, atomic room inventory holds, and idempotent checkout without overselling."
+objectives:
+  - id: size-hotel-inventory
+    text: Estimate room-night inventory storage, browse-to-book traffic ratio, and peak checkout rate
+  - id: model-room-inventory
+    text: Model nightly room availability and reservation state transitions to prevent double-booking and deadlocks
+  - id: prevent-oversell
+    text: Guarantee zero overselling under flash-sale concurrency using atomic conditional decrements and idempotency keys
+  - id: hotel-failure-modes
+    text: Predict how availability caching, hold expiry reapers, and database failover behave under failure
+requires: [transactions, idempotency, caching]
+activities: [R, Q]
+limitations:
+  - "The runnable design models a reduced cell (2,500 requests/s over 10,000 room-date rows with 2 rooms left per key) so oversell races trigger quickly."
+  - "Multi-night bookings are collapsed into one atomic inventory step per checkout in the operational trace."
+  - "External payment gateway latency is discussed in the hold saga rather than simulated as a separate network node."
+sources:
+  - title: "Designing Data-Intensive Applications, Ch. 7: Transactions"
+    authors: "M. Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+  - title: "A Critique of ANSI SQL Isolation Levels"
+    authors: "H. Berenson, P. Bernstein, J. Gray, J. Melton, E. O'Neil, P. O'Neil"
+    year: 1995
+    url: "https://www.microsoft.com/en-us/research/publication/a-critique-of-ansi-sql-isolation-levels/"
+  - title: "Implementing Stripe-like Idempotency Keys in Postgres"
+    authors: "Brandur Leach"
+    year: 2017
+    url: "https://brandur.org/idempotency-keys"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Separate the read flood from the transactional core">
+
+A hotel booking service looks like two completely different systems glued together. Ninety-five percent or more of requests are travellers browsing cities, filtering dates, and refreshing hotel pages. The remaining slice is checkout — where two guests clicking **Book** on the last Deluxe King room for New Year's Eve must never both win.
+
+**Functional**: search room availability and nightly rates for a hotel across a `[checkIn, checkOut)` date range; place a time-bounded reservation hold while collecting payment; confirm or cancel a reservation and return inventory to the pool.
+
+**Non-functional**: browse p99 under ~150 ms with high availability (eventual consistency of a few seconds is fine); checkout p99 under ~500 ms with **strict serializability per room-night counter** (zero unplanned overselling) and **idempotent retries** so a dropped mobile connection never books or charges a guest twice.
+
+<Choice
+  id="hotel-clarifying-q"
+  objective="model-room-inventory"
+  prompt="Which clarifying question has the biggest impact on the inventory data model?"
+  options={[
+    { id: "category-vs-unit", text: "Do guests book a room category (e.g., 'Deluxe King') with a count of interchangeable rooms, or a specific physical room/listing?", correct: true, feedback: "Right. Interchangeable room categories let you store an integer counter per (hotelId, roomTypeId, date), whereas unique listings require interval overlap checks or per-unit rows." },
+    { id: "photos", text: "How many photos does each hotel gallery have?", feedback: "Photos live on a CDN and object store; they do not affect the reservation concurrency model." },
+    { id: "currency", text: "Should prices display in USD or EUR?", feedback: "Currency conversion is a presentation concern, not a core architectural driver." },
+    { id: "reviews", text: "Can guests leave star ratings after checkout?", feedback: "Reviews are a separate, low-rate CRUD subsystem." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Size the inventory and the traffic">
+
+Suppose the platform lists **5 million hotels**, each averaging **5 room types**, bookable **365 days** ahead, with **4 million bookings per day**.
+
+- **Inventory rows**: 5M × 5 × 365 ≈ **9.1 billion rows**. At ~64 bytes per row (`hotelId`, `roomTypeId`, `date`, `available`, `priceCents`, `version`), the entire global inventory is **~580 GB** — small enough to fit in a handful of sharded relational database nodes.
+- **Booking writes**: 4M ÷ 86,400 s ≈ **46 bookings/s** average, or **~250 bookings/s** at a 5× peak. Even if each booking updates 3 nights, ~750 row updates/s is effortless for SQL.
+- **Availability reads**: at a 100:1 browse-to-book ratio, peak search traffic is **~25,000 reads/s**. A short-TTL availability cache (10–15 s) absorbs 90%+ of these reads so the transactional database is saved for checkouts and cache misses.
+
+<Choice
+  id="hotel-scale-insight"
+  objective="size-hotel-inventory"
+  prompt="What do the back-of-envelope numbers tell you about the database choice for hotel bookings?"
+  options={[
+    { id: "sharded-sql", text: "At ~250 peak bookings/s and ~580 GB of inventory, a sharded ACID relational database easily handles writes and gives rock-solid transactions", correct: true, feedback: "Right. You do not need to sacrifice ACID transactions for eventual-consistency NoSQL when peak writes are a few hundred per second." },
+    { id: "nosql-only", text: "250 bookings/s is far too high for SQL; you must use an eventually consistent key-value store", feedback: "A single modern Postgres or MySQL primary handles 10,000+ simple row updates per second." },
+    { id: "petabytes", text: "Room inventory is tens of petabytes and must live on cold object storage", feedback: "9.1B rows × 64 B is under 600 GB." },
+    { id: "no-cache-needed", text: "Because writes are low, reads are also low and no cache is needed", feedback: "Browse traffic is 100× higher than booking traffic and will overwhelm the database during flash sales without a cache." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design an idempotent booking API">
+
+- `GET /v1/hotels/{hotelId}/availability?checkIn=2026-12-29&checkOut=2027-01-01` → **200** `{ roomTypes: [{ roomTypeId, available, priceCents }] }`. Served via cache-aside with a 15 s TTL.
+- `POST /v1/reservations` with header `Idempotency-Key: <client-uuid>` and body `{ hotelId, roomTypeId, checkIn, checkOut, guestId }` → **201** `{ reservationId, status, expiresAt }` if inventory is claimed, or **409 Conflict** if any night in the range has zero availability.
+- `DELETE /v1/reservations/{reservationId}` → **200** `{ status: "CANCELLED" }` after atomically transitioning status and incrementing `available` for each night.
+
+<Choice
+  id="hotel-idempotency-why"
+  objective="prevent-oversell"
+  prompt="A user taps 'Book Now' on a train, the server commits the reservation, and the response is lost in a tunnel. When the app retries 3 seconds later with the same Idempotency-Key, what must happen?"
+  options={[
+    { id: "return-existing", text: "The server recognises the key in the dedup store and returns the existing reservation without decrementing inventory again", correct: true, feedback: "Right. The idempotency key ties all retries of one user intent to at most one state mutation." },
+    { id: "decrement-again", text: "The server decrements a second room and cancels the first one in a nightly batch job", feedback: "That temporarily steals inventory from other guests and risks charging the user twice." },
+    { id: "reject-400", text: "The server returns 400 Bad Request because duplicate requests are illegal", feedback: "The client never saw the first response; returning an error leaves the user unsure whether they have a room." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model per-night inventory counters">
+
+Instead of checking overlapping `[checkIn, checkOut)` intervals across millions of existing reservations on every checkout, maintain an explicit `inventory` counter row for each `(hotelId, roomTypeId, date)`:
+
+- **`inventory`**: primary key `(hotelId, roomTypeId, date)`, columns `available INT NOT NULL`, `priceCents INT`.
+- **`reservations`**: primary key `reservationId`, columns `hotelId`, `roomTypeId`, `checkIn`, `checkOut`, `guestId`, `status` (`HOLD | CONFIRMED | CANCELLED | EXPIRED`), `expiresAt`.
+
+Shard both tables by `hotelId`. Because a reservation is always for a single hotel, every night of a stay lives on the **same shard**, so a multi-night booking is a single-shard local transaction — no distributed two-phase commit required!
+
+<Choice
+  id="hotel-deadlock-order"
+  objective="model-room-inventory"
+  prompt="Guest A books Dec 24–26 and Guest B concurrently books Dec 24–25 for the same room type. How do you prevent a database deadlock when locking multiple nights?"
+  options={[
+    { id: "sort-dates", text: "Always update or lock the `(hotelId, roomTypeId, date)` rows in ascending chronological date order", correct: true, feedback: "Right. Acquiring row locks in a canonical order makes a lock cycle impossible." },
+    { id: "random-order", text: "Lock dates in random order so transactions avoid each other", feedback: "Random lock order is what creates AB/BA deadlocks when two transactions touch the same two dates in opposite order." },
+    { id: "table-lock", text: "Lock the entire inventory table before every booking", feedback: "A global table lock serialises bookings across all 5 million hotels." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Put the read cache and transactional checkout together">
+
+Clients hit a load balancer in front of stateless Booking API servers.
+1. **Browse path**: API servers check the **Availability Cache** (`cacheAside`). On a miss, they query the `inventory` rows for the hotel in the **Booking DB** and populate the cache with a short TTL.
+2. **Checkout path**: API servers check the **Idempotency Store** (`dedup`). On a new key, they execute an atomic conditional decrement (`decrementIfPositive` on `available`) for every night in the stay and insert the `reservations` record in the **Booking DB** (replicated semi-synchronously with leader fencing).
+
+<Ordering
+  id="hotel-checkout-steps"
+  objective="prevent-oversell"
+  prompt="Order the steps of a successful reservation request on the checkout path."
+  items={[
+    { id: "check-dedup", text: "Verify the client's Idempotency-Key in the dedup store to ensure this checkout has not already run" },
+    { id: "atomic-dec", text: "Execute an atomic conditional decrement (available > 0) on the hotel's room-date inventory rows in ascending date order" },
+    { id: "insert-res", text: "Insert the reservation record and replicate to a semi-synchronous standby before committing" },
+    { id: "return-201", text: "Return 201 Created with the reservationId to the guest" }
+  ]}
+  explanation="Checking idempotency first prevents duplicate execution on retry, and atomic conditional decrement inside the shard transaction guarantees `available` never drops below zero."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: holds, payment sagas, and overbooking">
+
+### Never call a payment gateway inside a database lock
+External card processors take 300–2,000 ms and occasionally hang. If you hold a row lock on `inventory` during the payment HTTP call, one slow payment freezes checkout for the entire hotel. Instead, split checkout into two short transactions:
+1. **Acquire hold**: in a 3 ms DB transaction, atomically decrement `available` and insert `reservations(status='HOLD', expiresAt=now+10m)`.
+2. **Charge card**: call the payment service outside any DB transaction, passing `reservationId` as the payment idempotency key.
+3. **Confirm or release**: if payment succeeds, run `UPDATE reservations SET status='CONFIRMED' WHERE reservation_id=? AND status='HOLD'`. If payment fails or `expiresAt` passes, a background reaper transitions `HOLD → EXPIRED` and increments `available` back.
+
+### Intentional overbooking
+Hotels routinely sell 105% of physical capacity to account for no-shows. Model this explicitly in data (`available = physicalCapacity + overbookingAllowance - booked`) rather than loosening transaction isolation — you still want an exact, race-free ceiling.
+
+<Choice
+  id="hotel-hold-race"
+  objective="model-room-inventory"
+  prompt="A guest's 10-minute hold expires at 12:10:00 while their slow payment webhook arrives at 12:10:01. How do you prevent both the reaper (refunding the room) and the webhook (confirming the room) from succeeding?"
+  options={[
+    { id: "cas-status", text: "Both transitions use conditional updates on status (`WHERE status = 'HOLD'`); whichever commits second sees 0 rows updated", correct: true, feedback: "Right. If the reaper transitions `HOLD → EXPIRED` first, the late webhook sees `status != 'HOLD'` and triggers an automatic payment refund." },
+    { id: "clock-buffer", text: "Have the reaper wait an extra 30 seconds and hope webhooks never take longer than 10m30s", feedback: "Hope is not a concurrency control mechanism; a network stall can delay a webhook past any fixed grace period." },
+    { id: "ignore-reaper", text: "Never expire holds automatically", feedback: "Abandoned browser tabs would permanently lock up hotel rooms." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Compare alternative concurrency designs">
+
+- **Read-then-write in application code** (`SELECT available` → if `> 0` → `UPDATE available = available - 1`): under the `hot-hotel` flash-sale scenario in the simulator, concurrent requests read the same positive count before any write commits, driving `available` negative (`oversell`).
+- **No availability cache**: every search page hits the transactional database. In the simulator, removing `availcache` saturates the database worker pool and drops goodput below 85%.
+- **Optimistic concurrency (`WHERE version = :oldVersion`)**: avoids row locks during read-modify-write, but under a 50-user flash sale for a hotel with 20 rooms left, 49 of the 50 concurrent transactions abort on version mismatch and must retry, whereas `SET available = available - 1 WHERE available > 0` lets the database serialise and succeed all 20 valid bookings in one round trip.
+
+<Choice
+  id="hotel-cas-vs-decrement"
+  objective="prevent-oversell"
+  prompt="Why is `UPDATE inventory SET available = available - 1 WHERE available > 0` better than optimistic `WHERE version = v` when 20 rooms are left and 20 guests click Book simultaneously?"
+  options={[
+    { id: "no-abort-storm", text: "Atomic decrement succeeds for all 20 guests in one pass, whereas optimistic version checks force 19 of the 20 concurrent requests to fail and retry", correct: true, feedback: "Right. Commutative atomic updates let the database serialise the decrements briefly at the row level without aborting valid callers." },
+    { id: "no-locks", text: "Atomic decrement does not touch disk or WAL", feedback: "It still writes to the WAL; the advantage is avoiding optimistic retry storms." },
+    { id: "version-unsafe", text: "Optimistic locking can oversell rooms", feedback: "Optimistic CAS is safe against overselling; its weakness under high contention is wasted retries." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Test the reference design against three failure scenarios:
+
+1. **Conference hotel flash sale (`hot-hotel`)**: 25% of all traffic targets one room type with only 2 rooms left. The cache absorbs the search spike, the first 2 bookings succeed, and every subsequent booking cleanly receives `409 Conflict` with zero `oversell` violations.
+2. **Availability cache flush (`cache-flush`)**: `availcache` restarts empty at t = 1.5 s. Request coalescing collapses concurrent misses for the same hotel into a single DB query, refilling the cache without dropping requests.
+3. **Database leader failover (`db-failover`)**: `bookingdb` crashes at t = 1.5 s. Cached searches (96% of traffic) continue working uninterrupted while a replica is promoted in ~0.5 s; semi-synchronous replication and fencing guarantee no confirmed reservation is lost.
+
+<Choice
+  id="hotel-failover-behaviour"
+  objective="hotel-failure-modes"
+  prompt="During the 500 ms window while the booking database is electing a new leader, what happens to user traffic?"
+  options={[
+    { id: "browse-ok-book-wait", text: "Cached hotel availability searches keep succeeding; only checkouts and cache misses fail or retry until promotion completes", correct: true, feedback: "Right. Decoupling the browse cache from the transactional store keeps the site usable for almost all visitors during a brief DB failover." },
+    { id: "double-book", text: "The old and new leaders both accept bookings for the last room", feedback: "Fencing tokens and quorum leases stop the old leader from committing writes once promotion begins." },
+    { id: "confirmed-lost", text: "Reservations confirmed right before the crash disappear", feedback: "Semi-synchronous replication ensures every 201 response was already written to at least one replica before being acknowledged." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and score your design">
+
+When wrapping up a booking interview, highlight three operational safeguards:
+- **Reconciliation**: a periodic audit query checks that `physicalCapacity + overbookingAllowance - available == COUNT(active HOLD + CONFIRMED reservations)` for every `(hotelId, roomTypeId, date)` row.
+- **Cache invalidation on zero**: while a 15 s TTL is fine when 8 rooms remain, actively delete or update the cached hotel entry when `available` hits `0` so users stop clicking into a sold-out checkout funnel.
+- **Bot & flash-sale protection**: rate-limit holds per account so a scraper cannot lock up an entire hotel with unpaid 10-minute holds.
+
+<Choice
+  id="hotel-zero-cache"
+  objective="hotel-failure-modes"
+  prompt="Why is it worth actively invalidating the availability cache when a room type's `available` count reaches 0, even though the cache already has a 15-second TTL?"
+  options={[
+    { id: "stop-409-funnel", text: "It stops thousands of browsers from seeing '1 room left!' for 15 seconds only to hit a frustrating 409 error at checkout", correct: true, feedback: "Right. Staleness between 8 rooms and 7 rooms is invisible to users, but staleness between 1 and 0 causes wasted checkout attempts and user frustration." },
+    { id: "prevent-oversell-cache", text: "Without cache invalidation, the database will oversell rooms", feedback: "The database enforces `available > 0` regardless of what the cache says; invalidating on zero protects UX and reduces wasted checkout load." },
+    { id: "save-ram", text: "Zero-inventory rows take more cache memory", feedback: "Memory size is identical." }
+  ]}
+/>
+
+</Step>

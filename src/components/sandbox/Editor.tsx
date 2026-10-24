@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Challenge } from "@/content/challenges";
+import type { ReferenceDesign } from "@/content/reference-designs";
 import { designHash, validateDesign } from "@/engine";
 import type { Design, NodeId, Scenario, ValidationIssue } from "@/engine/types";
 import { autosave, decodeShareLink, encodeShareLink, importDesign, openStore, type SaveStatus } from "@/lib/persistence";
@@ -23,6 +24,7 @@ import { ResultsPanel } from "./ResultsPanel";
 import { RunBanner, RunControls } from "./RunControls";
 import { ScenarioEditor } from "./ScenarioEditor";
 import { chaosProblems, loadScenario, saveScenario } from "./scenario-ops";
+import { Tour, tourDone } from "./Tour";
 import { TracePanel } from "./TracePanel";
 import { fmtMs } from "./units";
 import { ValidationPanel } from "./ValidationPanel";
@@ -40,11 +42,13 @@ export type EditorProps = {
   /** Used when nothing is stored under designId yet (challenge start). */
   fallback?: Design;
   challenge?: Challenge;
+  initialTab?: "scale" | "inspect";
+  reference?: ReferenceDesign;
 };
 
 /** Loads the stored draft (or a #d= share link), then mounts the editor. */
 export default function Editor(props: EditorProps) {
-  const [state, setState] = useState<{ design: Design; unsaved?: boolean; migrated?: boolean } | { missing: string } | null>(null);
+  const [state, setState] = useState<{ design: Design; unsaved?: boolean; migrated?: boolean } | { missing: string; notFound?: boolean } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -58,7 +62,7 @@ export default function Editor(props: EditorProps) {
       const rec = await store.designs.get(props.designId);
       if (!alive) return;
       const design = rec ? rec.design : props.fallback ? { ...structuredClone(props.fallback), id: props.designId } : null;
-      if (!design) return setState({ missing: "This draft isn't in this browser. Drafts are stored locally — start a new one or open a share link." });
+      if (!design) return setState({ missing: "This draft isn't in this browser. Drafts are stored locally — start a new one or open a share link.", notFound: true });
       // P1 kept annotations in localStorage; move them into the design once.
       const legacy = design.annotations ? null : legacyAnnotations(props.designId);
       setState(legacy ? { design: { ...design, annotations: legacy }, migrated: true } : { design });
@@ -71,6 +75,7 @@ export default function Editor(props: EditorProps) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <div className="max-w-sm">
+          {state.notFound && <><p className="font-mono text-sm text-accent">404</p><h1 className="my-3 font-display text-3xl">A page missing from the notebook.</h1></>}
           <p className="mb-4 text-sm text-(--text-muted)">{state.missing}</p>
           <Link href="/sandbox" className="inline-flex h-9 items-center rounded-(--radius-sm) bg-(--accent) px-4 text-sm font-semibold text-(--accent-ink)">Start a new design</Link>
         </div>
@@ -113,7 +118,7 @@ function persist(saver: ReturnType<typeof autosave>, d: Design) {
 
 type Tab = "inspect" | "scenario" | "checks" | "results" | "trace" | "scale" | "challenge";
 
-function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: openedUnsaved, migrated }: WorkspaceProps) {
+function WorkspaceInner({ designId, scenario: baseScenario, challenge, initialTab, reference, unsaved: openedUnsaved, migrated }: WorkspaceProps) {
   const design = useDesign((s) => s.design);
   const canUndo = useDesign((s) => s.past.length > 0);
   const canRedo = useDesign((s) => s.future.length > 0);
@@ -124,13 +129,15 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
   const reducedMotion = usePrefersReducedMotion();
   const [view, setView] = useState<"board" | "list">(() => (matchMedia("(max-width: 767px)").matches ? "list" : "board"));
   const [look, setLook] = useState<Look>("sketch");
-  const [tab, setTabState] = useState<Tab>(challenge ? "challenge" : "inspect");
+  const [tab, setTabState] = useState<Tab>(challenge ? "challenge" : initialTab ?? "inspect");
   const [toast, setToast] = useState<string | null>(null);
   const [save, setSave] = useState<{ status: SaveStatus; persistent: boolean }>({ status: "saved", persistent: true });
   const saverRef = useRef<ReturnType<typeof autosave> | null>(null);
   const [unsaved, setUnsaved] = useState(!!openedUnsaved);
   const [pendingDelete, setPendingDelete] = useState<{ req: DeleteRequest; refs: StepRef[] } | null>(null);
   const [palette, setPalette] = useState(false);
+  const [tourOpen, setTourOpen] = useState(() => !tourDone());
+  const rootRef = useRef<HTMLDivElement>(null);
   const [heat, setHeat] = useState<Record<NodeId, number> | null>(null);
   const [overlay, setOverlay] = useState(false);
   const confirmRef = useRef<HTMLDialogElement>(null);
@@ -171,7 +178,8 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
     issues = [{ code: "VALIDATOR_ERROR", message: e instanceof Error ? e.message : String(e) }];
   }
   const hash = designHash(design);
-  const blocked = issues.length ? `Fix ${issues.length} validation issue${issues.length === 1 ? "" : "s"} first (see Checks).` : null;
+  // Name the first problem in words; the Run controls offer a jump to it.
+  const blocked = issues.length ? `${issues[0].message}${issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}` : null;
 
   const notify = (msg: string) => setToast(msg);
   useEffect(() => {
@@ -305,6 +313,20 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
     openInspector();
   }
 
+  /** One click from the disabled Run button to whatever blocks it. */
+  function fixFirst() {
+    const first = issues[0];
+    if (!first) return;
+    if (first.nodeId) return goTo(first.nodeId);
+    if (first.code === "NO_TRAFFIC_SOURCE") {
+      const entry = document.querySelector<HTMLElement>(`[data-board="${designId}"] [data-kind="client"]`);
+      if (entry) return entry.focus();
+    }
+    if (first.edgeId) api.getState().select({ kind: "edge", id: first.edgeId });
+    setTab("checks");
+    requestAnimationFrame(() => panelRef.current?.focus());
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
     if (!(e.metaKey || e.ctrlKey)) return;
     const k = e.key.toLowerCase();
@@ -334,7 +356,7 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
   const menuItem = "flex min-h-9 w-full items-center rounded-(--radius-sm) px-2.5 text-left text-sm hover:bg-(--surface-2) focus-visible:outline-2 focus-visible:outline-(--accent)";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-(--bg) text-(--text)" onKeyDown={onKeyDown}>
+    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col bg-(--bg) text-(--text)" onKeyDown={onKeyDown}>
       {/* Toolbar */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-(--border) bg-(--surface) px-3 py-2">
         <input
@@ -371,8 +393,11 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
         <button type="button" className={`${tbtn} border border-(--border)`} onClick={() => setPalette(true)} title="Find or add a component (Ctrl+K)">
           Search <kbd className="ml-1 rounded border border-(--border) px-1 font-mono text-[10px]">Ctrl K</kbd>
         </button>
+        <button type="button" className={tbtn} onClick={() => setTourOpen(true)} aria-pressed={tourOpen} title="Replay the four-step getting-started tour">
+          <span aria-hidden="true" className="font-(family-name:--font-display) italic">?</span> Guide
+        </button>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <RunControls runKey={designId} onRun={() => startRun()} blockedReason={blocked} />
+          <RunControls runKey={designId} onRun={() => startRun()} blockedReason={blocked} onFix={fixFirst} />
           <details ref={exportRef} className="relative">
             <summary className={`${tbtn} flex cursor-pointer list-none items-center border border-(--border)`}>Export ▾</summary>
             <div className="absolute right-0 z-40 mt-1 flex w-60 flex-col gap-0.5 rounded-(--radius) border border-(--border) bg-(--surface) p-1.5 shadow-(--elev-3)">
@@ -394,7 +419,7 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
       <RunBanner runKey={designId} />
       <LiveEdits runKey={designId} design={design} />
 
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(420px,60dvh)_auto] md:grid-cols-[minmax(0,1fr)_400px] md:grid-rows-1">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(420px,60dvh)_auto] md:grid-cols-[minmax(0,1fr)_400px] md:grid-rows-1 lg:grid-cols-[minmax(0,1fr)_440px]">
         <main className="relative min-h-0 overflow-hidden" aria-label={view === "board" ? "Whiteboard" : "Component list"}>
           {view === "board" ? (
             <Whiteboard
@@ -432,13 +457,14 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
               <button
                 key={t.id}
                 id={`tab-${designId}-${t.id}`}
+                data-tour={t.id === "results" ? "results" : undefined}
                 role="tab"
                 type="button"
                 aria-selected={tab === t.id}
                 aria-controls={`panel-${designId}`}
                 tabIndex={tab === t.id ? 0 : -1}
                 onClick={() => setTab(t.id)}
-                className="relative flex h-10 shrink-0 items-center gap-1.5 px-2.5 text-sm text-(--text-muted) hover:text-(--text) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--accent) aria-selected:text-(--text) aria-selected:after:absolute aria-selected:after:inset-x-2 aria-selected:after:bottom-0 aria-selected:after:h-0.5 aria-selected:after:bg-(--accent)"
+                className="relative flex h-10 shrink-0 items-center gap-1.5 px-2 text-sm text-(--text-muted) hover:text-(--text) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--accent) aria-selected:text-(--text) aria-selected:after:absolute aria-selected:after:inset-x-2 aria-selected:after:bottom-0 aria-selected:after:h-0.5 aria-selected:after:bg-(--accent)"
               >
                 {t.label}
                 {t.badge && <span className="rounded-full bg-(--danger) px-1.5 text-[10px] font-semibold leading-4 text-(--bg)" aria-label={`${t.badge} issues`}>{t.badge}</span>}
@@ -458,11 +484,20 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, unsaved: 
             {tab === "checks" && <ValidationPanel issues={issues} design={design} onShow={openInspector} />}
             {tab === "results" && <ResultsPanel runKey={designId} design={design} />}
             {tab === "trace" && <TracePanel key={hash} design={design} issues={issues.length} />}
-            {tab === "scale" && <ScalePanel design={design} scenario={runScenario} onHeat={setHeat} />}
+            {tab === "scale" && <>
+              {reference && <details className="mb-4 border-y border-rule py-3">
+                <summary className="min-h-6 cursor-pointer">{reference.title}: illustrative assumptions</summary>
+                <p className="mt-2 text-sm text-muted">Editable illustrative model. These capacities are assumptions, not a production configuration.</p>
+                <ul className="mt-2 grid gap-2 text-sm">{reference.assumptions.map((a) => <li key={a.claim}>{a.claim}: {a.value}{a.source && <> — <a href={a.source.url} className="underline">{a.source.title}</a></>}</li>)}</ul>
+              </details>}
+              <ScalePanel design={design} scenario={runScenario} onHeat={setHeat} />
+            </>}
             {tab === "challenge" && challenge && <ChallengePanel challenge={challenge} design={design} blocked={blocked} onReplay={startRun} />}
           </div>
         </aside>
       </div>
+
+      <Tour open={tourOpen} onClose={() => setTourOpen(false)} rootRef={rootRef} nodes={design.nodes.length} edges={design.edges.length} runStatus={run.status} />
 
       <CommandPalette open={palette} onClose={() => setPalette(false)} design={design} allowed={challenge?.spec.allowedKinds} onAdd={addFromPalette} onGo={goTo} />
 

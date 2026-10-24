@@ -1,0 +1,237 @@
+{/*
+id: web-crawler
+slug: web-crawler
+track: case-studies
+title: "Case study: Web crawler"
+description: "Design a polite, planet-scale web crawler: two-tier priority and per-host frontier queues, Bloom-filter URL deduplication, SimHash content deduplication, and spider-trap defences."
+objectives:
+  - id: size-crawler
+    text: Estimate crawl throughput, ingress bandwidth, Bloom filter memory, and fetcher concurrency
+  - id: polite-frontier
+    text: Design a two-tier URL frontier that separates global page priority from per-host politeness
+  - id: dedup-urls-content
+    text: Combine URL canonicalisation, Bloom filters, and SimHash to eliminate duplicate work
+  - id: crawler-failures
+    text: Predict how the crawler handles link discovery bursts, fetcher crashes, and spider traps
+requires: [queues, caching, partitioning]
+activities: [R, M, Q]
+limitations:
+  - "The runnable cell simulates 1,800 requests/s over 15,000 URLs and 5,000 domains; planet-scale numbers are derived in the estimates."
+  - "URL deduplication is modelled with a dedupStore node; the interactive SketchesPlayer below demonstrates Bloom filter false positives directly."
+  - "SimHash Hamming-distance clustering is discussed in the text rather than computed per simulated packet."
+sources:
+  - title: "Mercator: A Scalable, Extensible Web Crawler"
+    authors: "A. Heydon, M. Najork"
+    year: 1999
+    url: "https://www.cs.cornell.edu/courses/cs685/2002fa/mercator.pdf"
+  - title: "Detecting Near-Duplicates for Web Crawling"
+    authors: "G. S. Manku, A. Jain, A. Das Sarma"
+    year: 2007
+    url: "https://www2007.org/papers/paper215.pdf"
+  - title: "Robots Exclusion Protocol (RFC 9309)"
+    authors: "M. Koster, G. Illyes, H. Zeller, L. Sassman"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9309"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down what you are building">
+
+A web crawler starts from a set of seed URLs, downloads pages, extracts outgoing links, and repeats across billions of pages. The challenge is not making HTTP requests — it is fetching at **6,000+ pages per second** without ever overloading a small web server, getting stuck in an infinite calendar trap, or wasting storage on duplicate pages.
+
+**Functional**: ingest seed URLs, fetch HTML, parse outgoing links, canonicalise and deduplicate URLs, deduplicate near-identical page content, obey `robots.txt` (`Disallow` and `Crawl-delay`), and prioritise high-value or frequently changing pages for recrawl.
+
+**Non-functional**: sustain ~15 billion pages per month (~5,800 pages/s average, ~12,000/s peak), guarantee strict **per-host politeness** (at most one in-flight request per host with a minimum delay between fetches), and survive worker crashes without losing the crawl frontier.
+
+<Choice
+  id="crawler-core-constraint"
+  objective="polite-frontier"
+  prompt="Why can a web crawler not simply pull URLs from a single global FIFO queue across 500 fetcher workers?"
+  options={[
+    { id: "politeness", text: "A single page often contains 100 links to the same domain, so 500 workers would hammer that host concurrently", correct: true, feedback: "Right. Without per-host isolation, bursts of internal links turn your crawler into an accidental DDoS attack." },
+    { id: "fifo-slow", text: "FIFO queues cannot exceed 1,000 messages per second", feedback: "Partitioned queues easily handle ratusan of thousands of messages per second." },
+    { id: "tls", text: "HTTP/2 forbids concurrent connections to different domains", feedback: "HTTP/2 multiplexes streams per origin; the problem is overloading a single target origin." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Work out the numbers">
+
+Assume **15 billion pages per month** and **100 KB average compressed HTML per page**:
+
+- **Crawl rate**: 15B ÷ (30 × 86,400 s) ≈ **5,800 pages/s** average, ~12,000 pages/s at peak.
+- **Ingress bandwidth**: 5,800/s × 100 KB ≈ **580 MB/s (4.6 Gbit/s)** sustained, ~10 Gbit/s peak.
+- **Raw HTML storage**: 15B × 100 KB ≈ **1.5 PB** per crawl cycle in object storage.
+- **URL deduplication volume**: if each page has ~80 outgoing links, parsers check ~460,000 URLs/s against the seen-URL filter.
+- **Bloom filter memory**: 15B URLs × ~14.4 bits/URL (for a 0.1% false-positive rate) ≈ **27 GB of RAM** — fits across a handful of nodes.
+- **Fetcher concurrency**: by Little's law, 6,000 pages/s × 0.5 s mean response time = **3,000 fetches in flight**.
+
+<Choice
+  id="bloom-memory-estimate"
+  objective="size-crawler"
+  prompt="Roughly how much memory does a Bloom filter need to track 15 billion seen URLs at a 0.1% false-positive rate (~14.4 bits per item)?"
+  options={[
+    { id: "27gb", text: "About 27 GB of RAM", correct: true, feedback: "Right. 15 × 10⁹ × 14.4 bits ÷ 8 bits/byte ≈ 27 GB — tiny compared to storing 15 billion full 80-byte URL strings (1.2 TB)." },
+    { id: "2tb", text: "About 2 TB of RAM", feedback: "Storing full URL strings takes ~1.2 TB, but a bit-array Bloom filter needs only ~1.8 bytes per URL." },
+    { id: "27mb", text: "About 27 MB of RAM", feedback: "Off by 1,000×: 15 billion items cannot fit in 27 MB at less than 1 bit per item." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the internal interfaces">
+
+A crawler is an internal pipeline, so its APIs connect the parser, frontier scheduler, and politeness caches:
+
+- `POST /v1/frontier/urls` — parser workers submit batches of discovered `{ rawUrl, sourceHost, depth }`; the scheduler canonicalises each URL, checks the seen filter, and enqueues unseen URLs into the frontier.
+- `GET /v1/robots/{domain}` — returns the parsed `Disallow` prefixes and `Crawl-delay` for a host, cached for up to 24 hours.
+- `POST /v1/frontier/lease` — fetcher workers lease the next ready batch of URLs for hosts whose politeness timer has expired and acknowledge completion (`200`) once the HTML blob and metadata are stored.
+
+<Choice
+  id="robots-cache-ttl"
+  objective="size-crawler"
+  prompt="Why must `/robots.txt` rules and DNS resolutions be cached per domain inside the crawler cluster?"
+  options={[
+    { id: "avoid-repeat", text: "Otherwise every single page fetch would double its external HTTP requests and hammer both DNS resolvers and the origin's /robots.txt", correct: true, feedback: "Right. Large domains have millions of pages; caching robots.txt and DNS turns millions of redundant lookups into one per TTL." },
+    { id: "rfc-forbids", text: "RFC 9309 forbids fetching /robots.txt more than once a year", feedback: "RFC 9309 recommends caching for up to 24 hours, not a year." },
+    { id: "dns-tcp", text: "DNS only works over TCP inside data centres", feedback: "DNS uses UDP/TCP regardless; the issue is lookup latency and query volume." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the data">
+
+- **urlseen (Bloom filter + KV store)**: tracks canonicalised URLs that have already been enqueued so cycles in the web graph do not cause infinite recrawls.
+- **robotsRules**: keyed by `domainId`, storing parsed robots directives and expiration timestamps.
+- **pages**: keyed by `urlId`, storing `domain`, HTTP `status`, `crawledAt`, and a 64-bit `contentHash` (SimHash) indexed to detect near-duplicate pages.
+- **htmlBlobs**: compressed raw HTML in an immutable object store, separate from the fast metadata store.
+
+<Choice
+  id="separate-blobs"
+  objective="dedup-urls-content"
+  prompt="Why store compressed HTML bodies in an object store (`htmlBlobs`) rather than inline in the `pages` metadata table?"
+  options={[
+    { id: "hot-metadata", text: "Scheduler and deduplication queries scan small metadata and hashes at high QPS; 100 KB blobs would bloat the working set and thrash page cache", correct: true, feedback: "Right. Keep the 100-byte metadata rows in fast KV/SSD memory and stream the petabyte-scale HTML archive to cheap object storage." },
+    { id: "kv-limit", text: "Key-value stores cannot store strings longer than 64 bytes", feedback: "They can, but mixing 100 KB cold blobs with hot metadata ruins cache locality and compaction." },
+    { id: "encryption", text: "Object stores do not require network bandwidth", feedback: "Object stores still use the network; the win is storage cost and keeping the metadata working set small." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Draw the high-level architecture">
+
+Followed links flow through a clean loop:
+
+1. **Frontier schedulers** canonicalise incoming URLs and check the **URL seen filter**.
+2. Unseen URLs enter the **Politeness frontier queues**.
+3. **Fetcher + parser workers** pull ready URLs, verify cached `robots.txt` rules, download the page, write the raw HTML to the **object store** and metadata/SimHash to the **metadata KV store**, and feed newly extracted links back to the scheduler.
+
+<Ordering
+  id="crawl-lifecycle"
+  objective="polite-frontier"
+  prompt="Put the steps of processing a newly discovered link in order."
+  items={[
+    { id: "canonicalise", text: "Canonicalise the raw URL (lowercase host, strip fragments, sort query params)" },
+    { id: "url-dedup", text: "Check the URL seen filter (Bloom filter + KV); drop if already seen" },
+    { id: "frontier-queue", text: "Route the URL through priority and per-host politeness frontier queues" },
+    { id: "robots-fetch", text: "Check cached robots.txt for the host, then fetch the page over HTTP" },
+    { id: "content-dedup", text: "Compute the page's SimHash, store HTML + metadata, and extract outgoing links" }
+  ]}
+  explanation="Filtering duplicate URLs before the frontier prevents queue bloat; checking per-host politeness and robots.txt before fetching protects target servers; SimHash after download avoids indexing duplicate content under different URLs."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: Mercator frontier, Bloom filters, and SimHash">
+
+### 1. The Mercator two-tier frontier
+A crawler needs both **prioritisation** (fetch high-PageRank news homepages before obscure forum archives) and **politeness** (never send concurrent requests to the same host). Mercator solves this with two tiers of queues:
+- **Front queues (`F_1 .. F_k`)**: `k` priority levels. A classifier assigns each URL to a priority queue based on domain authority and change frequency.
+- **Back queues (`B_1 .. B_n`)**: each active host maps to exactly one back FIFO queue. A min-heap tracks the earliest next fetch time `t_next` for each host; when a worker pops the heap root, it fetches one URL from that host's back queue and re-inserts the host at `t_now + crawlDelay`.
+
+### 2. URL deduplication with a Bloom filter
+Explore how a Bloom filter's bit array size $m$ and hash count $k$ control false positives in the interactive model below:
+
+<SketchesPlayer />
+
+### 3. Content deduplication with SimHash
+Different URLs often serve identical or near-identical text (`example.com/item?ref=a` vs `example.com/print/item`). Cryptographic hashes like SHA-256 change completely if a single timestamp or ad banner changes. **SimHash** hashes each word/shingle into a 64-bit vector, weights bits by term weight, and collapses the sign of each position into a 64-bit fingerprint. Two pages are near-duplicates if the Hamming distance between their 64-bit fingerprints is at most $d = 3$.
+
+<Choice
+  id="simhash-vs-sha256"
+  objective="dedup-urls-content"
+  prompt="Two URLs serve the same article except for a 'Printed at 12:04:05' footer. Why does SimHash catch this duplicate while SHA-256 misses it?"
+  options={[
+    { id: "locality-sensitive", text: "SimHash is locality-sensitive: small text edits flip at most a few bits in the 64-bit fingerprint, whereas SHA-256 avalanches ~50% of bits on a 1-byte change", correct: true, feedback: "Right. Checking whether Hamming distance ≤ 3 catches near-duplicates that differ only in timestamps, ads, or navigation chrome." },
+    { id: "sha-collisions", text: "SHA-256 collides too frequently on HTML documents", feedback: "SHA-256 has virtually zero collisions; the problem is the opposite — it is too sensitive to trivial byte differences." },
+    { id: "html-tags", text: "SHA-256 cannot hash angle brackets", feedback: "SHA-256 hashes arbitrary bytes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Evaluate alternatives">
+
+- **No `robots.txt` cache (hit the store on every check)**: in the simulator, removing the in-memory `robotscache` forces every check to scan/read the metadata store, saturating it and dropping goodput below 90%.
+- **Database lookup instead of a Bloom filter for URL dedup**: checking 460k outgoing links/s against disk-backed indexes requires a massive database cluster; an in-memory Bloom filter rejects 99.9% of duplicates in nanoseconds.
+- **Consistent host-to-worker hashing**: pinning each hostname to one fetcher partition via consistent hashing ensures both the host's back queue and its connection pool stay local to one worker.
+
+<Choice
+  id="bloom-false-positive-tradeoff"
+  objective="dedup-urls-content"
+  prompt="What is the consequence of a 0.1% false-positive rate in the URL-seen Bloom filter?"
+  options={[
+    { id: "skip-one-in-thousand", text: "Roughly 1 in 1,000 genuinely new URLs is mistaken for already seen and skipped — a tiny recall trade-off that saves ~98% of deduplication RAM", correct: true, feedback: "Right. And if losing seed or homepage URLs is unacceptable, you can bypass the Bloom filter for depth-0/1 seed domains." },
+    { id: "crawl-twice", text: "1 in 1,000 URLs is crawled twice", feedback: "Bloom filters have zero false negatives: an already-inserted URL is always reported as present." },
+    { id: "robots-violation", text: "The crawler ignores robots.txt on 0.1% of hosts", feedback: "The Bloom filter tracks seen URLs, not robots.txt rules." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Run the failure scenarios">
+
+Test the reference design against three failure modes in the simulator:
+
+- **Link discovery burst (`link-burst`)**: crawlers hit directory/sitemap hub pages and traffic doubles. The URL dedup store drops already-seen links and the frontier queue absorbs the burst so fetchers continue at a polite pace.
+- **Fetcher worker crash (`fetcher-crash`)**: fetcher workers die for 500 ms while holding leased URLs. Because frontier leases use a visibility timeout, unacknowledged URLs become visible again and are fetched cleanly on recovery.
+- **Slow archive object store (`slow-archive`)**: writing compressed HTML blobs degrades 4×. Because fetching happens asynchronously behind the frontier queue, scheduling and robots lookups stay fast.
+
+<Choice
+  id="fetcher-lease-recovery"
+  objective="crawler-failures"
+  prompt="A fetcher worker crashes after leasing 32 URLs from the frontier queue but before storing the downloaded pages. How does the system avoid losing those URLs?"
+  options={[
+    { id: "visibility-timeout", text: "The frontier queue holds leased URLs invisible for a visibility timeout; without an ack, they reappear for another worker", correct: true, feedback: "Right. At-least-once queue leases combined with idempotent page writes recover cleanly from fetcher crashes." },
+    { id: "sender-retry", text: "The target web server pushes the HTML again", feedback: "Web servers are passive HTTP origins; they never push to crawlers." },
+    { id: "drop-them", text: "They are permanently lost until the next monthly seed", feedback: "A visibility timeout prevents losing in-flight URLs when workers crash." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Close your design by addressing **spider traps** — dynamic pages like infinite calendars (`/calendar/2099/12/31`), session IDs in URLs, or faceted filters that generate billions of useless URLs. Defend against them with:
+1. Strict URL canonicalisation and maximum URL length / path depth caps.
+2. Per-host crawl budgets (maximum pages fetched per domain per cycle).
+3. Monitoring repeat SimHash rates per host (if a host produces 10,000 URLs with near-identical SimHashes, demote its priority).
+
+<Choice
+  id="spider-trap-defence"
+  objective="crawler-failures"
+  prompt="A misconfigured e-commerce site embeds a fresh random `sessionId` in every link path, creating an infinite graph of identical product pages. Which combination stops it?"
+  options={[
+    { id: "budget-and-simhash", text: "Per-domain page budgets, path-depth/pattern heuristics, and SimHash near-duplicate rate detection", correct: true, feedback: "Right. Per-host budgets cap the damage immediately, and a spike in duplicate SimHash fingerprints flags the host as a trap." },
+    { id: "more-fetchers", text: "Autoscale the fetcher pool to crawl all sessionId permutations faster", feedback: "Scaling fetchers into an infinite spider trap wastes bandwidth and overloads the victim site." },
+    { id: "bigger-bloom", text: "Double the Bloom filter size", feedback: "Every URL has a distinct sessionId string, so the Bloom filter sees every one as a brand-new URL." }
+  ]}
+/>
+
+</Step>

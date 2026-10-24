@@ -1,0 +1,234 @@
+{/*
+id: leaderboard
+slug: leaderboard
+track: case-studies
+title: "Case study: Real-time leaderboard"
+description: "Design a real-time gaming leaderboard for 25M players using augmented skip lists (Redis sorted sets), a 1-second top-K cache, and a durable score ledger."
+objectives:
+  - id: size-leaderboard
+    text: Estimate memory footprint and update/read QPS to prove when a global leaderboard fits on a single in-memory node
+  - id: choose-skip-list
+    text: Explain how an augmented skip list computes exact player rank in O(log N) time whereas SQL COUNT(*) degrades to O(N)
+  - id: shard-leaderboard
+    text: Compare user-hash partitioning and score-range bucketing when a leaderboard outgrows one machine
+  - id: leaderboard-failures
+    text: Predict system behaviour under tournament-finale spikes, cache flushes, and durable ledger slowdowns
+requires: [caching, partitioning]
+activities: [R, Q]
+limitations:
+  - "The simulated cell runs 3,000 requests/s over 20,000 players; the text works through the 25M DAU numbers and multi-node sharding."
+  - "Tie-breaking timestamp packing is explained in the data model rather than bit-packed inside the simulator's key generator."
+sources:
+  - title: "Skip Lists: A Probabilistic Alternative to Balanced Trees"
+    authors: "W. Pugh"
+    year: 1990
+    url: "https://dl.acm.org/doi/10.1145/78973.78977"
+  - title: "Redis Sorted Sets and t_zset.c Implementation"
+    authors: "S. Sanfilippo (antirez)"
+    year: 2010
+    url: "https://redis.io/docs/latest/develop/data-types/sorted-sets/"
+  - title: "The Art of Computer Programming, Vol. 3: Sorting and Searching (Order-Statistic Trees)"
+    authors: "D. E. Knuth"
+    year: 1998
+    url: "https://www-cs-faculty.stanford.edu/~knuth/taocp.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="requirements" title="Pin down the leaderboard queries">
+
+A real-time gaming leaderboard looks simple until you look at the third query:
+1. **Update score**: when a player finishes a match, add points (or set a high score) on the active board.
+2. **Global Top K**: fetch the top 100 players and their scores.
+3. **Player's own rank + neighbours**: show any player their exact standing (e.g., `#142,891 of 25,000,000`) and the 5 players immediately above and below them.
+
+**Non-functional**: score updates should reflect in rankings within **100 ms**; rank and top-K reads need a **p99 under 50 ms**; and if an in-memory node crashes, no player's earned points may be permanently lost.
+
+<Choice
+  id="leaderboard-hard-op"
+  objective="choose-skip-list"
+  prompt="Why does a standard SQL database with a B-tree index on `score DESC` struggle with the 'Player's own rank' query at 25M rows?"
+  options={[
+    { id: "count-linear", text: "Computing a player's rank requires counting how many rows have a higher score (`SELECT COUNT(*) WHERE score > ?`), which scans index entries proportional to the rank", correct: true, feedback: "Right. Looking up the player's score is O(log N), but standard relational B-trees do not store subtree node counts on internal pages because maintaining them would serialise concurrent writes." },
+    { id: "top-100-slow", text: "A B-tree cannot find the top 100 rows without sorting the whole table", feedback: "Walking the first 100 entries of a descending B-tree index is fast; arbitrary rank position is the problem." },
+    { id: "sql-no-ints", text: "SQL databases cannot store 64-bit integer scores", feedback: "BIGINT is standard in every SQL database." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Do the math before sharding">
+
+Assume **25 million DAU** playing **10 matches/day** and viewing the leaderboard **20 times/day**:
+
+- **Score writes**: 250M ÷ 86,400 ≈ **2,900 writes/s** average, **~9,000/s** at a 3× peak.
+- **Rank & top-K reads**: 500M ÷ 86,400 ≈ **5,800 reads/s** average, **~18,000/s** at peak.
+- **In-memory size**: each entry in a Redis sorted set (`ZSET`) holds an 8-byte `userId`, an 8-byte float/int `score`, a hash-table bucket, and skip-list forward pointers — roughly **~64 bytes per player**.
+- **Total RAM for 25M players**: `25,000,000 × 64 B ≈ 1.6 GB`!
+
+Always state this number out loud in an interview: **a 25-million-player leaderboard fits in 1.6 GB of RAM on a single Redis primary** (with read replicas), capable of 50,000–100,000 `O(log N)` operations per second (`log₂(25M) ≈ 25`).
+
+<Choice
+  id="leaderboard-ram-math"
+  objective="size-leaderboard"
+  prompt="At ~64 bytes per player in a Redis sorted set, roughly how much memory does a single global leaderboard of 25 million players require?"
+  options={[
+    { id: "1-6-gb", text: "About 1.6 GB — it easily fits on one instance without sharding", correct: true, feedback: "Right. 25M × 64 B = 1.6 GB. Recognising when data fits on one machine avoids unnecessary distributed complexity." },
+    { id: "160-gb", text: "About 160 GB — requires a 10-node cluster", feedback: "That is off by two orders of magnitude (6,400 bytes per player)." },
+    { id: "16-tb", text: "About 1.6 TB", feedback: "Even with full user profiles, 25M users is gigabytes, not terabytes." },
+    { id: "16-mb", text: "About 16 MB", feedback: "16 MB is less than 1 byte per player." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="Design the API and anti-cheat boundary">
+
+- `POST /v1/leaderboards/{boardId}/scores` (called **only by trusted game servers**, authenticated via mTLS/HMAC, with `matchId` as the idempotency key): `{ userId, delta, matchId }` → **200** `{ newScore, rank }`.
+- `GET /v1/leaderboards/{boardId}/top?limit=100` → **200** `{ entries: [{ rank, userId, score }] }`.
+- `GET /v1/leaderboards/{boardId}/users/{userId}?neighbours=5` → **200** `{ userId, score, rank, window: [...] }`.
+
+Never allow mobile or browser clients to call `POST /scores` directly: an attacker will decompile the client and curl `score = 999999999` within five minutes of launch.
+
+<Choice
+  id="leaderboard-auth"
+  objective="size-leaderboard"
+  prompt="Who should be permitted to call `POST /v1/leaderboards/{boardId}/scores`?"
+  options={[
+    { id: "game-server", text: "Only authoritative backend game servers (or a match-validation service), with `matchId` deduplication", correct: true, feedback: "Right. Clients send game inputs to the match server; the match server validates the outcome and reports the score once per `matchId`." },
+    { id: "mobile-client", text: "The player's mobile app directly over HTTPS with the player's JWT", feedback: "A valid JWT only proves *who* the player is, not that they legitimately earned 1,000,000 points." },
+    { id: "public", text: "Anyone with the leaderboard ID", feedback: "The board would be vandalised immediately." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Model the sorted set, durable ledger, and tie-breaking">
+
+We keep two stores in sync:
+1. **`rankSet` (Redis `ZSET`)**: key `board:2026-10`, member `userId`, score `compositeScore`. Supports `ZINCRBY` / `ZADD` in `O(log N)`, `ZREVRANK` in `O(log N)`, and `ZREVRANGE` in `O(log N + K)`.
+2. **`scores` (Durable database)**: key `(boardId, userId)` plus an append-only match log `(matchId, userId, delta, ts)`. If the Redis cluster is wiped, the sorted set is rebuilt by streaming the current period's `scores` table.
+
+### Deterministic tie-breaking
+If two players both have `1,500` points, the player who reached `1,500` *first* should rank higher. Because `ZSET` sorts descending by numeric score, pack a reversed timestamp into the lower digits:
+`compositeScore = (points * 10^10) + (9999999999 - epochSeconds)`. An earlier `epochSeconds` produces a slightly larger `compositeScore`!
+
+<Choice
+  id="leaderboard-tie-break"
+  objective="choose-skip-list"
+  prompt="In a descending leaderboard (`ZREVRANGE`), Player A reaches 500 points at `t = 1000` and Player B reaches 500 points later at `t = 1200`. Which composite score formula ranks Player A ahead of Player B?"
+  options={[
+    { id: "subtract-ts", text: "`score * 10^10 + (MAX_TIMESTAMP - achievedAt)`", correct: true, feedback: "Right. Both have the same high bits (`500 * 10^10`), and `MAX_TIMESTAMP - 1000 > MAX_TIMESTAMP - 1200`, so Player A sorts higher." },
+    { id: "add-ts", text: "`score * 10^10 + achievedAt`", feedback: "Adding `achievedAt` gives the *later* player (1200 > 1000) a higher composite score." },
+    { id: "divide-ts", text: "`score / achievedAt`", feedback: "Dividing changes the relative weight of points across different timestamps." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="Assemble the architecture">
+
+1. **Score write path**: the API writes the score update to the **Durable Score Ledger** (`scoredb`) and updates the **Sorted-Set Store** (`redis`). (For extreme write spikes, write to a partitioned log and let workers batch-update Redis and the DB.)
+2. **Global Top-100 path**: every viewer asks for the exact same top 100 list. A **Top-100 Cache** (`topcache`) with a **1-second TTL** sits in front of Redis, turning 10,000 requests/s for the global board into 1 Redis `ZREVRANGE` call per second.
+3. **User rank path**: queries `ZREVRANK` and `ZREVRANGE rank-5 rank+5` on Redis (or a Redis read replica), then hydrates player nicknames and avatars from a user profile cache.
+
+<Ordering
+  id="leaderboard-read-flow"
+  objective="choose-skip-list"
+  prompt="Order the steps to render a player's 'My Rank & Neighbours' screen."
+  items={[
+    { id: "zrevrank", text: "Call ZREVRANK on the sorted set to find the player's 0-based rank r in O(log N) time" },
+    { id: "zrevrange", text: "Call ZREVRANGE(r - 5, r + 5, WITHSCORES) to fetch the surrounding userIds and scores" },
+    { id: "hydrate", text: "Batch-fetch display names and avatars for those 11 userIds from the profile cache" },
+    { id: "respond-window", text: "Return the player's rank, score, and hydrated neighbour window to the client" }
+  ]}
+  explanation="Storing only `userId` and `score` inside the sorted set keeps it compact (1.6 GB) and avoids updating the sorted set when a user changes their display name or avatar."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: augmented skip lists and sharding past one node">
+
+### How `ZREVRANK` achieves `O(log N)`
+A skip list is a hierarchy of linked lists where each node is promoted to higher levels with probability `p` (0.25 in Redis). In an *augmented* skip list (analogous to an order-statistic tree), every forward pointer at level `L` also stores a `span` integer: how many level-0 elements that pointer skips over.
+- When you search for `userId`, you look up its current `score` in the companion hash table (`O(1)`), then walk down the skip list from the top level toward `(score, userId)`.
+- Every time you follow a forward pointer, you add its `span` to a running counter. When you land on the target node after `~log(N)` steps, the running total **is its exact rank**!
+
+### What if you have 500 million players and *must* shard?
+Two ways to partition a sorted set across `M` shards:
+1. **Shard by `userId` (hash partitioning)**: writes go to `hash(userId) % M`. `Top 100` scatter-gathers the top 100 from all `M` shards and merges them (`M × 100` items). However, `rank(userId)` must ask **all `M` shards** `ZCOUNT(myScore, +inf)` and sum the `M` counts.
+2. **Shard by score range (range bucketing)**: Partition 0 holds scores `[0, 1000)`, Partition 1 holds `[1000, 5000)`, etc., and a tiny metadata key stores the total player count in each bucket. To find `rank(userId)`, sum the total counts of all buckets above the player's bucket plus `ZREVRANK` inside the player's own bucket — **only 1 shard queried on read**! Cross-bucket score updates move the user between two shards.
+
+<Choice
+  id="leaderboard-sharding-tradeoff"
+  objective="shard-leaderboard"
+  prompt="You shard a 500M-player leaderboard across 16 Redis shards by `hash(userId) % 16`. How must the API compute a player's exact global rank?"
+  options={[
+    { id: "scatter-zcount", text: "Look up the player's score on their home shard, then query all 16 shards for the count of players above that score and sum the results", correct: true, feedback: "Right. Because higher-scoring players are hashed uniformly across all 16 shards, no single shard knows the global rank without summing counts across shards." },
+    { id: "local-zrevrank", text: "Call ZREVRANK on the player's home shard and multiply by 16", feedback: "Multiplying by 16 is only an estimate; for top players (#1 vs #15) a statistical estimate is wrong." },
+    { id: "impossible", text: "Exact rank is impossible with hash partitioning", feedback: "It works via scatter-gather `ZCOUNT` across the 16 shards, trading read fan-out for simple single-shard writes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Compare the alternatives">
+
+- **SQL `ORDER BY` / `COUNT(*)` (`leaderboard-sql-scan`)**: runnable in the simulator. Without the in-memory sorted set, rank queries scan the relational database and goodput drops below 70%.
+- **Score-range bucketing**: keeps rank lookups single-shard at massive scale, at the cost of moving a player between two shards when their score crosses a bucket boundary and tuning bucket boundaries so one bucket is not hot.
+- **Exact top-10k + histogram percentiles**: many games show exact ranks `#1–#10,000` (from a capped sorted set) and show `Top 5%` for everyone else using fixed score-bucket counters.
+
+<Choice
+  id="leaderboard-bucket-move"
+  objective="shard-leaderboard"
+  prompt="In a score-range sharded leaderboard, when does a score update require touching two shards instead of one?"
+  options={[
+    { id: "cross-boundary", text: "Only when the player's old score and new score fall in different score buckets (removing from the lower shard and adding to the higher shard)", correct: true, feedback: "Right. Most updates stay inside the same bucket (`ZADD` on one shard); boundary crossings remove the member from the old bucket, add to the new bucket, and adjust bucket totals." },
+    { id: "every-write", text: "On every single score update", feedback: "If a bucket spans `[1000, 2000)` and a player goes from 1100 to 1150, only that one shard is touched." },
+    { id: "never", text: "Never — score-range sharding never moves keys between shards", feedback: "Unlike immutable partition keys, a player's score changes over time." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Test the failure scenarios">
+
+Run the three scenarios in the simulator:
+
+1. **Tournament finale (`tournament-finale`)**: traffic doubles across all endpoints during the final seconds of a seasonal tournament. The 1s top-100 cache and O(log N) sorted set absorb 6,000 rps with >99% goodput.
+2. **Top-100 cache flush (`top-cache-flush`)**: `topcache` restarts at t = 1.5 s. Because `ZREVRANGE 0 99` on Redis takes ~0.4 ms, the sorted set serves the brief miss spike without trouble.
+3. **Durable ledger slowdown (`db-slowdown`)**: `scoredb` slows down 5× during a disk checkpoint. Leaderboard reads (`top` and `rank`) never touch `scoredb`, so viewer latency is completely unaffected.
+
+<Choice
+  id="leaderboard-redis-loss"
+  objective="leaderboard-failures"
+  prompt="What happens if the primary Redis sorted-set node crashes and its replica has not yet caught up on the last 200 ms of async replication?"
+  options={[
+    { id: "replay-ledger", text: "Promoting the replica may briefly miss 200 ms of updates, which are quickly reconciled by replaying recent commits from the durable score ledger", correct: true, feedback: "Right. The durable ledger (`scoredb` or Kafka log) is the source of truth; Redis is the fast derived index." },
+    { id: "permanent-loss", text: "Players permanently lose their match points", feedback: "Points are persisted in the durable score ledger before or alongside the Redis update." },
+    { id: "manual-reentry", text: "Players must replay their matches", feedback: "The backend replays the durable match/score log automatically." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up and self-assess">
+
+Close your interview by calling out:
+- **Seasonal board rotation**: key boards by period (`board:daily:2026-10-24`). At midnight, readers switch to the new key while the old key becomes immutable for reward payouts and expires after 30 days.
+- **Friend leaderboards**: a player rarely has more than 500 friends. Rather than maintaining a sorted set per user, fetch the friend IDs, batch-read their scores (`ZMSCORE` or KV multi-get), and sort those 200 numbers in the API server in microseconds!
+
+<Choice
+  id="leaderboard-friends"
+  objective="size-leaderboard"
+  prompt="A player has 150 in-game friends and opens the 'Friends Leaderboard' tab. What is the cleanest way to compute it?"
+  options={[
+    { id: "zmscore-sort", text: "Fetch the 150 friend IDs, batch-read their scores (`ZMSCORE`), and sort the 150 entries in memory in the API server", correct: true, feedback: "Right. Sorting 150 numbers in the stateless API tier takes microseconds and avoids maintaining 25 million separate per-user sorted sets." },
+    { id: "per-user-zset", text: "Maintain a dedicated Redis sorted set for every user and fan out every score update to 150 friend boards", feedback: "That amplifies writes 150× and wastes 150× the memory for a small list that is trivial to sort on read." },
+    { id: "sql-join", text: "Join the friends table with the 25M-row scores table on every tab open", feedback: "`ZMSCORE` from memory is much faster and lighter than a distributed SQL join." }
+  ]}
+/>
+
+</Step>

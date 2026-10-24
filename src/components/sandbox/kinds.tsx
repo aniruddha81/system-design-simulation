@@ -52,6 +52,27 @@ export const KIND_BLURB: Record<ComponentKind, string> = {
   queue: "Accepts messages now; workers process them later.",
 };
 
+/** One-line teaching note per kind: when a learner should reach for it (library explainer). */
+export const KIND_TEACH: Record<ComponentKind, string> = {
+  client: "Every design starts here: it stands in for your users and their traffic.",
+  dns: "Reach for it when one name must fail over between regions or sites.",
+  cdn: "Use it to serve popular reads close to users and spare the origin.",
+  loadBalancer: "Put it in front of two or more services so one slow box can't sink you.",
+  apiGateway: "One front door for auth and limits, so services don't each repeat them.",
+  rateLimiter: "Protects what's behind it: shed excess early instead of melting down.",
+  circuitBreaker: "Stops a failing dependency from dragging every caller down with it.",
+  service: "Your application code. Most designs need at least one.",
+  worker: "Pair it with a queue to do slow work after the user already has a reply.",
+  autoscaler: "Grows workers when the queue backs up; it never handles requests itself.",
+  cache: "Put it between a service and a database to make hot reads fast and cheap.",
+  database: "Where data truly lives. Usually the first thing to saturate under load.",
+  kvStore: "Choose it for huge key-value data that must spread across many nodes.",
+  objectStore: "For big blobs like images and backups, not for hot lookups.",
+  searchIndex: "Add it when users search by text or filters the database can't index well.",
+  dedupStore: "Makes retries safe: the same payment or order is applied only once.",
+  queue: "Decouples a fast producer from a slow consumer and absorbs bursts.",
+};
+
 const PATHS: Record<ComponentKind, React.ReactNode> = {
   client: (<><rect x="2.5" y="3" width="15" height="10" rx="1.5" /><path d="M7 17h6M10 13v4" /></>),
   dns: (<><circle cx="10" cy="10" r="7" /><path d="M3 10h14M10 3c2.5 2.5 2.5 11.5 0 14M10 3c-2.5 2.5-2.5 11.5 0 14" /></>),

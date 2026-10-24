@@ -1,0 +1,204 @@
+{/*
+id: notification-system
+slug: notification-system
+track: case-studies
+title: "Case study: Notification system"
+description: "Design a notification pipeline: a durable queue between fast producers and flaky providers, retries with breakers, priorities, and back-pressure when the queue fills."
+objectives:
+  - id: size-notifications
+    text: Size sender concurrency, queue partitions and outage backlog with Little's law
+  - id: delivery-semantics
+    text: Design at-least-once delivery with idempotency keys, collapse keys and a dead-letter queue
+  - id: provider-protection
+    text: Protect providers and the pipeline with backoff, circuit breakers, bulkheads and priorities
+  - id: notification-failures
+    text: Predict how provider errors, outages and slowdowns surface to callers
+requires: [queues]
+activities: [R, Q]
+limitations:
+  - "The provider is a simulated service with a latency distribution; real APNs and FCM limits and feedback are discussed only."
+  - "A queue partition is consumed one message at a time, so partitions bound sender parallelism in the simulator, as in a partitioned log."
+  - "The runnable cell runs 1,000 notifications/s with a 1,000-message queue."
+sources:
+  - title: "Sending notification requests to APNs"
+    authors: "Apple"
+    url: "https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns"
+  - title: "Firebase Cloud Messaging documentation"
+    authors: "Google"
+    url: "https://firebase.google.com/docs/cloud-messaging"
+  - title: "Exponential Backoff And Jitter"
+    authors: "M. Brooker"
+    year: 2015
+    url: "https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="requirements" title="Requirements">
+
+Internal services send a notification for a user and a template; the system picks channels (push, SMS, email) from preferences, respects opt-outs, quiet hours and frequency caps, tracks status and retries transient failures.
+
+Non-functional: **accepting a request takes under 50 ms and never depends on provider health**; at-least-once delivery to providers with duplicates suppressed where the channel allows; 2FA codes arrive within seconds while marketing can wait.
+
+<Choice
+  id="decouple"
+  objective="notification-failures"
+  prompt="Why must accepting a notification not depend on the push provider's health?"
+  options={[
+    { id: "blast", text: "Otherwise every internal service that sends notifications slows down or fails whenever the provider does", correct: true, feedback: "Right. The queue isolates callers from the slowest, least reliable part of the pipeline." },
+    { id: "cost", text: "Providers charge per synchronous call", feedback: "Pricing is not the reason; failure isolation is." },
+    { id: "order", text: "To keep notifications in order", feedback: "Ordering is a separate concern and mostly unnecessary across users." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates">
+
+- **Volume**: 1B notifications/day ≈ **11.6k/s** average; campaigns spike to 10× for minutes.
+- **Backlog in a 10-minute provider outage**: 11.6k/s × 600 s ≈ **7M messages**, about 7 GB at 1 KB each. A durable log handles that; an in-memory queue does not.
+- **Sender concurrency**: Little's law, 11.6k/s × 40 ms provider latency ≈ **460 requests in flight**.
+- **Partitions**: a partition is consumed one message at a time, in order, so you need at least as many partitions as in-flight messages — or unordered consumption.
+
+<Choice
+  id="littles-law"
+  objective="size-notifications"
+  prompt="You send 5,000 notifications/s and the provider takes 80 ms per request. How many requests are in flight on average?"
+  options={[
+    { id: "400", text: "400", correct: true, feedback: "Right. In flight = rate × time = 5,000/s × 0.08 s." },
+    { id: "62", text: "About 62", feedback: "That is 5,000 ÷ 80; Little's law multiplies rate by time." },
+    { id: "5000", text: "5,000", feedback: "That is the rate per second, not the number in flight." }
+  ]}
+/>
+
+</Step>
+
+<Step id="api" title="API">
+
+- `POST /v1/notifications` with `userId`, `template`, `params`, `priority` and an `Idempotency-Key` → **201** queued, **200** duplicate, **429** over quota.
+- `GET /v1/notifications/{id}` → status and attempts.
+- `PUT /v1/users/{id}/preferences` → channels, quiet hours, opt-outs.
+
+<Choice
+  id="idem-key"
+  objective="delivery-semantics"
+  prompt="A caller's request times out and it retries with the same Idempotency-Key. What should the API do?"
+  options={[
+    { id: "same", text: "Return the original notificationId without enqueuing again", correct: true, feedback: "Right. The key maps to the first request's result for a day." },
+    { id: "enqueue", text: "Enqueue it again; the provider will deduplicate", feedback: "Providers deduplicate only in limited cases (collapse keys), and not across channels." },
+    { id: "reject", text: "Reject it with 409", feedback: "The caller did nothing wrong; a retry of a successful request should look successful." }
+  ]}
+/>
+
+</Step>
+
+<Step id="data-model" title="Data model">
+
+- **notifications**: ID, user, template, channel, status, attempts, timestamps. Written on accept, updated by senders; about 6 TB for 30 days of status.
+- **preferences**: per-user channels, opt-outs and quiet hours. Read on every send, cached aggressively, evaluated **at send time** because users change them and quiet hours depend on when delivery happens.
+- **devices**: push tokens per user. Providers report invalid tokens, which must be deleted.
+
+<Choice
+  id="send-time"
+  objective="provider-protection"
+  prompt="Why evaluate quiet hours when the sender processes the message rather than when the API accepts it?"
+  options={[
+    { id: "delay", text: "The message may sit in the queue for minutes or hours; what matters is the time of delivery", correct: true, feedback: "Right. Accept-time checks go stale exactly when the queue backs up." },
+    { id: "cheaper", text: "It is cheaper", feedback: "The cost is similar; correctness is the reason." },
+    { id: "api", text: "The API does not know the user", feedback: "It does — the request carries the userId." }
+  ]}
+/>
+
+</Step>
+
+<Step id="high-level" title="High-level design">
+
+The notify API checks the idempotency key, publishes to a **durable queue** and returns. **Sender workers** consume the queue, render the template, check preferences and call the provider through a **circuit breaker** with a **bulkhead** (a cap on concurrent calls). A failed attempt leaves the message unacknowledged; the queue redelivers it after the visibility timeout and moves it to a **dead-letter queue** after five attempts.
+
+<Ordering
+  id="sender-loop"
+  objective="delivery-semantics"
+  prompt="Order a sender's handling of one message."
+  items={[
+    { id: "take", text: "Take a message from the queue (it becomes invisible to other senders)" },
+    { id: "prefs", text: "Check preferences, opt-outs and quiet hours" },
+    { id: "call", text: "Call the provider through the breaker, retrying once with backoff" },
+    { id: "ack", text: "Acknowledge the message only after the provider accepted it" }
+  ]}
+  explanation="Acknowledging last gives at-least-once delivery: a crash before the ack means redelivery, never loss."
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Deep dive: retries, breakers and priorities">
+
+Retry transient errors (timeouts, 5xx, 429) with exponential backoff and **jitter**; never retry permanent ones such as an invalid token. Providers enforce rate limits, so senders pace themselves with a token bucket per provider. A **circuit breaker** stops hammering a failing provider; a **bulkhead** stops a slow provider from consuming every sender. Separate queues or consumer pools by **priority** so a 50M-message campaign cannot delay a 2FA code. Duplicates reaching users are suppressed per channel: APNs collapse IDs and FCM collapse keys replace an undelivered earlier notification.
+
+<Choice
+  id="priority"
+  objective="provider-protection"
+  prompt="A marketing campaign enqueues 50M notifications, and 2FA codes start arriving minutes late. What fixes it?"
+  options={[
+    { id: "separate", text: "Separate queues or consumer pools per priority, with campaign traffic rate-shaped at the source", correct: true, feedback: "Right. Time-critical traffic must never wait behind bulk traffic in one FIFO." },
+    { id: "more", text: "Add more senders to the single queue", feedback: "It helps throughput, but codes still wait behind the whole campaign." },
+    { id: "lifo", text: "Switch the queue to LIFO", feedback: "Then old campaign messages starve indefinitely, and order within a user breaks." }
+  ]}
+/>
+
+</Step>
+
+<Step id="alternatives" title="Alternatives">
+
+- **Call the provider synchronously from the API.** One less component and immediate status, but callers inherit the provider's latency and outages.
+- **Separate queues per channel and priority.** More to operate, but a slow email provider can no longer delay push, and each provider's senders scale and rate-limit independently.
+
+<Choice
+  id="sync-call"
+  objective="notification-failures"
+  prompt="With synchronous provider calls, APNs latency rises from 40 ms to 2 s. What happens to the services that send notifications?"
+  options={[
+    { id: "slow", text: "Their requests that send notifications now take 2 s and hold threads, which can exhaust their own capacity", correct: true, feedback: "Right. The provider's slowdown propagates upstream. The queue stops the propagation." },
+    { id: "nothing", text: "Nothing; the notification service absorbs it", feedback: "Without a queue there is nothing to absorb it." },
+    { id: "faster", text: "They get faster because fewer notifications succeed", feedback: "Slow is not the same as failed; callers wait." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Failure scenarios you can run">
+
+- **The provider fails half of all requests** while passing health checks. The API keeps accepting at full speed; senders retry, the breaker opens and fails fast, and redelivery delivers the messages after the incident. Watch the queue's redelivery count, not the API's goodput.
+- **The provider is down long enough to fill the queue.** At first nothing changes for callers; then the 1,000-message queue fills and publishes are rejected with 503: back-pressure reaches the API. Loud and bounded is the right failure, but the queue must be sized for the longest outage you plan for.
+- **The provider's latency jumps by 250 ms.** 128 senders now deliver only ~440/s against 1,000/s arriving; the queue fills and callers get 503 — latency alone produced the same back-pressure as an outage.
+
+<Choice
+  id="latency-backpressure"
+  objective="notification-failures"
+  prompt="Provider latency rises from 45 ms to 295 ms and you have 128 senders. Roughly what delivery rate can they sustain?"
+  options={[
+    { id: "430", text: "About 430 per second", correct: true, feedback: "Right. Throughput = concurrency ÷ time = 128 ÷ 0.295 s ≈ 434/s." },
+    { id: "2800", text: "About 2,800 per second", feedback: "That was the rate at 45 ms: 128 ÷ 0.045." },
+    { id: "128", text: "128 per second", feedback: "Each sender completes about 3.4 requests per second, not one." }
+  ]}
+/>
+
+</Step>
+
+<Step id="wrap-up" title="Wrap up">
+
+Summarise: idempotent accept into a durable, disk-backed queue sized for hours; senders with preferences at send time, backoff with jitter, breakers, bulkheads and provider-specific rate limits; priorities separated; DLQ for poison messages; invalid tokens removed. Signals: queue depth and age per priority, provider error rate, DLQ growth. Then score each stage from 1 to 4.
+
+<Choice
+  id="dlq"
+  objective="delivery-semantics"
+  prompt="One malformed message fails every attempt. Without a dead-letter queue, what happens?"
+  options={[
+    { id: "forever", text: "It is redelivered forever, wasting a sender each time and, in an ordered partition, blocking the messages behind it", correct: true, feedback: "Right. A DLQ after N attempts removes poison messages for inspection." },
+    { id: "dropped", text: "It is dropped after the visibility timeout", feedback: "The visibility timeout makes it visible again; it does not drop it." },
+    { id: "fine", text: "Nothing; retries eventually succeed", feedback: "A malformed message fails deterministically." }
+  ]}
+/>
+
+</Step>
