@@ -3,7 +3,7 @@
 import { MotionConfig } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Suspense, useLayoutEffect, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 
 // UI preferences live on <html data-theme / data-motion>, set before paint by the inline
 // script in layout.tsx (keep the two in sync) and persisted in localStorage.
@@ -77,42 +77,113 @@ export function Providers({ children }: { children: ReactNode }) {
   return <MotionConfig reducedMotion={reducedMotion}>{children}</MotionConfig>;
 }
 
-const NAV = [
-  { href: "/learn", label: "Learn", group: "primary" },
-  { href: "/sandbox", label: "Sandbox", group: "primary" },
-  { href: "/challenges", label: "Challenges", group: "primary" },
-  { href: "/case-studies", label: "Case studies", group: "primary" },
-  { href: "/interview", label: "Interview", group: "primary" },
-  { href: "/teach", label: "Teach", group: "primary" },
-  { href: "/reference", label: "Reference", group: "utility" },
-  { href: "/progress", label: "Progress", group: "utility" },
-  { href: "/settings", label: "Settings", group: "utility" },
+const PRIMARY_NAV = [
+  { href: "/learn", label: "Learn" },
+  { href: "/sandbox", label: "Sandbox" },
+  { href: "/challenges", label: "Challenges" },
+  { href: "/case-studies", label: "Case studies" },
+  { href: "/interview", label: "Interview" },
+  { href: "/progress", label: "Progress" },
 ] as const;
+
+const MORE_NAV = [
+  { href: "/teach", label: "Teach", hint: "Classroom demos & homework links" },
+  { href: "/reference", label: "Reference", hint: "Latency numbers & calculators" },
+  { href: "/settings", label: "Settings", hint: "Theme, motion & backups" },
+] as const;
+
+const ALL_NAV = [...PRIMARY_NAV, ...MORE_NAV] as const;
+
+function useAutoCloseDetails(pathname: string) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    ref.current?.removeAttribute("open");
+  }, [pathname]);
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (ref.current?.hasAttribute("open") && !ref.current.contains(e.target as Node)) {
+        ref.current.removeAttribute("open");
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && ref.current?.hasAttribute("open")) {
+        ref.current.removeAttribute("open");
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+  return ref;
+}
 
 /** Static list (Suspense fallback while the pathname is unknown during prerender). */
 export function NavList({ pathname = "" }: { pathname?: string }) {
-  // Notebook divider tabs: the current tab is cut from the page itself and joins it.
-  // On mobile/tablet (< lg), tabs stay in a single sleek horizontal strip rather than wrapping into 5 rows.
+  const detailsRef = useAutoCloseDetails(pathname);
+  const activeMore = MORE_NAV.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+
+  // Single-row notebook divider tabs + "More" dropdown for extra options.
   return (
-    <ul className="flex flex-nowrap items-end gap-0.5 overflow-x-auto text-[0.8125rem] scrollbar-none sm:text-[0.875rem] lg:flex-wrap lg:overflow-visible">
-      {NAV.map(({ href, label, group }, index) => {
+    <ul className="flex flex-nowrap items-end gap-0.5 text-[0.875rem]">
+      {PRIMARY_NAV.map(({ href, label }) => {
         const active = pathname === href || pathname.startsWith(`${href}/`);
-        const showDivider = index > 0 && NAV[index - 1].group !== group;
         return (
           <li key={href} className="flex shrink-0 items-center">
-            {showDivider && (
-              <span aria-hidden className="mx-1 mb-2 h-3.5 w-px bg-rule/50 sm:mx-1.5 sm:mb-2.5" />
-            )}
             <Link
               href={href}
               aria-current={active ? "page" : undefined}
-              className="relative -mb-px flex min-h-9 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg sm:min-h-10"
+              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
             >
               {label}
             </Link>
           </li>
         );
       })}
+      <li className="flex shrink-0 items-center">
+        <details ref={detailsRef} className="group relative">
+          <summary
+            data-active={activeMore ? "true" : undefined}
+            className="relative -mb-px flex min-h-10 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg data-[active=true]:border-rule data-[active=true]:bg-bg data-[active=true]:font-medium data-[active=true]:text-fg data-[active=true]:before:absolute data-[active=true]:before:-inset-x-px data-[active=true]:before:-top-px data-[active=true]:before:h-0.75 data-[active=true]:before:rounded-t-md data-[active=true]:before:bg-accent [&::-webkit-details-marker]:hidden"
+          >
+            <span>{activeMore ? activeMore.label : "More"}</span>
+            <svg
+              aria-hidden
+              viewBox="0 0 12 12"
+              className="size-3 text-muted transition-transform duration-150 group-open:rotate-180"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m2.5 4.5 3.5 3.5 3.5-3.5" />
+            </svg>
+          </summary>
+          <div className="absolute left-0 top-full z-50 mt-1 w-60 rounded-[var(--radius)] border border-rule bg-surface p-1.5 shadow-e3">
+            {MORE_NAV.map(({ href, label, hint }) => {
+              const active = pathname === href || pathname.startsWith(`${href}/`);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => detailsRef.current?.removeAttribute("open")}
+                  className="flex flex-col rounded-[var(--radius-sm)] px-3 py-2 transition-colors hover:bg-surface-2 aria-[current=page]:bg-surface-2"
+                >
+                  <span className="flex items-center justify-between text-sm font-medium text-fg">
+                    <span>{label}</span>
+                    {active && <span aria-hidden className="text-xs text-accent">●</span>}
+                  </span>
+                  <span className="text-xs text-muted">{hint}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </details>
+      </li>
     </ul>
   );
 }
@@ -126,6 +197,86 @@ export function NavLinks() {
   return (
     <Suspense fallback={<NavList />}>
       <ActiveNavList />
+    </Suspense>
+  );
+}
+
+function MobileMenuInner({ pathname = "" }: { pathname?: string }) {
+  const detailsRef = useAutoCloseDetails(pathname);
+  const current = ALL_NAV.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+
+  return (
+    <details ref={detailsRef} className="group relative lg:hidden">
+      <summary
+        aria-label="Open navigation menu"
+        className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-[var(--radius)] border border-rule bg-surface px-2.5 text-xs font-medium text-fg transition-colors hover:border-fg [&::-webkit-details-marker]:hidden"
+      >
+        <span>{current ? current.label : "Menu"}</span>
+        <svg
+          aria-hidden
+          viewBox="0 0 12 12"
+          className="size-3 text-muted transition-transform duration-150 group-open:rotate-180"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m2.5 4.5 3.5 3.5 3.5-3.5" />
+        </svg>
+      </summary>
+      <div className="absolute right-0 top-full z-50 mt-1.5 w-56 rounded-[var(--radius)] border border-rule bg-surface p-1.5 shadow-e3">
+        <div className="grid gap-0.5">
+          {PRIMARY_NAV.map(({ href, label }) => {
+            const active = pathname === href || pathname.startsWith(`${href}/`);
+            return (
+              <Link
+                key={href}
+                href={href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => detailsRef.current?.removeAttribute("open")}
+                className="flex items-center justify-between rounded-[var(--radius-sm)] px-3 py-2 text-sm font-medium text-fg transition-colors hover:bg-surface-2 aria-[current=page]:bg-surface-2 aria-[current=page]:text-accent"
+              >
+                <span>{label}</span>
+                {active && <span aria-hidden className="text-xs text-accent">●</span>}
+              </Link>
+            );
+          })}
+        </div>
+        <div className="my-1 border-t border-border" />
+        <div className="grid gap-0.5">
+          {MORE_NAV.map(({ href, label, hint }) => {
+            const active = pathname === href || pathname.startsWith(`${href}/`);
+            return (
+              <Link
+                key={href}
+                href={href}
+                aria-current={active ? "page" : undefined}
+                onClick={() => detailsRef.current?.removeAttribute("open")}
+                className="flex flex-col rounded-[var(--radius-sm)] px-3 py-1.5 transition-colors hover:bg-surface-2 aria-[current=page]:bg-surface-2"
+              >
+                <span className="flex items-center justify-between text-sm font-medium text-fg">
+                  <span>{label}</span>
+                  {active && <span aria-hidden className="text-xs text-accent">●</span>}
+                </span>
+                <span className="text-[11px] text-muted">{hint}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function ActiveMobileMenu() {
+  return <MobileMenuInner pathname={usePathname()} />;
+}
+
+export function MobileNavMenu() {
+  return (
+    <Suspense fallback={<MobileMenuInner />}>
+      <ActiveMobileMenu />
     </Suspense>
   );
 }

@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Fraunces, IBM_Plex_Mono, Schibsted_Grotesk } from "next/font/google";
 import Link from "next/link";
 import { ViewTransition } from "react";
-import { NavLinks, Providers, ThemeToggle } from "@/components/ui/shell";
+import { MobileNavMenu, NavLinks, Providers, ThemeToggle } from "@/components/ui/shell";
 import { CommandPalette } from "@/components/search";
 import { SITE_NAME, SITE_URL } from "@/lib/content/schema";
 import "./globals.css";
@@ -55,23 +55,24 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
             <nav
               aria-label="Main"
-              className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-3 px-3 sm:gap-x-4 sm:px-6"
+              className="mx-auto flex h-13 max-w-7xl flex-nowrap items-center justify-between gap-2 px-3 sm:gap-4 sm:px-6"
             >
               <Link
                 href="/"
-                className="group flex min-h-11 min-w-0 shrink-0 items-center gap-2 py-1 sm:min-h-12 sm:gap-2.5 lg:min-h-13 lg:border-r lg:border-border lg:pr-5"
+                className="group flex min-w-0 shrink-0 items-center gap-2 py-1 sm:gap-2.5 lg:border-r lg:border-border lg:pr-5"
               >
                 <Logo />
                 <span className="truncate font-display text-[1rem] leading-none tracking-tight sm:text-[1.125rem]">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
-              <div className="order-last w-full border-t border-border pt-1 lg:order-none lg:w-auto lg:min-w-0 lg:flex-1 lg:self-end lg:border-t-0 lg:pt-1.5">
+              <div className="hidden min-w-0 flex-1 self-end lg:block">
                 <NavLinks />
               </div>
-              <div className="ml-auto flex min-h-11 shrink-0 items-center gap-1.5 py-1 sm:min-h-12 sm:gap-2 lg:ml-0 lg:min-h-13">
+              <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2 lg:ml-0">
                 <CommandPalette />
                 <ThemeToggle />
+                <MobileNavMenu />
               </div>
             </nav>
           </header>
