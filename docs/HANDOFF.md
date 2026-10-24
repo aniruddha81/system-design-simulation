@@ -23,3 +23,5 @@ The lead (Claude) plans, verifies and commits. Codex executes the queued work in
 3. **When Claude is back**: Claude reads `ops/codex-queue/logs/*.result.md` and `failed/`, verifies and fixes, deletes any queued recovery task it already handled, and enqueues the next work.
 
 Progress at a glance: `ops/codex-queue/logs/runner.log`.
+
+**Claude-owned and parked tasks.** `ops/codex-queue/claude/` holds tasks currently given to Claude agents, and `ops/codex-queue/parked/` holds tasks waiting for one of them (both depend on case studies 1–13). If Claude's session has ended before they landed (their paths still show uncommitted changes, or nothing at all), move every file from `claude/` and `parked/` into `pending/`. The tasks keep any existing work, so Codex finishes them.
