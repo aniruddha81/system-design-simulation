@@ -1,0 +1,69 @@
+{/*
+id: reference-youtube
+slug: youtube
+track: reference-designs
+title: "YouTube: planet-scale capacity sketch"
+description: "An illustrative video delivery aggregate: separate segment bytes, cache locality and origin capacity, then test a short Scale sweep."
+objectives:
+  - id: scale-driver
+    text: Explain the dominant capacity driver and the limits of this aggregate
+  - id: test-remedy
+    text: Choose an experiment that addresses an observed failure ladder rung
+requires: []
+activities: [R, V, Q]
+limitations:
+  - "Illustrative capacities and topology; public figures supply context rather than production configuration."
+  - "Scale correctness is unknown, and contention-sensitive predictions can be disabled."
+  - "Short sweeps cannot establish steady state; each edge has an effective ceiling near one million exchanges per second."
+sources:
+  - title: "You know what's cool? A billion hours."
+    url: "https://india.googleblog.com/2017/02/you-know-whats-cool-billion-hours.html"
+reviewedBy: "Codex automated checks; human review pending"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 8
+*/}
+
+<Step id="scale-driver" title="What drives the scale">
+
+Google reported roughly a billion daily YouTube watch-hours in February 2017. Watch-hours do not determine request rate without assumptions about segment duration, bitrate and client behavior.
+
+This **illustrative** design chooses 1 million segment requests/s globally and a fixed 256 KiB segment. Two regional CDN caches each hold 100,000 segments. Misses reach a US origin shield, which fetches from a European object store. The region matrix charges 35 ms one-way propagation across the ocean. These are invented aggregate budgets, not YouTube's infrastructure.
+
+Bytes and cache locality drive delivery capacity. A hit saves origin work but still consumes edge egress. Both caches start empty; the celebrity scenario uses stationary Zipf s=1.8 from the start, rather than claiming to model a sudden popularity shift.
+
+[Public scale anchor](https://india.googleblog.com/2017/02/you-know-whats-cool-billion-hours.html). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+
+<Choice
+  id="driver-check"
+  objective="scale-driver"
+  prompt="Which change reduces origin fetches without removing the need for edge egress?"
+  options={[{"id":"reason","text":"A larger effective cache working set, tested under the same stationary popularity.","correct":true,"feedback":"Hits avoid origin fetches, but every returned segment still traverses the edge-to-client links."},{"id":"mistake","text":"Increasing only the origin shield capacity makes edge egress disappear.","feedback":"Hits avoid origin fetches, but every returned segment still traverses the edge-to-client links."}]}
+/>
+
+</Step>
+
+<Step id="test-remedy" title="Failure ladder and what to try">
+
+**Observed Failure ladder.** At 4x, the first rung is the US admission-to-CDN edge saturating; the next two rungs are the US and European client-to-admission edges saturating. These are engine edge resources, not evidence of YouTube network limits.
+
+These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+
+**What to try.** Try a smaller fixed segment or a lower offered segment rate and compare timely-success and edge utilisation. Separately enlarge cache capacity to observe origin load; that cannot remove the client-facing byte budget. Test the shield brownout and region outage after each change. Remedies are suggestions to test; none is verified here.
+
+The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+
+When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+
+<Choice
+  id="remedy-check"
+  objective="test-remedy"
+  prompt="How should you evaluate a proposed fix for this failure ladder?"
+  options={[
+    { id: "compare", text: "Change one budget in a copy and rerun the same scenario, comparing the affected metrics and ladder.", correct: true, feedback: "A controlled comparison can test a capacity remedy. Keep correctness unknown and inspect any new bottleneck." },
+    { id: "assume", text: "Call the fix verified because its capacity number is larger.", feedback: "More configured capacity can move a bottleneck or leave a mandatory dependency unchanged. Run the comparison first." }
+  ]}
+/>
+
+</Step>
+

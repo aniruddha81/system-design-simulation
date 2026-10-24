@@ -1,0 +1,69 @@
+{/*
+id: reference-stripe-payments
+slug: stripe-payments
+track: reference-designs
+title: "Stripe-style payments: planet-scale capacity sketch"
+description: "An illustrative payments capacity aggregate: identify processor and risk bottlenecks while keeping financial correctness explicitly unknown."
+objectives:
+  - id: scale-driver
+    text: Explain the dominant capacity driver and the limits of this aggregate
+  - id: test-remedy
+    text: Choose an experiment that addresses an observed failure ladder rung
+requires: []
+activities: [R, V, Q]
+limitations:
+  - "Illustrative capacities and topology; public figures supply context rather than production configuration."
+  - "Scale correctness is unknown, and contention-sensitive predictions can be disabled."
+  - "Short sweeps cannot establish steady state; each edge has an effective ceiling near one million exchanges per second."
+sources:
+  - title: "Stripe 2024 update"
+    url: "https://stripe.com/newsroom/news/stripe-2024-update"
+reviewedBy: "Codex automated checks; human review pending"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 8
+*/}
+
+<Step id="scale-driver" title="What drives the scale">
+
+Stripe reported approximately $1.4 trillion in total payment volume for 2024. Dollar volume cannot be converted to transaction count or API RPS without additional assumptions.
+
+This **illustrative** model independently chooses 50,000 payment attempts/s and fixed 1 KiB payloads. Regional orchestrators call US risk scoring, a European external processor and a US ledger aggregate in sequence. Those dependencies represent capacity and holding time, not actual Stripe topology.
+
+There are no retries, dedup steps, balance mutations or transaction semantics in this sketch. A simulated successful response is not proof of exactly-once charging, durable settlement or a balanced ledger. Correctness remains **unknown**. The celebrity scenario represents a hot merchant key; Scale disables affected predictions because write contention needs per-key semantics.
+
+[Public scale anchor](https://stripe.com/newsroom/news/stripe-2024-update). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+
+<Choice
+  id="driver-check"
+  objective="scale-driver"
+  prompt="A Scale run reports a high timely-success estimate. What can you conclude about duplicate charges?"
+  options={[{"id":"reason","text":"Nothing about duplicate charges; correctness is unknown in Scale mode.","correct":true,"feedback":"Capacity estimates do not execute the dedup races, transactions or invariants needed to establish payment correctness."},{"id":"mistake","text":"A high success estimate proves that every charge occurred exactly once.","feedback":"Capacity estimates do not execute the dedup races, transactions or invariants needed to establish payment correctness."}]}
+/>
+
+</Step>
+
+<Step id="test-remedy" title="Failure ladder and what to try">
+
+**Observed Failure ladder.** At 1x, global timely-success is already below the ladder’s 99% threshold. At 4x, the external processor saturates, then risk scoring saturates. These rungs describe the invented dependency budgets rather than Stripe’s payment limits.
+
+These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+
+**What to try.** Try reducing offered attempts or changing processor capacity in a copy, then compare the same scenario. Test risk capacity separately so the next bottleneck is visible. Adding ledger capacity alone does not address these observed first capacity rungs. Use the existing Exact payment fixtures to investigate lost acknowledgements and duplicate-effect invariants. Remedies are suggestions to test; none is verified here.
+
+The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+
+When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+
+<Choice
+  id="remedy-check"
+  objective="test-remedy"
+  prompt="How should you evaluate a proposed fix for this failure ladder?"
+  options={[
+    { id: "compare", text: "Change one budget in a copy and rerun the same scenario, comparing the affected metrics and ladder.", correct: true, feedback: "A controlled comparison can test a capacity remedy. Keep correctness unknown and inspect any new bottleneck." },
+    { id: "assume", text: "Call the fix verified because its capacity number is larger.", feedback: "More configured capacity can move a bottleneck or leave a mandatory dependency unchanged. Run the comparison first." }
+  ]}
+/>
+
+</Step>
+

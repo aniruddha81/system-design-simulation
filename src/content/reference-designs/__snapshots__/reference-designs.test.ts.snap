@@ -1,0 +1,161 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`illustrative planet-scale references > discord > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    4,
+    "delivery-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "delivery-1",
+    "capacity saturates",
+  ],
+  [
+    16,
+    "edge:admission-0-api-0",
+    "capacity saturates",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > google-search > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    1,
+    "global",
+    "timely-success falls",
+  ],
+  [
+    4,
+    "edge:admission-0-api-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:admission-1-api-1",
+    "capacity saturates",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > netflix-cdn > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    4,
+    "edge:admission-0-edge-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:admission-1-edge-1",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:client-0-admission-0",
+    "capacity saturates",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > stripe-payments > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    1,
+    "global",
+    "timely-success falls",
+  ],
+  [
+    4,
+    "processor",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "risk",
+    "capacity saturates",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > twitter-timeline > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    1,
+    "worker-1",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "api-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "api-0",
+    "queue overflows",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > uber > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    1,
+    "global",
+    "timely-success falls",
+  ],
+  [
+    4,
+    "api-1",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "api-1",
+    "queue overflows",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > whatsapp > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    4,
+    "edge:admission-0-api-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:admission-1-api-1",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:api-0-directory",
+    "capacity saturates",
+  ],
+]
+`;
+
+exports[`illustrative planet-scale references > youtube > produces a scenario-specific failure ladder in a bounded independent sweep 1`] = `
+[
+  [
+    4,
+    "edge:admission-0-edge-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:client-0-admission-0",
+    "capacity saturates",
+  ],
+  [
+    4,
+    "edge:client-1-admission-1",
+    "capacity saturates",
+  ],
+]
+`;
