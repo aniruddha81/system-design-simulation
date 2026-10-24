@@ -1,9 +1,0 @@
-<!-- title: Complete field-notebook visual identity (D1) -->
-<!-- paths: src/app/globals.css src/app/layout.tsx src/app/page.tsx src/app/not-found.tsx src/components/ui src/components/lesson src/app/learn src/app/progress src/app/settings src/app/reference docs/DESIGN.md -->
-First read ops/codex-queue/PREAMBLE.md and follow it.
-
-Recovery task: an earlier worker may have been interrupted when the lead's session ended. The original task (worker D1, a Claude agent) replaces the generic dark navy/violet look with the 'engineer's field notebook / drafting table' identity: Paper (warm paper, graphite ink, vermilion accent, sodium-yellow highlighter, teal-ink secondary) as the default theme and Slate (green-black chalkboard, never navy) as the alternative; an editorial display serif plus refined body and mono type; keep every existing token name and add --highlight --ink-2 --font-display --paper-grid, --kind-<each of the 17 component kinds> and --heat-0..4; write docs/DESIGN.md; restyle the header, footer, home, /learn, the lesson stepper/questions, /progress, /settings, /reference and the 404. Banned: purple/indigo/violet, blue-purple gradients, navy, default glassmorphism, emoji icons. WCAG AA contrast in both themes.
-
-Inspect the current state of your paths (git diff / git status). If the work is already complete and its checks pass, just run the checks and report. Otherwise finish it, keeping everything already done. Never discard existing work.
-
-Last known state when the Claude worker stopped: the new identity was largely in place. The repo-wide typecheck fails in src/app/page.tsx and src/components/ui/hero-diagram.tsx, so fix those first. In the hero diagram the kill button covers the Cache node and the DB labels sit on the hatching; fix both. Then check every owned page in both themes.

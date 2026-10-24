@@ -435,6 +435,8 @@ export const templates: Record<string, Template> = {
     mistakes: (p) => [{ value: p.rps * p.minutes * p.bytes / 1000000, feedback: "The rate is per second but retention is in minutes. Multiply retention by 60 before estimating stored IDs." }],
     hint: "State bytes = unique IDs/s × retention seconds × bytes/entry; divide by 10^6 for decimal MB.",
   },
+  // --- Track 2 (distributed-systems) templates: append above this line ---
+  // --- Tracks 3, 4, 6 (reliability, security, interview-craft) templates: append above this line ---
 };
 
 export const templateIds = Object.keys(templates) as [string, ...string[]];
