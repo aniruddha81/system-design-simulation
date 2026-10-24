@@ -6,13 +6,14 @@ import { ProgressView, type LessonSummary } from "./progress-view";
 
 export const metadata: Metadata = {
   title: "Progress",
-  description: "Lessons completed and mastered, and the objectives due for review. Stored only on this device.",
+  description: "Lessons completed and mastered, track placement checks, and the objectives due for review. Stored only on this device.",
   robots: { index: false },
 };
 
 export default function ProgressPage() {
   const lessons: LessonSummary[] = loadLessons().map((l) => ({
     id: l.id,
+    track: l.track,
     title: l.title,
     href: `/learn/${l.track}/${l.slug}`,
     steps: l.stepIds,

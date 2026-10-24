@@ -28,11 +28,17 @@ function applyPrefs() {
   const m = read("motion");
   if (m === "system") d.removeAttribute("data-motion");
   else d.setAttribute("data-motion", m);
+  try {
+    if (localStorage.getItem("projector") === "true") d.setAttribute("data-projector", "true");
+    else d.removeAttribute("data-projector");
+  } catch {
+    /* ignore */
+  }
 }
 
 function subscribe(cb: () => void) {
   const mo = new MutationObserver(cb);
-  mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-motion", "data-pref-rev"] });
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-motion", "data-projector", "data-pref-rev"] });
   return () => mo.disconnect();
 }
 
@@ -77,6 +83,7 @@ const NAV = [
   { href: "/challenges", label: "Challenges" },
   { href: "/case-studies", label: "Case studies" },
   { href: "/interview", label: "Interview" },
+  { href: "/teach", label: "Teach" },
   { href: "/reference", label: "Reference" },
   { href: "/progress", label: "Progress" },
   { href: "/settings", label: "Settings" },

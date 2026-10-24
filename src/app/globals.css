@@ -629,3 +629,9 @@
 :root[data-motion="off"]::view-transition-new(*) {
   animation: none;
 }
+
+/* Classroom & lecture projector mode: larger base font and stronger rules for lecture halls. */
+:root[data-projector="true"] {
+  font-size: 112.5%;
+  --rule: var(--text-2);
+}

@@ -16,6 +16,7 @@ import InterviewPage from "./interview/page";
 import InterviewCasePage from "./interview/[caseId]/page";
 import LessonPage from "./learn/[track]/[lesson]/page";
 import ChallengePage from "./challenges/[id]/page";
+import TeachPage from "./teach/page";
 import NotFound from "./not-found";
 
 function checkLink(href: string) {
@@ -31,13 +32,13 @@ function checkLink(href: string) {
 
 describe("application integration", () => {
   it("has every PLAN §4 route", () => {
-    for (const route of ["", "learn", "learn/[track]/[lesson]", "sandbox", "sandbox/[designId]", "challenges", "challenges/[id]", "case-studies/[id]", "interview/[caseId]", "reference", "progress", "settings"]) {
+    for (const route of ["", "learn", "learn/[track]/[lesson]", "sandbox", "sandbox/[designId]", "challenges", "challenges/[id]", "case-studies/[id]", "interview/[caseId]", "teach", "reference", "progress", "settings"]) {
       expect(fs.existsSync(path.join("src/app", route, "page.tsx")), route).toBe(true);
     }
   });
 
   it("resolves navigation, case-study, interview and lesson links", () => {
-    const html = [renderToStaticMarkup(createElement(NavList)), renderToStaticMarkup(CaseStudiesPage()), renderToStaticMarkup(InterviewPage()),
+    const html = [renderToStaticMarkup(createElement(NavList)), renderToStaticMarkup(CaseStudiesPage()), renderToStaticMarkup(InterviewPage()), renderToStaticMarkup(TeachPage()),
       ...caseStudies.flatMap((c) => [renderToStaticMarkup(createElement(CaseStudyView, { study: c })), renderToStaticMarkup(createElement(InterviewSession, { study: c }))])];
     for (const source of [...html, ...loadLessons().map((l) => l.source)]) {
       for (const match of source.matchAll(/href="([^"]+)"/g)) checkLink(match[1]);
