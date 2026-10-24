@@ -125,9 +125,9 @@ export function NavList({ pathname = "" }: { pathname?: string }) {
   const detailsRef = useAutoCloseDetails(pathname);
   const activeMore = MORE_NAV.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
 
-  // Single-row notebook divider tabs + "More" dropdown for extra options.
+  // Single-row centered navigation pills + "More" dropdown for extra options.
   return (
-    <ul className="flex flex-nowrap items-end gap-0.5 text-[0.875rem]">
+    <ul className="flex flex-nowrap items-center justify-center gap-1 text-[0.875rem] leading-none">
       {PRIMARY_NAV.map(({ href, label }) => {
         const active = pathname === href || pathname.startsWith(`${href}/`);
         return (
@@ -135,7 +135,7 @@ export function NavList({ pathname = "" }: { pathname?: string }) {
             <Link
               href={href}
               aria-current={active ? "page" : undefined}
-              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
+              className="relative flex h-8 items-center whitespace-nowrap rounded-[var(--radius)] border border-transparent px-2.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-surface aria-[current=page]:font-medium aria-[current=page]:text-fg"
             >
               {label}
             </Link>
@@ -146,7 +146,7 @@ export function NavList({ pathname = "" }: { pathname?: string }) {
         <details ref={detailsRef} className="group relative">
           <summary
             data-active={activeMore ? "true" : undefined}
-            className="relative -mb-px flex min-h-10 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg data-[active=true]:border-rule data-[active=true]:bg-bg data-[active=true]:font-medium data-[active=true]:text-fg data-[active=true]:before:absolute data-[active=true]:before:-inset-x-px data-[active=true]:before:-top-px data-[active=true]:before:h-0.75 data-[active=true]:before:rounded-t-md data-[active=true]:before:bg-accent [&::-webkit-details-marker]:hidden"
+            className="relative flex h-8 cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-[var(--radius)] border border-transparent px-2.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg data-[active=true]:border-rule data-[active=true]:bg-surface data-[active=true]:font-medium data-[active=true]:text-fg [&::-webkit-details-marker]:hidden"
           >
             <span>{activeMore ? activeMore.label : "More"}</span>
             <svg
@@ -162,7 +162,7 @@ export function NavList({ pathname = "" }: { pathname?: string }) {
               <path d="m2.5 4.5 3.5 3.5 3.5-3.5" />
             </svg>
           </summary>
-          <div className="absolute left-0 top-full z-50 mt-1 w-60 rounded-[var(--radius)] border border-rule bg-surface p-1.5 shadow-e3">
+          <div className="absolute right-0 top-full z-50 mt-1.5 w-60 rounded-[var(--radius)] border border-rule bg-surface p-1.5 shadow-e3">
             {MORE_NAV.map(({ href, label, hint }) => {
               const active = pathname === href || pathname.startsWith(`${href}/`);
               return (
