@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  CI: "true"
+
+jobs:
+  checks:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [typecheck, lint, unit, content, golden]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        if: matrix.check == 'typecheck'
+        run: |
+          npx --no-install next typegen
+          npm run typecheck
+      - name: Lint
+        if: matrix.check == 'lint'
+        run: npm run lint
+      - name: Unit tests
+        if: matrix.check == 'unit'
+        run: npm test -- --exclude src/lib/content/content.test.ts --exclude src/engine/bench/golden.test.ts --configLoader native --pool threads --maxWorkers 1
+      - name: Content checks and solver variants
+        if: matrix.check == 'content'
+        run: npx --no-install vitest run src/lib/content/content.test.ts --configLoader native --pool threads --maxWorkers 1
+      - name: Golden replay compatibility
+        if: matrix.check == 'golden'
+        run: npx --no-install vitest run src/engine/bench/golden.test.ts --configLoader native --pool threads --maxWorkers 1
+
+  build:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-next-${{ hashFiles('package-lock.json') }}-
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-build
+          include-hidden-files: true
+          path: |
+            .next/**
+            !.next/cache/**
+            !.next/dev/**
+          retention-days: 3
+
+  e2e:
+    name: Playwright and axe (production)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-build
+          path: .next
+      - run: npx --no-install playwright install --with-deps chromium
+      # playwright.config.ts starts next start on 127.0.0.1:3100; never next dev.
+      - run: npx --no-install playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          include-hidden-files: true
+          path: |
+            e2e/.report
+            e2e/.results
+          retention-days: 7
+
+  bundle:
+    name: Bundle budgets
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-build
+          path: .next
+      - run: node scripts/check-bundle.mjs --self-test
+      - run: node scripts/check-bundle.mjs
+
+  benchmarks:
+    name: Engine benchmarks (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # baseline.json was measured on a specific desktop CPU/OS. Hosted runners vary
+    # in CPU and contention; their >15% comparison is diagnostic, not a PR gate.
+    # Keep golden determinism required above; enforce speed on the baseline machine.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Compare with machine-specific baseline
+        run: |
+          set -o pipefail
+          npm run bench 2>&1 | tee benchmark.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-benchmarks
+          path: benchmark.log
+          retention-days: 14
