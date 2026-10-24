@@ -87,11 +87,11 @@ export default function Home() {
     <>
       {/* ---- Hero: the promise and Fig. 1 ---- */}
       <section aria-labelledby="hero-title" className="mx-auto max-w-6xl px-4 pb-24 pt-10 md:pt-14 lg:pb-36">
-        <h1 id="hero-title" className="font-display text-[2.9rem] font-[360] leading-[0.98] tracking-[-0.032em] sm:text-7xl lg:text-[6.1rem]">
+        <h1 id="hero-title" className="font-display text-[2.35rem] font-[360] leading-[0.98] tracking-[-0.032em] sm:text-7xl lg:text-[6.1rem]">
           Learn system design by <em className="marker marker-draw">running it.</em>
         </h1>
-        <div className="mt-10 grid items-start gap-x-12 gap-y-12 lg:mt-14 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
-          <div className="lg:pt-2">
+        <div className="mt-10 grid grid-cols-1 items-start gap-x-12 gap-y-12 lg:mt-14 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
+          <div className="min-w-0 lg:pt-2">
             <p className="max-w-[34rem] text-lg leading-relaxed text-ink-2 lg:text-[1.1875rem]">
               Lessons with a question in every step, a simulator you can push until it breaks, and challenges graded with explained verdicts. Everything
               runs in your browser, on the same engine as the figure.
@@ -145,8 +145,8 @@ export default function Home() {
 
       {/* ---- §2 Contents: the five pillars ---- */}
       <section aria-labelledby="contents" className="border-t border-border bg-surface">
-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:gap-16 lg:py-28">
-          <div className="lg:sticky lg:top-28 lg:self-start">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-10 px-4 py-20 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)] lg:gap-16 lg:py-28">
+          <div className="min-w-0 lg:sticky lg:top-28 lg:self-start">
             <h2 id="contents" className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">
               <span className="sec">§2</span>Five ways in
             </h2>
@@ -154,18 +154,18 @@ export default function Home() {
               Each part stands alone. Together they take you from a number on a page to a system you have broken and fixed yourself.
             </p>
           </div>
-          <ol className="border-t-2 border-fg">
+          <ol className="min-w-0 border-t-2 border-fg">
             {PILLARS.map((p) => (
               <li key={p.title} className="border-b border-border">
                 <Link href={p.href} className="block transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_22%,transparent)]">
-                  <span className="grid grid-cols-[2.75rem_1fr] gap-x-4 gap-y-2 py-6 sm:grid-cols-[3.5rem_1fr] sm:gap-x-6">
-                    <svg aria-hidden viewBox="0 0 44 44" className="row-span-2 size-11 overflow-visible text-ink-2 sm:size-14">
+                  <span className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 py-6 sm:grid-cols-[3.5rem_minmax(0,1fr)] sm:gap-x-6">
+                    <svg aria-hidden viewBox="0 0 44 44" className="row-span-2 size-10 overflow-visible text-ink-2 sm:size-14">
                       <Strokes d={p.glyph} strokeWidth="1.5" />
                     </svg>
-                    <span className="flex items-baseline">
-                      <span className="font-display text-[1.75rem] leading-none tracking-tight sm:text-[2rem]">{p.title}</span>
-                      <span aria-hidden className="leader" />
-                      <span className="font-mono text-sm text-accent">{p.href}</span>
+                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
+                      <span className="font-display text-[1.5rem] leading-none tracking-tight sm:text-[2rem]">{p.title}</span>
+                      <span aria-hidden className="leader min-w-3" />
+                      <span className="font-mono text-xs text-accent sm:text-sm">{p.href}</span>
                     </span>
                     <span className="col-start-2 max-w-[52ch] leading-relaxed text-ink-2">{p.body}</span>
                   </span>
@@ -223,8 +223,8 @@ export default function Home() {
       </section>
 
       {/* ---- §4 The verdict, as an inspection slip ---- */}
-      <section aria-labelledby="verdict" className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-20 lg:grid-cols-2 lg:gap-20 lg:py-28">
-        <div>
+      <section aria-labelledby="verdict" className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 px-4 py-20 lg:grid-cols-2 lg:gap-20 lg:py-28">
+        <div className="min-w-0">
           <h2 id="verdict" className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">
             <span className="sec">§4</span>How a verdict reads
           </h2>
@@ -236,8 +236,8 @@ export default function Home() {
             Attempt this challenge
           </Link>
         </div>
-        <figure>
-          <div className="panel relative px-6 pb-6 pt-5 shadow-e2 sm:px-8">
+        <figure className="min-w-0">
+          <div className="panel relative px-5 pb-6 pt-5 shadow-e2 sm:px-8">
             <div className="flex items-baseline justify-between gap-4 border-b-2 border-fg pb-3">
               <p className="font-mono text-xs text-muted">Inspection slip</p>
               <p className="font-mono text-xs text-muted">{challenge.id}</p>
@@ -265,7 +265,7 @@ export default function Home() {
                 ))}
               </tbody>
             </table>
-            <span className="stamp absolute -top-4 right-4 bg-surface text-[0.8rem] text-success sm:-right-5">Passed ★★★</span>
+            <span className="stamp absolute -top-4 right-3 bg-surface text-[0.8rem] text-success sm:right-4">Passed ★★★</span>
           </div>
           <figcaption className="figcap mt-3">
             <b>Fig. 3</b>The pass bar for the first challenge. Three stars means the design also holds when the failure comes at a different moment.

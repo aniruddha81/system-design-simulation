@@ -145,8 +145,8 @@ export function Journey() {
     <JourneyScroller
       stage={
         <figure className="panel paper-grid overflow-hidden p-3 sm:p-5">
-          <Drawing layout={WIDE} notes={notes} times={times} className="hidden md:block" />
-          <Drawing layout={TALL} notes={notes} times={times} className="md:hidden" />
+          <Drawing layout={WIDE} notes={notes} times={times} className="hidden w-full md:block" />
+          <Drawing layout={TALL} notes={notes} times={times} className="block w-full md:hidden" />
           <figcaption className="figcap mt-2 hidden md:block">
             <b>Fig. 2</b>One cold read of user:42, then a warm one. The trace: {t.ops.join(", ")}.
           </figcaption>
@@ -193,7 +193,7 @@ function Drawing({
       data-layout={L.id}
       role="img"
       aria-label="A request's path: browser, DNS, CDN edge, load balancer, service, cache miss, database, and back."
-      className={`block w-full ${className}`}
+      className={className}
       style={{ fontFamily: "var(--font-sans)" }}
     >
       {/* Edges: a pencil guide, then the ink that appears once the request has crossed it. */}

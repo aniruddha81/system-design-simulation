@@ -184,9 +184,9 @@ export function JourneyScroller({ stage, children }: { stage: ReactNode; childre
   }, [level]);
 
   return (
-    <div ref={rootRef} className="grid items-start gap-8 md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-12">
-      <div className="md:sticky md:top-20">{stage}</div>
-      <ol className="m-0 list-none p-0">{children}</ol>
+    <div ref={rootRef} className="grid grid-cols-1 items-start gap-8 md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-12">
+      <div className="min-w-0 md:sticky md:top-20">{stage}</div>
+      <ol className="m-0 min-w-0 list-none p-0">{children}</ol>
     </div>
   );
 }

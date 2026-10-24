@@ -92,20 +92,21 @@ const NAV = [
 /** Static list (Suspense fallback while the pathname is unknown during prerender). */
 export function NavList({ pathname = "" }: { pathname?: string }) {
   // Notebook divider tabs: the current tab is cut from the page itself and joins it.
+  // On mobile/tablet (< lg), tabs stay in a single sleek horizontal strip rather than wrapping into 5 rows.
   return (
-    <ul className="flex flex-wrap items-end gap-0.5 text-[0.875rem] scrollbar-none">
+    <ul className="flex flex-nowrap items-end gap-0.5 overflow-x-auto text-[0.8125rem] scrollbar-none sm:text-[0.875rem] lg:flex-wrap lg:overflow-visible">
       {NAV.map(({ href, label, group }, index) => {
         const active = pathname === href || pathname.startsWith(`${href}/`);
         const showDivider = index > 0 && NAV[index - 1].group !== group;
         return (
-          <li key={href} className="flex items-center">
+          <li key={href} className="flex shrink-0 items-center">
             {showDivider && (
-              <span aria-hidden className="mx-1.5 mb-2.5 hidden h-3.5 w-px bg-rule/50 sm:inline-block" />
+              <span aria-hidden className="mx-1 mb-2 h-3.5 w-px bg-rule/50 sm:mx-1.5 sm:mb-2.5" />
             )}
             <Link
               href={href}
               aria-current={active ? "page" : undefined}
-              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
+              className="relative -mb-px flex min-h-9 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg sm:min-h-10"
             >
               {label}
             </Link>
@@ -142,7 +143,7 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      className="group relative grid h-8 shrink-0 grid-cols-2 items-center rounded-[var(--radius)] border border-rule bg-surface p-0.5 text-[0.8125rem] font-medium"
+      className="group relative grid h-8 shrink-0 grid-cols-2 items-center rounded-[var(--radius)] border border-rule bg-surface p-0.5 text-xs font-medium sm:text-[0.8125rem]"
       onClick={() => setPref("theme", next)}
       aria-label={`Switch to ${nextName} theme`}
       title={theme === "system" ? `Following your system theme. Switch to ${nextName}` : `Switch to ${nextName} theme`}
@@ -151,10 +152,10 @@ export function ThemeToggle() {
         aria-hidden
         className={`absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[var(--radius-sm)] bg-fg transition-transform duration-300 ease-[var(--ease-out)] ${resolvedLight ? "" : "translate-x-full"}`}
       />
-      <span aria-hidden className={`relative px-2.5 transition-colors ${resolvedLight ? "text-bg" : "text-muted group-hover:text-fg"}`}>
+      <span aria-hidden className={`relative px-2 transition-colors sm:px-2.5 ${resolvedLight ? "text-bg" : "text-muted group-hover:text-fg"}`}>
         Paper
       </span>
-      <span aria-hidden className={`relative px-2.5 transition-colors ${resolvedLight ? "text-muted group-hover:text-fg" : "text-bg"}`}>
+      <span aria-hidden className={`relative px-2 transition-colors sm:px-2.5 ${resolvedLight ? "text-muted group-hover:text-fg" : "text-bg"}`}>
         Slate
       </span>
     </button>

@@ -44,7 +44,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: PREFS_SCRIPT }} />
       </head>
-      <body className="flex min-h-dvh flex-col">
+      <body className="flex min-h-dvh flex-col overflow-x-clip">
         <a
           href="#main"
           className="sr-only z-50 rounded-sm bg-accent px-4 py-2 font-medium text-accent-ink focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
@@ -55,27 +55,27 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
             <nav
               aria-label="Main"
-              className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 px-4 sm:px-6"
+              className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-3 px-3 sm:gap-x-4 sm:px-6"
             >
               <Link
                 href="/"
-                className="group flex min-h-12 shrink-0 items-center gap-2.5 py-1.5 lg:min-h-13 lg:border-r lg:border-border lg:pr-5"
+                className="group flex min-h-11 min-w-0 shrink-0 items-center gap-2 py-1 sm:min-h-12 sm:gap-2.5 lg:min-h-13 lg:border-r lg:border-border lg:pr-5"
               >
                 <Logo />
-                <span className="font-display text-[1.125rem] leading-none tracking-tight whitespace-nowrap">
+                <span className="truncate font-display text-[1rem] leading-none tracking-tight sm:text-[1.125rem]">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
-              <div className="order-last -mx-4 w-[calc(100%+2rem)] border-t border-border px-4 pt-1 sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 lg:order-none lg:mx-0 lg:w-auto lg:flex-1 lg:self-end lg:border-t-0 lg:px-0 lg:pt-1.5">
+              <div className="order-last w-full border-t border-border pt-1 lg:order-none lg:w-auto lg:min-w-0 lg:flex-1 lg:self-end lg:border-t-0 lg:pt-1.5">
                 <NavLinks />
               </div>
-              <div className="ml-auto flex min-h-12 shrink-0 items-center gap-2 py-1.5 lg:ml-0 lg:min-h-13">
+              <div className="ml-auto flex min-h-11 shrink-0 items-center gap-1.5 py-1 sm:min-h-12 sm:gap-2 lg:ml-0 lg:min-h-13">
                 <CommandPalette />
                 <ThemeToggle />
               </div>
             </nav>
           </header>
-          <main id="main" tabIndex={-1} className="flex-1 outline-none">
+          <main id="main" tabIndex={-1} className="flex-1 overflow-x-clip outline-none">
             <ViewTransition>{children}</ViewTransition>
           </main>
           <Colophon />
@@ -113,7 +113,7 @@ function Colophon() {
 function Logo() {
   // A pencil sketch of the product: a request forks into a cache and a store.
   return (
-    <svg aria-hidden viewBox="0 0 28 28" className="size-7 shrink-0" fill="none" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden viewBox="0 0 28 28" className="size-6 shrink-0 sm:size-7" fill="none" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2.6 3.4c7.6-.6 15.2-.5 22.8-.2.6 7.1.7 14.2.3 21.4-7.6.5-15.2.5-22.8.1-.5-7.1-.6-14.2-.3-21.3Z" stroke="var(--text)" strokeWidth="1.4" />
       <circle cx="8" cy="14" r="2.3" fill="var(--accent)" />
       <path d="M10.4 14h3.4l4.3-4.6M13.8 14l4.3 4.4" stroke="var(--text)" strokeWidth="1.4" />
