@@ -1,0 +1,127 @@
+{/*
+id: interview-mistakes
+slug: interview-mistakes
+track: interview
+title: "Common interview mistakes"
+description: "The mistakes that sink otherwise strong candidates: designing before asking, unit errors in estimates, buzzword architecture, ignoring failures, and going silent."
+objectives:
+  - id: catch-estimate-errors
+    text: Catch the unit and time-base errors that inflate or deflate estimates
+  - id: avoid-premature-detail
+    text: Recognise premature detail and buzzword architecture, and replace them with reasoned components
+  - id: handle-failure-cases
+    text: Raise failure modes and operational concerns without waiting to be asked
+  - id: drive-conversation
+    text: Keep the interviewer in the loop by thinking aloud and checking in at stage boundaries
+requires: [clarifying-questions, communicating-tradeoffs]
+activities: [C, Q]
+limitations:
+  - "Mistakes are drawn from common interview rubrics and experience; there is no single published standard."
+  - "Estimation questions accept a 15% margin, matching back-of-envelope rounding."
+sources:
+  - title: "Designs, Lessons and Advice from Building Large Distributed Systems (LADIS 2009 keynote)"
+    authors: "Jeff Dean"
+    year: 2009
+    url: "https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf"
+  - title: "Non-Abstract Large System Design, The Site Reliability Workbook"
+    url: "https://sre.google/workbook/non-abstract-design/"
+  - title: "Addressing Cascading Failures, Site Reliability Engineering"
+    authors: "Mike Ulrich"
+    year: 2016
+    url: "https://sre.google/sre-book/addressing-cascading-failures/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="jumping" title="Designing before understanding">
+
+The most common mistake is starting to draw in the first minute. It feels productive, and it commits you to a design before you know the read-to-write ratio, the consistency needs or the scale. When the requirements arrive later, you are defending boxes instead of reasoning.
+
+<Choice
+  id="too-fast"
+  objective="avoid-premature-detail"
+  prompt="Thirty seconds into 'Design a parking garage reservation system', a candidate starts drawing Kafka, Cassandra and a microservice per entity. What is the main problem?"
+  options={[
+    { id: "premature", text: "They chose infrastructure before learning the scale or requirements, which may be a few hundred bookings per hour", correct: true, feedback: "Right. Every one of those components must now be justified, and the honest justification may be 'it isn't needed'." },
+    { id: "wrong-db", text: "They should have picked MongoDB", feedback: "Swapping one unjustified choice for another misses the point. The mistake is choosing before asking." },
+    { id: "no-k8s", text: "They forgot Kubernetes", feedback: "Adding more infrastructure makes the mistake worse, not better." },
+    { id: "nothing", text: "Nothing; showing knowledge of tools earns points", feedback: "Interviewers score reasoning. Tools named without reasons read as pattern-matching." }
+  ]}
+/>
+
+</Step>
+
+<Step id="units" title="Unit errors in estimates">
+
+Estimation mistakes are rarely about arithmetic. They are about **units and time bases**: dividing by 3,600 instead of 86,400, mixing bits and bytes, forgetting replication or the peak factor. Each one is a 3× to 24× error that makes the design either absurdly large or too small to work. Say each unit out loud as you go, and sanity-check the result against something you know.
+
+<VariantQuestion template="mistakes.qps" />
+
+</Step>
+
+<Step id="buzzwords" title="Buzzword architecture">
+
+Naming a technology is not a design decision. "We'll use Kafka" says nothing until you say what it decouples, what ordering it gives, and what happens when consumers fall behind.
+
+<Choice
+  id="red-flags"
+  objective="avoid-premature-detail"
+  multiple
+  prompt="Which of these statements are red flags in a design interview? Select all that apply."
+  options={[
+    { id: "magic", text: "'Kafka will handle the scale.'", correct: true, feedback: "Right. Which scale, partitioned how, consumed by whom? A component is not a reason." },
+    { id: "infinite", text: "'The cloud autoscales, so capacity isn't a concern.'", correct: true, feedback: "Right. Autoscaling has lag, limits and a bill, and databases often do not autoscale at all." },
+    { id: "microservices", text: "'Each entity gets its own microservice from day one.'", correct: true, feedback: "Right. Service boundaries need reasons: independent scaling, ownership or failure isolation. Otherwise they add network hops and distributed failures." },
+    { id: "reasoned", text: "'Reads outnumber writes 100 to 1, so I'll put a cache in front of the database and accept 30 s of staleness.'", feedback: "This is the opposite of a red flag: a component justified by a number, with its cost stated." }
+  ]}
+/>
+
+</Step>
+
+<Step id="failures" title="Forgetting that things fail">
+
+A design that only works when every component is healthy is half a design. Strong candidates bring up failure modes before being asked: what happens when the cache restarts cold, the database primary fails, a region is lost, or a retry storm begins. The failure modes lesson is your checklist.
+
+<Choice
+  id="raise-failure"
+  objective="handle-failure-cases"
+  prompt="Your design has a single Redis node holding rate-limit counters for every API request. What should you add before the interviewer asks?"
+  options={[
+    { id: "failure", text: "What happens when that node fails: fail open or closed, how counters are replicated, and how a cold restart affects limits", correct: true, feedback: "Right. Every request depends on it, so its failure behaviour is a deliberate decision, not an afterthought." },
+    { id: "colour", text: "The colour scheme of the dashboard", feedback: "Irrelevant to the system's behaviour. Spend the time on failure handling." },
+    { id: "faster", text: "Why Redis is faster than Memcached", feedback: "A micro-comparison that ignores the bigger risk: a single point of failure on the request path." },
+    { id: "assume", text: "Nothing; assume Redis never fails", feedback: "Every component fails eventually. Assuming otherwise is the mistake the interviewer is checking for." }
+  ]}
+/>
+
+</Step>
+
+<Step id="silence" title="Going silent">
+
+Interviewers can only score what they hear. Long silences, or drawing without narrating, leave them guessing whether you are stuck or brilliant. Think aloud, summarise at each stage boundary ("so far: these requirements, these numbers, this API"), and ask whether they want you to go deeper or move on. That also lets them steer you toward what they want to evaluate.
+
+<Choice
+  id="check-in"
+  objective="drive-conversation"
+  prompt="You have finished the high-level design with 20 minutes left. What is the best next move?"
+  options={[
+    { id: "checkin", text: "Summarise the design in two sentences, propose two deep dives (the riskiest components), and ask which the interviewer prefers", correct: true, feedback: "Right. You show judgement by proposing the dives, and you let the interviewer steer toward what they want to see." },
+    { id: "silent", text: "Silently start refining every box", feedback: "The interviewer cannot follow, and you may polish parts they do not care about." },
+    { id: "done", text: "Say you are done and wait", feedback: "Twenty minutes of deep dives is where most of the signal is. Stopping early forfeits it." },
+    { id: "restart", text: "Start over with a different architecture to show breadth", feedback: "Discarding a working design wastes the time spent. Show breadth through alternatives in your trade-off discussion instead." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then run a mock">
+
+The mastery check draws fresh estimation variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["mistakes.qps"]} count={3} />
+
+Now run a full mock in [interview mode](/interview). Afterwards, score yourself against the rubric and look for each mistake in this lesson in your own session.
+
+</Step>

@@ -1,0 +1,112 @@
+{/*
+id: clarifying-questions
+slug: clarifying-questions
+track: interview
+title: "Clarifying questions"
+description: "Ask the questions whose answers change the design: functional scope, non-functional targets and the shape of the load, such as follower distribution, then state your assumptions."
+objectives:
+  - id: prioritise-questions
+    text: Prioritise the clarifying questions whose answers change the design
+  - id: separate-requirements
+    text: Separate functional from non-functional requirements and state assumptions explicitly
+  - id: ask-about-distribution
+    text: Ask about the distribution of load, not just its average, and show how a skewed answer changes the design
+requires: [interview-framework]
+activities: [C, Q]
+limitations:
+  - "Fan-out numbers use averages and a single celebrity; real follower graphs are heavy-tailed with many large accounts."
+  - "Examples assume a general-purpose interview; domain-specific interviews may fix many requirements up front."
+sources:
+  - title: "Non-Abstract Large System Design, The Site Reliability Workbook"
+    url: "https://sre.google/workbook/non-abstract-design/"
+  - title: "Designing Data-Intensive Applications, chapter 1: Reliable, Scalable, and Maintainable Applications"
+    authors: "Martin Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="which-question" title="Questions that change the design">
+
+Interview prompts are vague on purpose: discovering the real problem is part of the test. But time is short, so ask the questions whose answers would make you build something **different**. "What colour is the button?" changes nothing. "Do links ever expire?" changes the data model, storage growth and the cleanup job.
+
+<Choice
+  id="best-question"
+  objective="prioritise-questions"
+  prompt="The prompt is 'Design a URL shortener.' Which clarifying question changes the design most?"
+  options={[
+    { id: "scale", text: "How many new links per day, how many redirects per day, and must short links be unguessable?", correct: true, feedback: "Right. The read-to-write ratio drives caching, the volume drives key length and storage, and unguessability decides between sequential IDs and random keys." },
+    { id: "lang", text: "Which programming language should I use?", feedback: "The language rarely changes the architecture. Pick one you know if it ever matters." },
+    { id: "logo", text: "Should the homepage show a logo?", feedback: "A product detail with no effect on the system. Skip it." },
+    { id: "cloud", text: "Which cloud provider do you use?", feedback: "Occasionally relevant, but the design should be explainable in provider-neutral terms first." }
+  ]}
+/>
+
+</Step>
+
+<Step id="requirements" title="Functional and non-functional">
+
+**Functional** requirements say what the system does: create a short link, redirect, show click counts. **Non-functional** requirements say how well: redirects in under 50 ms at p99, 99.99% availability for redirects, links never lost once created. Non-functional requirements decide most of the architecture, so get numbers for them, or propose numbers and ask if they are reasonable.
+
+<Choice
+  id="classify-reqs"
+  objective="separate-requirements"
+  multiple
+  prompt="For a chat system, which of these are non-functional requirements? Select all that apply."
+  options={[
+    { id: "latency", text: "Messages are delivered to online recipients within 500 ms at p99", correct: true, feedback: "Right. A latency target is a quality of service, not a feature." },
+    { id: "durable", text: "An acknowledged message is never lost", correct: true, feedback: "Right. Durability is a non-functional guarantee that shapes replication and acknowledgement." },
+    { id: "scale", text: "Support 50 million daily active users", correct: true, feedback: "Right. Scale targets are non-functional and drive estimates." },
+    { id: "groups", text: "Users can create group chats of up to 500 members", feedback: "That is a feature, so functional, even though its size limit will matter for fan-out." },
+    { id: "read", text: "Users can see when a message was read", feedback: "Read receipts are a feature: functional." }
+  ]}
+/>
+
+</Step>
+
+<Step id="distribution" title="Ask for the distribution, not just the average">
+
+Averages hide the cases that break systems. In a social feed, the **average** author has a few hundred followers, and fan-out on write (copying each post into every follower's timeline) looks easy. Ask the next question: *how are followers distributed?*
+
+<VariantQuestion template="clarify.fanout" />
+
+</Step>
+
+<Step id="celebrity" title="The celebrity problem">
+
+Follower counts are heavy-tailed: a few accounts have tens of millions of followers. One celebrity post under pure fan-out on write means tens of millions of timeline inserts, and followers see the post late. That is why the clarifying question matters: if the answer is "yes, there are celebrities", the standard design becomes a **hybrid**: fan out on write for ordinary authors, and merge celebrity posts into the timeline at read time.
+
+<VariantQuestion template="clarify.celebrity" />
+
+</Step>
+
+<Step id="assumptions" title="When the answer is 'you decide'">
+
+Interviewers often hand the decision back. Do not stall. State a reasonable assumption with a number, say why, and note what would change if it were wrong. That shows judgement, and gives the interviewer an easy way to redirect you.
+
+<Choice
+  id="you-decide"
+  objective="separate-requirements"
+  prompt="You ask whether the feed must be strictly chronological and the interviewer says, 'Up to you.' What is the best response?"
+  options={[
+    { id: "assume", text: "'I'll assume reverse-chronological with up to a minute of staleness, which lets me cache timelines. If ranking were required, I'd add a scoring stage at read time.'", correct: true, feedback: "Right. A concrete assumption, its design consequence, and how the design would change if the assumption were wrong." },
+    { id: "ask-again", text: "Keep asking until the interviewer picks one", feedback: "They told you it is your call. Pushing back wastes time and signals discomfort with ambiguity." },
+    { id: "both", text: "Design for both strict chronology and ML ranking in full", feedback: "Designing everything leaves no time for depth. Choose, and mention the alternative." },
+    { id: "silent", text: "Pick one silently and move on", feedback: "An unstated assumption looks like an oversight. Say it out loud and write it down." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh fan-out variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["clarify.fanout", "clarify.celebrity"]} count={4} />
+
+Practise the opening minutes in [interview mode](/interview): its requirements checklist is the list of questions to work through before you draw anything.
+
+</Step>

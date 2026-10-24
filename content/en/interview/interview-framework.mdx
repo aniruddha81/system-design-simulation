@@ -1,0 +1,150 @@
+{/*
+id: interview-framework
+slug: interview-framework
+track: interview
+title: "The interview framework"
+description: "A repeatable path through a system design interview: requirements, estimates, API, data model, high-level design, deep dives, trade-offs and wrap-up, with a time budget."
+objectives:
+  - id: follow-framework
+    text: Order the stages of a system design interview and say what each one produces
+  - id: sanity-check-estimates
+    text: Make quick estimates that decide the design, such as total storage over years
+  - id: drive-deep-dive
+    text: Choose deep dives that target the riskiest part of the design
+  - id: allocate-time
+    text: Budget interview time across the stages and protect time for deep dives
+requires: [estimation, caching]
+activities: [C, Q]
+limitations:
+  - "The framework is a default order, not a script; interviewers may steer you to any stage at any time."
+  - "Time budgets assume a single 45 or 60 minute design question with no coding."
+  - "Interview mode grades with a self-assessment rubric; there is no automated interviewer."
+sources:
+  - title: "Non-Abstract Large System Design, The Site Reliability Workbook"
+    url: "https://sre.google/workbook/non-abstract-design/"
+  - title: "Designs, Lessons and Advice from Building Large Distributed Systems (LADIS 2009 keynote)"
+    authors: "Jeff Dean"
+    year: 2009
+    url: "https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf"
+  - title: "Designing Data-Intensive Applications"
+    authors: "Martin Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="stages" title="A path you can follow under pressure">
+
+A system design interview tests whether you can take a vague goal to a defensible design, out loud, in under an hour. The interviewer is watching *how* you get there as much as where you land. A fixed sequence of stages keeps you from skipping the parts that earn the most signal:
+
+1. **Requirements**: what the system must do, and how well (scale, latency, availability, consistency).
+2. **Estimates**: the few numbers that change the design.
+3. **API**: the operations clients call, with inputs and outputs.
+4. **Data model**: the entities, keys and access patterns.
+5. **High-level design**: the boxes and arrows that serve the API at the estimated scale.
+6. **Deep dives**: two or three components examined in detail, especially where it could break.
+7. **Trade-offs**: what you chose, what it cost, and what you would change under different requirements.
+8. **Wrap-up**: summarise, name the risks, say what you would do next.
+
+The SRE Workbook's "non-abstract large system design" exercise follows the same arc: start from requirements, then make the design concrete enough to provision.
+
+<Ordering
+  id="framework-order"
+  objective="follow-framework"
+  prompt="Put the interview stages in order."
+  items={[
+    { id: "req", text: "Clarify functional and non-functional requirements" },
+    { id: "est", text: "Estimate load, storage and bandwidth" },
+    { id: "api", text: "Define the API" },
+    { id: "data", text: "Define the data model and access patterns" },
+    { id: "hld", text: "Draw the high-level design" },
+    { id: "deep", text: "Deep-dive into the riskiest components" },
+    { id: "wrap", text: "State trade-offs and wrap up" }
+  ]}
+  explanation="Each stage consumes the previous one's output: estimates need requirements, the data model needs the API's access patterns, and the high-level design needs all of them. Deep dives come after the whole design exists, so you know which part is riskiest."
+/>
+
+</Step>
+
+<Step id="requirements" title="Start with requirements, not boxes">
+
+The first minutes decide whether you design the right system. Ask what the core use cases are, who the users are, what scale to plan for, and which qualities matter most. Then write the list down where the interviewer can see it, and refer back to it.
+
+<Choice
+  id="first-minutes"
+  objective="follow-framework"
+  prompt="The interviewer says: 'Design a news feed.' What should you do first?"
+  options={[
+    { id: "clarify", text: "Ask about the core features, the number of users and posts, latency expectations and how fresh the feed must be, then write them down", correct: true, feedback: "Right. Those answers decide fan-out strategy, storage and caching, so they come before any box." },
+    { id: "draw", text: "Draw a load balancer, app servers, Kafka and Cassandra", feedback: "These may be right, but you cannot know yet. Starting with components signals pattern-matching instead of reasoning." },
+    { id: "schema", text: "Write the SQL schema for posts and users", feedback: "The schema depends on access patterns, which depend on requirements you have not asked about." },
+    { id: "ranking", text: "Discuss the ranking algorithm in detail", feedback: "Ranking is one deep dive among several. Jumping there first leaves no time for the system around it." }
+  ]}
+/>
+
+</Step>
+
+<Step id="estimates" title="Estimates that decide something">
+
+Do estimates that change a decision, not estimates for show. Does the data fit on one machine? Is the system read-heavy enough to cache? Will one database handle the write rate? Round aggressively, say the assumptions aloud, and state the conclusion: "about 4 TB per year, so a single database works for now, but we will shard within a few years."
+
+<VariantQuestion template="interview.storage-years" />
+
+</Step>
+
+<Step id="high-level" title="Simple first, then evolve">
+
+Draw the simplest design that serves the API at the estimated scale, then walk one request through it end to end. Only then add what the requirements force: a cache because reads dominate, a queue because writes can be asynchronous, sharding because the data will not fit.
+
+<Choice
+  id="evolve"
+  objective="follow-framework"
+  prompt="Your estimates give 2,000 writes per second and 200,000 reads per second for a URL shortener. Which high-level approach shows the best reasoning?"
+  options={[
+    { id: "evolve", text: "Start with stateless app servers and one database, walk a request through, then add a read cache because reads outnumber writes 100 to 1", correct: true, feedback: "Right. Each component is added for a stated reason that traces back to the numbers." },
+    { id: "everything", text: "Start with a globally sharded database, Kafka, a CDN and three cache tiers", feedback: "Some of these may be justified later, but without a reason each one is complexity the interviewer will ask you to defend." },
+    { id: "single", text: "One server with a local database, since it is a simple service", feedback: "200,000 reads per second will not fit on one server. The estimates you made rule this out." },
+    { id: "nosql", text: "Pick a NoSQL database because it scales", feedback: "'It scales' is not a reason the interviewer can evaluate. Say which access pattern and which number make it the right choice." }
+  ]}
+/>
+
+</Step>
+
+<Step id="deep-dive" title="Dive where it could break">
+
+Deep dives are where you show depth. Choose them yourself if the interviewer does not: the component with the highest load, the hardest consistency requirement, or the most likely failure. For each, say how it fails and what happens to users when it does.
+
+<Choice
+  id="pick-dive"
+  objective="drive-deep-dive"
+  prompt="You have a high-level design for a ticket booking system. Which deep dive is the best use of your time?"
+  options={[
+    { id: "oversell", text: "How two users booking the last seat at the same moment cannot both succeed, and what happens if the payment step fails after the hold", correct: true, feedback: "Right. Correctness under contention is the hardest requirement here, and it is where naive designs break." },
+    { id: "css", text: "The layout of the seat-selection page", feedback: "That is frontend design, not the system's risk. It earns little signal in a system design interview." },
+    { id: "logging", text: "Which logging library to use", feedback: "A detail with no design consequence. Name it in one sentence if asked." },
+    { id: "lb", text: "The load balancer's round-robin algorithm", feedback: "Rarely the bottleneck or the risk here. Spend the time where correctness or capacity is at stake." }
+  ]}
+/>
+
+</Step>
+
+<Step id="time" title="Budget the clock">
+
+Run out of time before the deep dives and you have shown only the easy half. Plan the minutes before you start, glance at the clock at each stage boundary, and move on when a stage has produced what the next one needs. Keep the wrap-up: summarising your design and its risks is part of the signal.
+
+<VariantQuestion template="interview.time-budget" />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then rehearse">
+
+The mastery check draws fresh time-budget and estimation variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["interview.time-budget", "interview.storage-years"]} count={4} />
+
+Then rehearse the whole framework in [interview mode](/interview): a timed (or untimed) session with a requirements checklist, the estimation calculator and the canvas, ending with a self-assessment rubric and a reference solution.
+
+</Step>

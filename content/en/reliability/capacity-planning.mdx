@@ -1,0 +1,133 @@
+{/*
+id: capacity-planning
+slug: capacity-planning
+track: reliability
+title: "Capacity planning at planet scale"
+description: "Forecast when growth hits saturation, choose headroom for queueing, failures and deploys, find the first component to break, and read a Scale-mode breaking-point sweep."
+objectives:
+  - id: forecast-saturation
+    text: Forecast when compounding growth reaches a system's saturation point
+  - id: set-headroom
+    text: Choose a utilisation target that leaves room for queueing delay, failures and deploys
+  - id: find-breaking-point
+    text: Find which component saturates first as load grows, and at what multiple
+  - id: use-load-sweep
+    text: Interpret a breaking-point sweep and choose between independent levels and a continuous ramp
+requires: [estimation, partitioning, failure-modes]
+activities: [C, Q, R]
+limitations:
+  - "Growth is modelled as a constant monthly rate; real demand has seasonality, launches and step changes."
+  - "Utilisation is assumed to scale linearly with traffic; caches, batching and contention make real curves bend."
+  - "Scale mode is a fluid approximation: percentiles are unavailable outside its validated envelope and correctness is never checked."
+sources:
+  - title: "Handling Overload, Site Reliability Engineering"
+    authors: "Alejandro Forero Cuervo"
+    year: 2016
+    url: "https://sre.google/sre-book/handling-overload/"
+  - title: "Addressing Cascading Failures, Site Reliability Engineering"
+    authors: "Mike Ulrich"
+    year: 2016
+    url: "https://sre.google/sre-book/addressing-cascading-failures/"
+  - title: "Managing Load, The Site Reliability Workbook"
+    url: "https://sre.google/workbook/managing-load/"
+  - title: "Using load shedding to avoid overload"
+    authors: "David Yanacek"
+    url: "https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="demand" title="Plan for the peak you will have">
+
+Capacity planning answers one question ahead of time: **when does demand exceed what we can serve, and what do we buy or build before then?** Plan against **peak**, not average: the daily peak, the weekly peak, and the event peak (a launch, a sale, a holiday). Then add the capacity that failures and maintenance take away.
+
+Demand has two parts: **organic growth**, which you forecast from history, and **inorganic** steps such as launches, migrations and new customers, which you get from the product calendar.
+
+<Choice
+  id="plan-basis"
+  objective="set-headroom"
+  prompt="Average load is 40k requests/s and the daily peak is 120k. A product launch next quarter is expected to add 20% at peak. What do you size the fleet against?"
+  options={[
+    { id: "peak", text: "Next quarter's peak, about 144k requests/s, plus headroom for losing a failure domain and for deploys", correct: true, feedback: "Right. You must serve the peak while something is broken or being upgraded, because that is when it will be." },
+    { id: "avg", text: "The 40k average, with autoscaling for the rest", feedback: "Autoscaling reacts in minutes and depends on available capacity. A 3× daily swing plus a launch needs planned capacity behind it." },
+    { id: "today", text: "Today's 120k peak", feedback: "That ignores the launch you already know about. Inorganic growth belongs in the plan." },
+    { id: "max", text: "Ten times today's peak, to be safe", feedback: "That is not a plan, it is a budget overrun. Size from a forecast and keep the option to add more." }
+  ]}
+/>
+
+</Step>
+
+<Step id="growth" title="Compounding growth arrives sooner">
+
+Growth compounds. A service growing 8% per month is about 2.5× bigger after a year. Linear extrapolation underestimates how soon you hit the wall, and provisioning has lead time: hardware orders, region build-outs and re-sharding take months. Work backwards from the saturation date.
+
+<VariantQuestion template="capacity.months" />
+
+</Step>
+
+<Step id="headroom" title="Why you never plan for 100%">
+
+Two forces eat into capacity.
+
+**Queueing.** As utilisation ρ approaches 1, waiting time explodes. For a simple single-server queue, mean response time is the service time ÷ (1 − ρ): twice the service time at 50%, five times at 80%, ten times at 90%. Your latency SLO breaks long before CPU reads 100%.
+
+**Loss of capacity.** A zone or region fails, a rolling deploy has a batch out, a node is draining. With N + 1 or N + 2 planning, the surviving capacity must still meet peak at an acceptable utilisation.
+
+<Choice
+  id="target-util"
+  objective="set-headroom"
+  prompt="A service runs in three zones and must survive losing one at peak, while keeping each server at or below 70% utilisation. What is the highest safe utilisation per server at peak on a normal day?"
+  options={[
+    { id: "467", text: "About 47%: after a zone fails, two thirds of the servers carry everything, and 47% × 3 ÷ 2 ≈ 70%", correct: true, feedback: "Right. Normal-day utilisation = target × surviving fraction = 70% × 2/3." },
+    { id: "70", text: "70%", feedback: "That is the limit after the failure. On losing a zone, 70% becomes 105%, past saturation." },
+    { id: "33", text: "About 33%", feedback: "That plans for losing two zones out of three, which is stricter than the requirement and wastes a third of the fleet." },
+    { id: "100", text: "100%; the load balancer will spread the excess", feedback: "There is no excess capacity to spread it to. At 100%, any loss of capacity means dropped requests." }
+  ]}
+/>
+
+</Step>
+
+<Step id="breaking-point" title="The first thing to break">
+
+As traffic grows, components saturate one at a time. The one with the highest utilisation per unit of traffic goes first, and its failure often changes the load on everything else: a saturated database slows responses, timeouts trigger retries, and retries raise load on the service tier too. Find the first rung before you find out in production.
+
+<VariantQuestion template="capacity.first-saturation" />
+
+</Step>
+
+<Step id="sweep" title="Sweep the load in Scale mode">
+
+Arithmetic gives the first rung. A **breaking-point sweep** gives the whole ladder. In the sandbox's **Scale** tab, a sweep runs the same design at up to twelve load levels, log-spaced from 1× to 1000× the selected load, in a fluid model fast enough for planet-scale traffic. It then shows the **failure ladder**: the predicted order in which components saturate, overflow queues or lose timely success, with the load multiple of each rung.
+
+It has two kinds, and they answer different questions:
+
+- **Independent levels**: each level starts fresh after a warm-up, so caches, autoscaling and queues are reset. This answers "what can a warmed-up system sustain at this load?"
+- **Continuous ramp**: state carries over between levels. This exposes what history causes: retry storms, autoscaling lag and cache churn.
+
+Each rung offers a remedy to try. It is only a suggestion until a what-if run with the remedy actually improves the ladder; the panel marks it **verified** only then.
+
+<Choice
+  id="sweep-kind"
+  objective="use-load-sweep"
+  prompt="You suspect your system enters a retry storm when load climbs quickly, even though each load level is fine on its own after warm-up. Which sweep can show it?"
+  options={[
+    { id: "continuous", text: "A continuous ramp, because backlogs, retries and cache state carry over from level to level", correct: true, feedback: "Right. A retry storm is a history effect. Independent levels reset the state that sustains it." },
+    { id: "independent", text: "Independent levels, because each level is measured cleanly", feedback: "Clean measurements are the point of independent levels, and that is why they hide history-dependent failures like retry storms." },
+    { id: "either", text: "Either; both report the same breaking point", feedback: "They can differ, which is why each result says which kind produced it. A metastable design can pass every independent level and fail the ramp." },
+    { id: "none", text: "Neither; a sweep only measures CPU", feedback: "The sweep reports utilisation, backlog, drops and estimated timely success per component, which is what reveals a storm." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then find the breaking point">
+
+The mastery check draws fresh growth and saturation variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["capacity.months", "capacity.first-saturation"]} count={4} />
+
+Now find a breaking point for real. Open the [no-cache design in the sandbox](/sandbox?template=no-cache), go to the **Scale** tab, press **1B requests/day**, and run a breaking-point sweep with independent levels. Note the first rung, try its suggested remedy, then rerun the sweep as a continuous ramp and compare the ladders.
+
+</Step>

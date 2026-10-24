@@ -1,0 +1,158 @@
+{/*
+id: deployments
+slug: deployments
+track: reliability
+title: "Deployments: blue/green, canary, flags and rollback"
+description: "Ship changes without spending the error budget: size a canary's blast radius, plan rolling capacity, separate deploy from release with flags, and keep rollback safe."
+objectives:
+  - id: choose-rollout
+    text: Choose between rolling, blue/green and canary deployment for a change and its risks
+  - id: size-canary-blast-radius
+    text: Estimate how many users a bad canary affects before automated rollback
+  - id: plan-rollout-capacity
+    text: Choose a rolling-update batch size that keeps the fleet within its utilisation target
+  - id: keep-rollback-safe
+    text: Use feature flags and expand/contract changes so a rollback never breaks data
+requires: [slo-error-budgets]
+activities: [C, Q]
+limitations:
+  - "Canary failure counts assume the bad build fails a constant fraction of its requests; real regressions often affect only some routes or users."
+  - "Rolling capacity assumes identical instances and evenly balanced load; warm-up time after restart is ignored."
+  - "Canary analysis is described, not simulated: the statistics of comparing a small canary to a baseline are out of scope."
+sources:
+  - title: "Canarying Releases, The Site Reliability Workbook"
+    url: "https://sre.google/workbook/canarying-releases/"
+  - title: "Release Engineering, Site Reliability Engineering"
+    authors: "Dinah McNutt"
+    year: 2016
+    url: "https://sre.google/sre-book/release-engineering/"
+  - title: "Automating safe, hands-off deployments"
+    authors: "Clare Liguori"
+    url: "https://aws.amazon.com/builders-library/automating-safe-hands-off-deployments/"
+  - title: "BlueGreenDeployment"
+    authors: "Martin Fowler"
+    year: 2010
+    url: "https://martinfowler.com/bliki/BlueGreenDeployment.html"
+  - title: "Feature Toggles (aka Feature Flags)"
+    authors: "Pete Hodgson"
+    year: 2017
+    url: "https://martinfowler.com/articles/feature-toggles.html"
+  - title: "Details of the Cloudflare outage on July 2, 2019"
+    authors: "John Graham-Cumming"
+    year: 2019
+    url: "https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="strategies" title="Three ways to replace running code">
+
+Most outages start with a change. The deployment strategy decides how many users see a bad change, and how fast you can take it back.
+
+- **Rolling**: replace instances in batches. No extra capacity, but old and new versions serve side by side for the whole rollout, and rollback is another rolling deploy.
+- **Blue/green**: bring up a complete new fleet (green) next to the old one (blue), test it, then switch traffic at the router. Rollback is switching back, in seconds, at the cost of running two fleets during the switch.
+- **Canary**: send a small share of real traffic to the new version, compare its metrics with the old version, and widen in stages only if they match.
+
+Strategies combine: a canary first, then a rolling or blue/green widening, with **bake time** at each stage. AWS's deployment pipelines go one zone in one region first, then widen across regions in waves.
+
+<Choice
+  id="pick-strategy"
+  objective="choose-rollout"
+  prompt="A change rewrites the pricing engine. Tests pass, but nobody is sure how it behaves on real traffic. You want to limit how many users a bug can reach. Which strategy fits best?"
+  options={[
+    { id: "canary", text: "A canary to 1% of traffic with automated comparison against the old version, then staged widening", correct: true, feedback: "Right. Real traffic finds what tests miss, and at 1% a bug reaches a small share of users before the comparison fails and rolls it back." },
+    { id: "bluegreen", text: "Blue/green: switch 100% of traffic to the new fleet, and switch back if it breaks", feedback: "Rollback is fast, but every user hits the new engine at once. Blue/green limits time to recover, not blast radius." },
+    { id: "rolling-all", text: "A rolling deploy of the whole fleet in one go", feedback: "Within minutes most instances run the new code. Without staged checks, a bug reaches most users before anyone looks." },
+    { id: "friday", text: "Deploy everywhere at off-peak hours so fewer users notice", feedback: "Fewer users are online, but so are fewer engineers, and some bugs only appear at peak load. Timing is not a substitute for staged exposure." }
+  ]}
+/>
+
+</Step>
+
+<Step id="canary" title="A canary's blast radius">
+
+A canary turns "will this break production?" into a bounded experiment. Its blast radius is the traffic share × the time until rollback × how badly it fails. Halving the canary share or the detection time halves the damage, which is why automated rollback on SLO metrics matters more than a careful human watching a dashboard.
+
+A canary also needs enough traffic to be statistically meaningful: at 0.1% of a quiet service, it may take hours to see a single error.
+
+<VariantQuestion template="deploy.canary-blast" />
+
+</Step>
+
+<Step id="rolling" title="Rolling updates need headroom">
+
+During a rolling update, the instances in the current batch are out of service: draining, restarting, warming caches. The rest carry all the traffic. Pick the batch so the remaining instances stay under your utilisation target at peak, not just under 100%, because a freshly restarted instance is slower until it warms up.
+
+<VariantQuestion template="deploy.rolling-batch" />
+
+</Step>
+
+<Step id="config" title="Configuration is a deployment too">
+
+On July 2, 2019, Cloudflare deployed a new web-application-firewall rule containing a regular expression that backtracked catastrophically. The rule went to every machine worldwide at once, CPU hit 100% everywhere, and traffic dropped for about 27 minutes. The code was fine; the **configuration** had skipped the staged rollout code would have had.
+
+<Choice
+  id="config-rollout"
+  objective="choose-rollout"
+  prompt="What is the main lesson for your own release process?"
+  options={[
+    { id: "stage-config", text: "Roll out configuration and rules in stages with bake time and automatic rollback, the same as code", correct: true, feedback: "Right. Config changes take effect faster than code and reach everything at once, so they need the same staged exposure." },
+    { id: "no-regex", text: "Ban regular expressions", feedback: "The specific bug was a regex, but any global, instantaneous change can fail the same way. The lesson is about rollout, not regexes." },
+    { id: "more-cpu", text: "Provision more CPU headroom", feedback: "Catastrophic backtracking can consume any amount of CPU. Headroom does not save you from an unbounded computation." },
+    { id: "faster-push", text: "Make global pushes faster so fixes also arrive faster", feedback: "Speed cuts both ways. A faster global push spreads the next bad change faster too." }
+  ]}
+/>
+
+</Step>
+
+<Step id="flags" title="Separate deploy from release">
+
+A **feature flag** ships new code dark and turns it on at runtime, for internal users, then 1%, then everyone. Turning the flag off is a rollback that takes seconds and needs no deploy. Flags carry costs: every flag doubles a code path to test, and stale flags pile up, so give each one an owner and a removal date.
+
+A rollback is only safe if the old code can read what the new code wrote. Database changes therefore use **expand/contract**: add the new column or table first (both versions work), deploy code that writes both, migrate, switch reads, and only in a later release remove the old shape.
+
+<Ordering
+  id="expand-contract"
+  objective="keep-rollback-safe"
+  prompt="Order the steps of renaming a column without ever blocking a rollback."
+  items={[
+    { id: "add", text: "Add the new column; the old code ignores it" },
+    { id: "dual", text: "Deploy code that writes both columns and still reads the old one" },
+    { id: "backfill", text: "Backfill the new column for existing rows" },
+    { id: "read-new", text: "Deploy code that reads the new column, behind a flag" },
+    { id: "drop", text: "After a bake period, stop writing the old column and drop it" }
+  ]}
+  explanation="Each step leaves a state that both the current and the previous release can handle, so any single step can be rolled back. Dropping the old column comes last because it is the only irreversible step."
+/>
+
+</Step>
+
+<Step id="rollback" title="Roll back first, debug later">
+
+When a deploy correlates with a symptom, the fastest mitigation is usually to undo it. Debugging forward with a hotfix while users are failing spends error budget on your curiosity.
+
+<Choice
+  id="rollback-decision"
+  objective="keep-rollback-safe"
+  prompt="Ten minutes after a deploy, checkout errors rise from 0.1% to 3%. The cause is unclear. What do you do?"
+  options={[
+    { id: "rollback", text: "Roll back now, confirm the errors drop, then investigate with the bad build off the critical path", correct: true, feedback: "Right. Rollback is a tested, reversible action. If errors do not drop, you have also learned the deploy was not the cause." },
+    { id: "hotfix", text: "Find the bug and ship a hotfix", feedback: "A hotfix is a new, untested change made under pressure. Meanwhile users keep failing." },
+    { id: "wait", text: "Wait 30 minutes to see if it is noise", feedback: "A 30× jump in error rate right after a deploy is not noise. The burn-rate arithmetic says act now." },
+    { id: "scale", text: "Add more instances", feedback: "If the new code is wrong, more instances of it fail more requests, faster." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh canary and rolling-update variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["deploy.canary-blast", "deploy.rolling-batch"]} count={4} />
+
+Next: [capacity planning](/learn/reliability/capacity-planning), which tells you how much headroom those rollouts and failovers have to work with.
+
+</Step>

@@ -1,0 +1,126 @@
+{/*
+id: key-management
+slug: key-management
+track: security
+title: "Key management and secrets"
+description: "Envelope encryption with a KMS, rotation that rewraps keys instead of data, the key lifecycle from NIST SP 800-57, and how to keep secrets out of code."
+objectives:
+  - id: design-envelope-encryption
+    text: Design envelope encryption with data keys and a key-encryption key, and estimate its KMS load
+  - id: plan-key-rotation
+    text: Plan a key rotation that rewraps data keys instead of re-encrypting data
+  - id: follow-key-lifecycle
+    text: Apply key lifecycle rules (single purpose, cryptoperiods, compromise response) to an incident
+  - id: manage-secrets
+    text: Keep secrets out of code and images, and respond correctly when one leaks
+requires: [encryption]
+activities: [C, Q]
+limitations:
+  - "KMS rates and limits vary by provider and region; the numbers in questions are illustrative."
+  - "HSM internals, key ceremonies and quorum-based key custody are described, not taught."
+sources:
+  - title: "NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management, Part 1: General"
+    authors: "E. Barker"
+    year: 2020
+    url: "https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final"
+  - title: "Envelope encryption, Google Cloud Key Management Service documentation"
+    url: "https://cloud.google.com/kms/docs/envelope-encryption"
+  - title: "Key Management Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Key_Management_Cheat_Sheet.html"
+  - title: "Secrets Management Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="envelope" title="Envelope encryption">
+
+Encrypting terabytes directly with a key held in a **key management service** (KMS) or hardware security module would send every byte through it. KMS encrypt calls also cap the payload size; AWS KMS, for example, accepts at most 4 KB of plaintext per call. Instead, use **envelope encryption**:
+
+1. Generate a **data encryption key** (DEK) locally or from the KMS, and encrypt the data with it.
+2. Ask the KMS to encrypt (**wrap**) the DEK under a **key-encryption key** (KEK) that never leaves the KMS.
+3. Store the wrapped DEK next to the ciphertext; discard the plaintext DEK.
+
+To read, send the wrapped DEK to the KMS, get the DEK back, and decrypt locally. The KMS sees only small keys, enforces access policy on every unwrap, and logs each one. Caching a DEK across many objects trades a smaller KMS bill and load for a larger blast radius if one DEK leaks.
+
+<VariantQuestion template="keys.envelope-rate" />
+
+</Step>
+
+<Step id="hierarchy" title="Why the hierarchy helps">
+
+The KEK is the one secret that matters, and it never leaves hardware you trust. Access to data becomes access to *unwrap*, which is an audited, revocable permission.
+
+<Choice
+  id="why-envelope"
+  objective="design-envelope-encryption"
+  multiple
+  prompt="Why do large systems use envelope encryption instead of sending all data to the KMS? Select all that apply."
+  options={[
+    { id: "volume", text: "Bulk data is encrypted locally at full speed; only small keys go to the KMS", correct: true, feedback: "Right. KMS calls are network round trips with size and rate limits. Data keys keep them small and rare." },
+    { id: "audit", text: "Every unwrap is a policy-checked, logged KMS call, so data access is auditable", correct: true, feedback: "Right. Revoking unwrap permission cuts off access to everything under that KEK." },
+    { id: "rotate", text: "Rotating the KEK only needs the small wrapped keys rewrapped, not the data re-encrypted", correct: true, feedback: "Right. That is the next step's arithmetic." },
+    { id: "no-keys", text: "It removes the need to protect any key at all", feedback: "The KEK still needs protection, and plaintext DEKs exist in memory while in use. Envelope encryption concentrates the risk, it does not remove it." }
+  ]}
+/>
+
+</Step>
+
+<Step id="rotation" title="Rotation rewraps keys, not data">
+
+Rotating a KEK creates a new key **version**. New DEKs are wrapped with it; existing wrapped DEKs are decrypted with the old version and rewrapped with the new one. The old version stays available for decryption until nothing references it. The bulk data never moves, so the job scales with the number of DEKs, not with terabytes.
+
+<VariantQuestion template="keys.rewrap" />
+
+</Step>
+
+<Step id="lifecycle" title="The key lifecycle">
+
+NIST SP 800-57 frames every key as having a lifecycle: generated, activated, used for a defined **cryptoperiod**, deactivated (decrypt or verify only), and eventually destroyed. Two rules from it prevent many incidents: use each key for **one purpose** only (never the same key for encryption and signing, or for two different systems), and plan **compromise recovery** before a compromise.
+
+<Choice
+  id="dek-leak"
+  objective="follow-key-lifecycle"
+  prompt="A debugging change accidentally logged one plaintext data key. The data it encrypted is in object storage. What does a correct response include?"
+  options={[
+    { id: "reencrypt", text: "Treat that DEK as compromised: re-encrypt the data it protects under a new DEK, destroy the old one, and purge the logs", correct: true, feedback: "Right. The attacker would hold the DEK itself, so only re-encrypting the data it protects closes the hole." },
+    { id: "rotate-kek", text: "Rotate the KEK", feedback: "Rotating the KEK rewraps DEKs, but the leaked DEK is already in plaintext. Anyone holding it can still decrypt the data it protects." },
+    { id: "delete-log", text: "Delete the log line and move on", feedback: "Logs are copied to aggregators, backups and laptops. You cannot prove every copy is gone, so the key must be replaced." },
+    { id: "nothing", text: "Nothing, because the data is in a private bucket", feedback: "Encryption at rest exists precisely for when access controls fail. Assume the bucket will be exposed one day." }
+  ]}
+/>
+
+</Step>
+
+<Step id="secrets" title="Secrets are keys too">
+
+Database passwords, API keys and signing keys are secrets with the same lifecycle. OWASP's guidance: never commit them to source control or bake them into images; fetch them at runtime from a **secrets manager** with per-workload access and audit logs; prefer **short-lived, automatically issued credentials** (workload identity, dynamic database users) over long-lived static ones; and rotate on a schedule so rotation is routine, not an emergency.
+
+<Ordering
+  id="secret-leak"
+  objective="manage-secrets"
+  prompt="A production database password was pushed to a public repository an hour ago. Order the response."
+  items={[
+    { id: "rotate", text: "Rotate the password immediately and deploy the new one from the secrets manager" },
+    { id: "audit", text: "Check database and network audit logs for use of the old credential since the push" },
+    { id: "history", text: "Remove the secret from the repository history and any forks or caches you control" },
+    { id: "prevent", text: "Add secret scanning to pre-commit hooks and CI, and move the service to short-lived credentials" }
+  ]}
+  explanation="Rotation comes first because public repositories are scanned by attackers within minutes, so deleting the commit does not undo the exposure. Investigation follows while the hole is closed, and prevention makes the next leak less likely and less damaging."
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh envelope-encryption and rotation variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["keys.envelope-rate", "keys.rewrap"]} count={4} />
+
+Next, deleting data for good: per-user keys make that possible in [privacy and data deletion](/learn/security/privacy-deletion).
+
+</Step>

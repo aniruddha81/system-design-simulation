@@ -1,0 +1,161 @@
+{/*
+id: disaster-recovery
+slug: disaster-recovery
+track: reliability
+title: "Disaster recovery: RPO, RTO and backups"
+description: "Set recovery point and time objectives, see what really bounds them, why replicas are not backups, and how to choose and rehearse a DR strategy."
+objectives:
+  - id: define-rpo-rto
+    text: Distinguish recovery point objective from recovery time objective for a given incident
+  - id: reason-rpo
+    text: Compute worst-case data loss from the backup and log-shipping design
+  - id: estimate-rto
+    text: Estimate restore time from data size and restore throughput, and list what else RTO includes
+  - id: protect-against-logical-loss
+    text: Explain why replicas do not protect against deletion or corruption, and what makes a backup trustworthy
+  - id: choose-dr-strategy
+    text: Choose between backup-and-restore, pilot light, warm standby and active-active for an RPO and RTO
+requires: [replication, availability]
+activities: [C, Q]
+limitations:
+  - "Restore time is modelled as a single sustained throughput; real restores have per-file overheads, throttling and index rebuilds."
+  - "Log shipping is modelled as periodic; continuous streaming replication gives a smaller, variable RPO."
+  - "DR strategies are described by their typical RPO and RTO ranges; costs depend heavily on the provider and workload."
+sources:
+  - title: "Data Integrity: What You Read Is What You Wrote, Site Reliability Engineering"
+    authors: "Raymond Blum, Rhandeev Singh"
+    year: 2016
+    url: "https://sre.google/sre-book/data-integrity/"
+  - title: "Disaster Recovery of Workloads on AWS: Recovery in the Cloud"
+    authors: "Amazon Web Services"
+    url: "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-workloads-on-aws.html"
+  - title: "Postmortem of database outage of January 31"
+    authors: "GitLab"
+    year: 2017
+    url: "https://about.gitlab.com/blog/2017/02/10/postmortem-of-database-outage-of-january-31/"
+  - title: "Continuous Archiving and Point-in-Time Recovery (PITR), PostgreSQL documentation"
+    url: "https://www.postgresql.org/docs/current/continuous-archiving.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="objectives" title="Two numbers: how much data, how long">
+
+Every recovery plan answers two questions.
+
+- **RPO, recovery point objective**: how much recently committed data you may lose, measured as time before the incident. An RPO of 5 minutes means the restored system may be missing up to the last 5 minutes of writes.
+- **RTO, recovery time objective**: how long until the service works again, measured from the start of the incident.
+
+They are independent. A nightly backup restored in 20 minutes has a short RTO and a 24-hour RPO. A synchronous replica in another region has an RPO near zero but may still take an hour to promote if the runbook is manual.
+
+<Choice
+  id="rpo-or-rto"
+  objective="define-rpo-rto"
+  prompt="After a region loss, the payments database is back in 40 minutes, but the last 3 minutes of committed payments are missing. Which statement is right?"
+  options={[
+    { id: "both", text: "The recovery took 40 minutes against the RTO, and lost 3 minutes of data against the RPO", correct: true, feedback: "Right. Time to recover and data lost are separate measures, and each needs its own objective." },
+    { id: "rpo40", text: "The RPO was 40 minutes", feedback: "40 minutes is how long the service was down, which is measured against the RTO. RPO is about data lost." },
+    { id: "rto3", text: "The RTO was 3 minutes", feedback: "3 minutes is the data-loss window, measured against the RPO. The outage itself lasted 40 minutes." },
+    { id: "fine", text: "Nothing was lost, because the database is running again", feedback: "Running again is not the same as complete. Payments committed and acknowledged in those 3 minutes are gone unless another system holds them." }
+  ]}
+/>
+
+</Step>
+
+<Step id="rpo" title="What sets the RPO">
+
+You restore from the most recent **consistent** copy you still have. A nightly snapshot alone gives an RPO up to 24 hours. Continuous archiving of the write-ahead log, as PostgreSQL does, lets you restore the snapshot and then **replay** shipped log segments on top, so the RPO becomes the gap since the last segment shipped.
+
+Asynchronous replication to another region gives an RPO equal to the replication lag at the moment of failure, which grows exactly when the system is under stress. Only synchronous replication to a separate failure domain gives an RPO of zero, and it costs a cross-region round trip on every commit.
+
+<VariantQuestion template="dr.rpo-writes" />
+
+</Step>
+
+<Step id="logical-loss" title="Replicas are not backups">
+
+Replication copies every change, including the bad ones. A `DROP TABLE`, a buggy migration, a ransomware encryption or an `rm -rf` on the wrong host reaches every replica within seconds.
+
+In January 2017, a GitLab engineer removed the database directory on the primary instead of a broken secondary. Of the several backup and replication mechanisms in place, none could be restored quickly; the team recovered from a staging snapshot about six hours old and lost roughly six hours of production data.
+
+A backup protects you only if it is **isolated** (another account or set of credentials, so the same mistake or attacker cannot delete it), **immutable** for its retention period, **point-in-time** (so you can restore to just before the mistake), and **restored regularly**. The SRE book's line: nobody wants backups, they want restores.
+
+<Choice
+  id="logical-protection"
+  objective="protect-against-logical-loss"
+  prompt="A migration bug silently corrupted a column in every row two hours ago. Which protection lets you recover?"
+  options={[
+    { id: "pitr", text: "Point-in-time recovery from isolated backups plus archived logs, to a moment before the migration", correct: true, feedback: "Right. You restore to a point before the corruption, then reconcile the writes made since then." },
+    { id: "replica", text: "Fail over to the synchronous replica in another region", feedback: "The replica received the same corrupting writes, synchronously. It is an exact copy of the damage." },
+    { id: "raid", text: "RAID 10 on the database volumes", feedback: "RAID protects against disk failure. It faithfully mirrors corrupt writes." },
+    { id: "snapshot-same", text: "Hourly snapshots stored in the same account and region with delete permission for the app role", feedback: "Snapshots help, but the same mistake, region failure or compromised role can delete them too. Isolate them." }
+  ]}
+/>
+
+</Step>
+
+<Step id="restore-time" title="Restores take time you can calculate">
+
+The data copy is often the longest part of a restore, and it is arithmetic: size ÷ sustained throughput. Note the units: storage is in bytes, links in bits.
+
+But RTO covers the whole sequence: **detect** the incident, **decide** to fail over (often the slowest human step), **provision** capacity, **copy** data, **replay** logs, **verify** integrity, and **shift traffic**, including DNS TTLs and client connection pools.
+
+<VariantQuestion template="dr.restore-hours" />
+
+</Step>
+
+<Step id="drill" title="Rehearse the recovery">
+
+A restore that has never been run is a hypothesis. The order of a point-in-time recovery after a bad deploy matters: if you restore before stopping the damage, you restore into the same bug.
+
+<Ordering
+  id="pitr-runbook"
+  objective="protect-against-logical-loss"
+  prompt="Put the steps of recovering from a destructive bad deploy in order."
+  items={[
+    { id: "stop", text: "Stop the damage: roll back the deploy or block the writes that corrupt data" },
+    { id: "pick", text: "Find the last good point in time from logs and the deploy timeline" },
+    { id: "restore", text: "Restore the most recent snapshot before that point into a separate instance" },
+    { id: "replay", text: "Replay archived logs up to just before the bad writes" },
+    { id: "verify", text: "Verify the restored data with integrity checks and spot comparisons" },
+    { id: "cutover", text: "Reconcile later good writes and shift traffic to the restored database" }
+  ]}
+  explanation="Stopping the damage first keeps the target still. Restoring into a separate instance keeps the current state available for reconciliation; verification before cutover means you never swap one bad database for another."
+/>
+
+</Step>
+
+<Step id="strategy" title="Pick a DR strategy by RPO, RTO and cost">
+
+AWS's DR whitepaper describes four common strategies, in order of rising cost and falling RPO and RTO:
+
+- **Backup and restore**: copy backups to another region and rebuild everything on demand. RPO in hours, RTO in hours. Cheapest.
+- **Pilot light**: data is replicated continuously; the core is provisioned but switched off. RPO in minutes, RTO in tens of minutes.
+- **Warm standby**: a scaled-down but running copy takes traffic after scaling up. RPO in seconds to minutes, RTO in minutes.
+- **Multi-site active-active**: every region serves live traffic. RPO near zero (or zero with synchronous writes), RTO near zero, at roughly double the cost.
+
+<Choice
+  id="dr-choice"
+  objective="choose-dr-strategy"
+  prompt="An internal reporting tool can be down for half a day after a region loss and can lose an hour of data. Cost matters. Which strategy fits?"
+  options={[
+    { id: "backup", text: "Backup and restore, with cross-region backups and a tested rebuild script", correct: true, feedback: "Right. Half a day of RTO and an hour of RPO fit comfortably, and you pay only for backup storage until you need it." },
+    { id: "active", text: "Active-active in two regions", feedback: "It meets the objectives many times over at roughly double the running cost. The requirement does not justify it." },
+    { id: "warm", text: "Warm standby with continuous replication", feedback: "It would work, but you pay for always-on infrastructure to achieve minutes when the business accepts hours." },
+    { id: "none", text: "No DR plan; the cloud provider handles region failures", feedback: "Providers keep their services running, not your data and stack in another region. Without backups elsewhere, a region loss could be permanent data loss." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh data-loss and restore-time variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["dr.rpo-writes", "dr.restore-hours"]} count={4} />
+
+Continue to [multi-region architectures](/learn/reliability/multi-region), where the RPO and RTO choices become topology.
+
+</Step>

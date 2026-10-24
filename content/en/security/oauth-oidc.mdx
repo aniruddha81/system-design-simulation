@@ -1,0 +1,148 @@
+{/*
+id: oauth-oidc
+slug: oauth-oidc
+track: security
+title: "OAuth 2.0 and OpenID Connect"
+description: "Delegated access without sharing passwords: the authorisation code flow with PKCE step by step, which grant fits which client, and how an ID token differs from an access token."
+objectives:
+  - id: order-pkce-flow
+    text: Put the steps of the authorisation code flow with PKCE in order
+  - id: explain-pkce
+    text: Explain what PKCE prevents and where its strength comes from
+  - id: choose-grant
+    text: Choose the OAuth grant for a given client type, and recognise deprecated grants
+  - id: distinguish-oidc
+    text: Distinguish an OpenID Connect ID token from an OAuth access token and use each correctly
+requires: [sessions-jwt]
+activities: [C, Q]
+limitations:
+  - "The flow is shown for a browser-based or native client; device, CIBA and token-exchange flows are out of scope."
+  - "Sender-constrained tokens (DPoP, mutual TLS) are mentioned but not taught in depth."
+sources:
+  - title: "RFC 6749: The OAuth 2.0 Authorization Framework"
+    authors: "D. Hardt (ed.)"
+    year: 2012
+    url: "https://www.rfc-editor.org/rfc/rfc6749"
+  - title: "RFC 7636: Proof Key for Code Exchange by OAuth Public Clients"
+    authors: "N. Sakimura, J. Bradley, N. Agarwal"
+    year: 2015
+    url: "https://www.rfc-editor.org/rfc/rfc7636"
+  - title: "RFC 9700: Best Current Practice for OAuth 2.0 Security"
+    authors: "T. Lodderstedt, J. Bradley, A. Labunets, D. Fett"
+    year: 2025
+    url: "https://www.rfc-editor.org/rfc/rfc9700"
+  - title: "OpenID Connect Core 1.0"
+    authors: "N. Sakimura, J. Bradley, M. Jones, B. de Medeiros, C. Mortimore"
+    url: "https://openid.net/specs/openid-connect-core-1_0.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="roles" title="Delegation without the password">
+
+A photo-printing site wants to read your photos from a storage service. Before OAuth, you would have given it your storage password, granting it everything, forever, until you changed the password. **OAuth 2.0** (RFC 6749) replaces that with a scoped, revocable token.
+
+It names four roles: the **resource owner** (you), the **client** (the printing site), the **authorisation server** (which authenticates you and issues tokens), and the **resource server** (the photo API, which accepts tokens). The client never sees your password; it gets an access token limited to the scopes you approved, such as `photos.read`.
+
+<Choice
+  id="why-oauth"
+  objective="choose-grant"
+  prompt="What does OAuth give the printing site instead of your password?"
+  options={[
+    { id: "token", text: "An access token limited to approved scopes, which you or the provider can revoke without changing your password", correct: true, feedback: "Right. Scoped, revocable delegation is the point. The client's access ends when the token or grant is revoked." },
+    { id: "password", text: "Your password, encrypted", feedback: "An encrypted password is still a password: full access, and it must be decrypted to use. OAuth avoids sharing it at all." },
+    { id: "session", text: "Your browser session cookie for the storage service", feedback: "A session cookie grants everything you can do. Copying it to a third party is session hijacking, not delegation." },
+    { id: "identity", text: "Proof of your identity, so it can sign you in", feedback: "Plain OAuth is about access, not identity. Signing in is what OpenID Connect adds on top." }
+  ]}
+/>
+
+</Step>
+
+<Step id="flow" title="The authorisation code flow with PKCE">
+
+The authorisation code flow sends the browser to the authorisation server, which returns a short-lived **code** through a redirect. The client then exchanges the code for tokens over a direct back-channel call. Tokens never pass through the browser's address bar.
+
+**PKCE** (RFC 7636) adds a per-request secret. Before redirecting, the client generates a random `code_verifier` and sends only its hash, the `code_challenge` (S256 method). At the token endpoint, it must present the verifier itself. The `state` parameter, checked on return, ties the response to the request the client made.
+
+<Ordering
+  id="pkce-flow"
+  objective="order-pkce-flow"
+  prompt="Order the steps of the authorisation code flow with PKCE."
+  items={[
+    { id: "verifier", text: "The client generates a random code_verifier and computes code_challenge = BASE64URL(SHA-256(code_verifier))" },
+    { id: "authorize", text: "The client redirects the browser to the authorisation endpoint with response_type=code, client_id, redirect_uri, scope, state and the code_challenge" },
+    { id: "login", text: "The user authenticates at the authorisation server and approves the requested scopes" },
+    { id: "redirect", text: "The authorisation server redirects back to the registered redirect_uri with a code and the same state" },
+    { id: "exchange", text: "The client checks state, then sends the code and the code_verifier to the token endpoint" },
+    { id: "tokens", text: "The authorisation server checks that SHA-256 of the verifier matches the stored challenge, then returns the access token" },
+    { id: "call", text: "The client calls the resource server with the access token" }
+  ]}
+  explanation="The challenge goes out through the browser; the verifier comes back only on the direct call to the token endpoint. An attacker who steals the code from the redirect cannot redeem it without the verifier, which never left the client."
+/>
+
+</Step>
+
+<Step id="pkce" title="What PKCE protects">
+
+On a phone, another app can register the same custom URL scheme and receive the redirect, including the code. Without PKCE, it could redeem that code. With PKCE, the code is useless without the verifier. RFC 9700 now recommends PKCE for every client, including server-side ones, because it also defeats code injection attacks.
+
+The protection is only as strong as the verifier's randomness. RFC 7636 recommends 32 random bytes, base64url-encoded into 43 characters.
+
+<VariantQuestion template="oauth.verifier-entropy" />
+
+</Step>
+
+<Step id="grants" title="Choose the grant for the client">
+
+Which flow fits depends on who the client is and whether it can keep a secret.
+
+- **Browser apps and native apps**: authorisation code with PKCE. They are **public clients**: anything shipped to the user's device can be extracted.
+- **Server-side web apps**: authorisation code with PKCE plus a client secret or private-key authentication.
+- **Service-to-service with no user**: the **client credentials** grant.
+- **Deprecated**: the **implicit** grant returned tokens in the URL fragment, where they leak through history and referrers; RFC 9700 says not to use it. The **resource owner password** grant hands the user's password to the client; RFC 9700 says it must not be used.
+
+<Choice
+  id="grant-choice"
+  objective="choose-grant"
+  prompt="A nightly billing job must call your invoicing API. No user is involved. Which grant fits?"
+  options={[
+    { id: "cc", text: "Client credentials, with the job authenticating as itself and receiving a token scoped to invoicing", correct: true, feedback: "Right. There is no resource owner to consent, so the client acts on its own behalf." },
+    { id: "code", text: "Authorisation code with PKCE", feedback: "That flow needs a user in a browser to sign in and approve. A nightly job has none." },
+    { id: "password", text: "Resource owner password credentials using an admin's password", feedback: "It ties the job to a person's password and is forbidden by current best practice. Give the job its own identity." },
+    { id: "implicit", text: "The implicit grant", feedback: "Implicit is deprecated, and it is a browser flow. It fits neither the client nor current guidance." }
+  ]}
+/>
+
+</Step>
+
+<Step id="oidc" title="OpenID Connect: who signed in">
+
+OAuth tells a client what it may access. **OpenID Connect** adds who the user is. Request the `openid` scope and the token response also contains an **ID token**: a signed JWT whose `aud` is the client's own ID, with the user's `sub`, the issuer, the time of authentication and the `nonce` the client sent.
+
+The two tokens have different audiences. The **ID token** is for the client, to establish a sign-in session. The **access token** is for the resource server. Sending an ID token to an API as if it were an access token is a common and dangerous mistake.
+
+<Choice
+  id="which-token"
+  objective="distinguish-oidc"
+  prompt="Your single-page app has just completed an OpenID Connect sign-in and holds an ID token and an access token. Which should it send to your orders API?"
+  options={[
+    { id: "access", text: "The access token, issued for the orders API as its audience", correct: true, feedback: "Right. Access tokens are for resource servers; their audience and scopes say what the API may allow." },
+    { id: "id", text: "The ID token, because it proves who the user is", feedback: "The ID token's audience is the client, not the API. An API that accepts it would accept any token minted for any client of that issuer." },
+    { id: "both", text: "Both, so the API can choose", feedback: "The API should accept only tokens issued for it. Sending the ID token gains nothing and spreads it further." },
+    { id: "code", text: "The authorisation code", feedback: "The code is single-use and only redeemable at the token endpoint. It has already been spent." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh PKCE verifier variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["oauth.verifier-entropy"]} count={3} />
+
+Next: tokens and cookies only stay secret on encrypted connections. Continue to [encryption in transit and at rest](/learn/security/encryption).
+
+</Step>

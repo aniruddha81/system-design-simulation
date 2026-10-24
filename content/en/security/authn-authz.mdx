@@ -1,0 +1,168 @@
+{/*
+id: authn-authz
+slug: authn-authz
+track: security
+title: "Authentication and authorisation"
+description: "Who are you, and what may you do? Store passwords so a breach is survivable, pick factors that resist phishing, and check permission on every object."
+objectives:
+  - id: distinguish-authn-authz
+    text: Distinguish authentication from authorisation and place each check at the right layer
+  - id: store-passwords
+    text: Explain how slow, salted password hashing turns a stolen table into an expensive attack
+  - id: strengthen-authentication
+    text: Choose authentication factors by how well they resist phishing and replay
+  - id: prevent-bola
+    text: Enforce object-level authorisation on every request that names an object
+  - id: choose-authz-model
+    text: Choose between role-based, attribute-based and relationship-based authorisation
+requires: [how-the-web-works]
+activities: [C, Q]
+limitations:
+  - "Cracking time assumes a fixed guess rate and a dictionary attack; targeted guessing and password reuse are covered in abuse prevention."
+  - "Authorisation models are compared conceptually; policy engines, caching of decisions and consistency of permission changes are not simulated."
+sources:
+  - title: "Password Storage Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"
+  - title: "Authentication Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"
+  - title: "OWASP API Security Top 10 (2023)"
+    authors: "OWASP"
+    year: 2023
+    url: "https://owasp.org/API-Security/editions/2023/en/0x11-t10/"
+  - title: "NIST SP 800-63B: Digital Identity Guidelines, Authentication and Lifecycle Management"
+    authors: "P. Grassi et al."
+    year: 2017
+    url: "https://pages.nist.gov/800-63-3/sp800-63b.html"
+  - title: "Zanzibar: Google's Consistent, Global Authorization System"
+    authors: "R. Pang et al."
+    year: 2019
+    url: "https://www.usenix.org/conference/atc19/presentation/pang"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="two-questions" title="Two different questions">
+
+**Authentication** (authN) answers *who is making this request?* It verifies a credential: a password, a passkey, a signed token, a client certificate. **Authorisation** (authZ) answers *may this principal do this action on this resource?* It runs on every request, after authentication, and needs the resource in hand.
+
+HTTP keeps them apart too: **401 Unauthorized** means "I do not know who you are, authenticate", and **403 Forbidden** means "I know who you are, and the answer is no".
+
+<Choice
+  id="authn-or-authz"
+  objective="distinguish-authn-authz"
+  prompt="A signed-in user with a valid session calls DELETE /projects/42 on a project they can view but do not own. What should the API return, and which check failed?"
+  options={[
+    { id: "403", text: "403 Forbidden: authentication succeeded, authorisation for delete on project 42 failed", correct: true, feedback: "Right. The server knows who the caller is; they lack permission for this action on this object." },
+    { id: "401", text: "401 Unauthorized: the user must sign in again", feedback: "Their session is valid, so authentication succeeded. Asking them to sign in again would not change the permission." },
+    { id: "allow", text: "200 OK, because the user can view the project", feedback: "View and delete are different actions. Authorisation is per action and per resource, not a single 'has access' bit." },
+    { id: "500", text: "500 Internal Server Error", feedback: "Nothing went wrong on the server. Denying a request is a normal outcome and should say so." }
+  ]}
+/>
+
+</Step>
+
+<Step id="passwords" title="Store passwords for the day you are breached">
+
+Assume the password table will leak one day, and make that day survivable. Never store the password, and never store a fast hash of it: a GPU computes billions of SHA-256 hashes per second. Use a **slow, memory-hard password hash** such as Argon2id, scrypt or bcrypt, as OWASP recommends, with a work factor tuned so one verification takes tens of milliseconds on your servers.
+
+Add a unique random **salt** per user, stored next to the hash. Without salts, one pass of a dictionary cracks every user who chose a listed password at once, and identical passwords share a hash. With salts, the attacker pays for a separate pass per user.
+
+<VariantQuestion template="auth.salted-crack" />
+
+</Step>
+
+<Step id="factors" title="Factors that resist phishing">
+
+Passwords get phished, guessed and reused. A second factor helps, but not all factors are equal. A one-time code from SMS or an authenticator app can be typed into a convincing fake page and relayed to the real one within seconds. NIST SP 800-63B classifies SMS as a *restricted* authenticator, partly because of SIM-swap attacks.
+
+**WebAuthn** credentials, including passkeys and hardware security keys, sign a challenge that includes the site's origin, so a signature made on a look-alike domain is useless on the real one.
+
+<Choice
+  id="phishing-resistant"
+  objective="strengthen-authentication"
+  prompt="Your admins are targeted by phishing pages that relay credentials to your real login in real time. Which second factor stops this?"
+  options={[
+    { id: "webauthn", text: "WebAuthn security keys or passkeys, which bind each signature to the site's origin", correct: true, feedback: "Right. The browser signs for the origin it is actually on. A relay site gets a signature for the wrong origin, which the real site rejects." },
+    { id: "totp", text: "A 6-digit authenticator-app code", feedback: "The phishing page asks for the code and replays it within its 30-second window. Real-time relays defeat one-time codes." },
+    { id: "sms", text: "An SMS code", feedback: "It can be relayed like any typed code, and SIM-swap attacks can redirect it entirely." },
+    { id: "questions", text: "Security questions", feedback: "Answers are often public or guessable, and the phishing page can ask for them too." }
+  ]}
+/>
+
+</Step>
+
+<Step id="bola" title="Check the object, every time">
+
+The top entry of the OWASP API Security Top 10 (2023) is **Broken Object Level Authorization** (BOLA, also called IDOR). The API authenticates the caller, then fetches `/invoices/8812` by the ID in the URL without checking that invoice 8812 belongs to them. Change the number, read someone else's invoice.
+
+The fix is boring and must be universal: every handler that loads an object by an ID from the request checks the caller's permission on **that object**, on the server. Unguessable IDs make enumeration harder but are not authorisation.
+
+<Choice
+  id="fix-bola"
+  objective="prevent-bola"
+  prompt="GET /invoices/:id authenticates the caller's token, then returns the invoice with that ID. Users discover they can read others' invoices. What is the correct fix?"
+  options={[
+    { id: "check", text: "After loading the invoice, verify the caller is allowed to read it (for example, it belongs to their account) and return 404 or 403 if not", correct: true, feedback: "Right. Authorisation is checked against the specific object, on the server, for every request." },
+    { id: "uuid", text: "Switch invoice IDs from integers to random UUIDs", feedback: "This hides the IDs but does not check anything. IDs leak through logs, emails and shared links, and then the hole is back." },
+    { id: "hide-ui", text: "Remove other users' invoice links from the UI", feedback: "Attackers call the API directly. The UI is not a security boundary." },
+    { id: "gateway", text: "Require a valid token at the API gateway", feedback: "The caller already has a valid token. The gateway knows who they are, not whether they own invoice 8812." }
+  ]}
+/>
+
+</Step>
+
+<Step id="models" title="Roles, attributes or relationships">
+
+Three common authorisation models:
+
+- **RBAC**, role-based: users get roles, roles get permissions. Simple to audit; struggles when permissions depend on *which* object ("editor of *this* document").
+- **ABAC**, attribute-based: a policy evaluates attributes of the user, the resource and the context ("same department, during business hours, from a managed device"). Expressive, harder to reason about and audit.
+- **ReBAC**, relationship-based: permissions follow a graph of relationships ("user is a member of group G, which is an editor of folder F, which contains document D"). Google's Zanzibar paper describes this model serving sharing for products such as Drive and Calendar.
+
+<Choice
+  id="pick-model"
+  objective="choose-authz-model"
+  prompt="You are building document sharing: people share files and folders with individuals or groups, and folder access is inherited by everything inside. Which model fits most naturally?"
+  options={[
+    { id: "rebac", text: "Relationship-based authorisation, evaluated over the user, group, folder and document graph", correct: true, feedback: "Right. Inheritance and group membership are graph traversals, which is exactly what ReBAC expresses." },
+    { id: "rbac", text: "Global roles such as viewer and editor", feedback: "A global editor role would edit every document. You would need a role per document, which is a relationship model in disguise." },
+    { id: "abac", text: "Attribute rules such as 'department = engineering'", feedback: "Attributes cannot express 'Alice shared this one folder with Bob'. Sharing is a relationship, not an attribute." },
+    { id: "client", text: "Let the client hide documents the user should not see", feedback: "The client is under the user's control. Authorisation must be enforced on the server." }
+  ]}
+/>
+
+</Step>
+
+<Step id="layers" title="Where each check runs">
+
+A request passes several checks, each where the needed information is available. The gateway can authenticate and apply coarse rules, but only the service that loads the object can decide object-level access.
+
+<Ordering
+  id="request-checks"
+  objective="distinguish-authn-authz"
+  prompt="Order the checks an API request passes through."
+  items={[
+    { id: "tls", text: "TLS terminates and the request is parsed" },
+    { id: "authn", text: "The gateway validates the access token and identifies the caller" },
+    { id: "coarse", text: "The gateway checks coarse permissions, such as the token's scope for this API" },
+    { id: "load", text: "The service loads the requested object" },
+    { id: "object", text: "The service checks the caller's permission on that object, then acts and responds" }
+  ]}
+  explanation="Authentication comes first because every later decision depends on who the caller is. Object-level authorisation comes last because it needs the object itself; skipping it is how BOLA happens."
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh password-cracking variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["auth.salted-crack"]} count={3} />
+
+Next, see how an authenticated identity is carried between requests in [sessions vs JWT](/learn/security/sessions-jwt).
+
+</Step>

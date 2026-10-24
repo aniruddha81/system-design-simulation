@@ -1,0 +1,110 @@
+{/*
+id: communicating-tradeoffs
+slug: communicating-tradeoffs
+track: interview
+title: "Communicating trade-offs"
+description: "Say what each choice gains, what it costs, by how much, and when you would choose differently. Tie decisions to requirements and handle pushback without folding."
+objectives:
+  - id: name-tradeoff
+    text: State a trade-off as the option, what it gains, what it costs, and when you would choose otherwise
+  - id: quantify-tradeoff
+    text: Put a number on a trade-off's cost, such as the latency added by synchronous replication
+  - id: tie-to-requirements
+    text: Tie each design decision back to a stated requirement, and respond to pushback with reasons
+requires: [interview-framework]
+activities: [C, Q]
+limitations:
+  - "Latency arithmetic assumes sequential writes and a fixed round trip; real systems may batch or pipeline writes."
+  - "Communication advice reflects common interview rubrics; individual interviewers weigh it differently."
+sources:
+  - title: "Documenting Architecture Decisions"
+    authors: "Michael Nygard"
+    year: 2011
+    url: "https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions"
+  - title: "Designs, Lessons and Advice from Building Large Distributed Systems (LADIS 2009 keynote)"
+    authors: "Jeff Dean"
+    year: 2009
+    url: "https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf"
+  - title: "Designing Data-Intensive Applications"
+    authors: "Martin Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="shape" title="The shape of a good trade-off">
+
+Every design choice gives something up. Interviewers listen for whether you know what. A complete trade-off statement has four parts, the same ones an architecture decision record captures: the **option** you chose, what it **gains**, what it **costs**, and the **condition** under which you would choose differently.
+
+"I'll use asynchronous replication to the second region. Writes stay fast, about 5 ms instead of 70. The cost is that a regional failure can lose the last few seconds of writes. For likes that is acceptable; for payments I would replicate synchronously."
+
+<Choice
+  id="good-tradeoff"
+  objective="name-tradeoff"
+  prompt="Which statement is the best-formed trade-off?"
+  options={[
+    { id: "full", text: "'A cache in front of profiles cuts database reads by about 95%, at the cost of up to 60 s of staleness after an edit. Profiles tolerate that; account balances would not, so they bypass the cache.'", correct: true, feedback: "Right. Option, quantified gain, quantified cost, and the condition that changes the decision." },
+    { id: "best", text: "'Redis is the best cache, so I'll use it.'", feedback: "'Best' with no criterion says nothing. Best for what workload, at what cost?" },
+    { id: "scales", text: "'Cassandra scales well, so it's the right choice.'", feedback: "A capability without a requirement or a cost. What do you lose, and why does this system need that scale?" },
+    { id: "depends", text: "'It depends.'", feedback: "True of every decision, and useless alone. Say what it depends on, then choose." }
+  ]}
+/>
+
+</Step>
+
+<Step id="quantify" title="Put a number on it">
+
+"Synchronous replication is slower" invites the question *how much slower?* Answer before it is asked. The back-of-envelope skills from the foundations track turn adjectives into numbers: round trips, request rates, bytes, dollars.
+
+<VariantQuestion template="tradeoff.sync-latency" />
+
+</Step>
+
+<Step id="requirements" title="Trace every decision to a requirement">
+
+The requirements you wrote down at the start are your justification for everything after. When you add a component, name the requirement that forced it. When the interviewer asks "why not X?", compare X against the same requirements.
+
+<Choice
+  id="db-choice"
+  objective="tie-to-requirements"
+  prompt="Your requirements include 'no double-booking of a seat' and 'about 500 bookings per second at peak'. How do you justify the database choice?"
+  options={[
+    { id: "req", text: "'A relational database with a unique constraint on (event, seat) makes double-booking impossible at the storage layer, and 500 writes per second fits one well-provisioned primary.'", correct: true, feedback: "Right. Each clause answers a stated requirement with a mechanism and a number." },
+    { id: "popular", text: "'PostgreSQL is popular and well supported.'", feedback: "Popularity is not one of the requirements. Say which requirement the choice satisfies and how." },
+    { id: "nosql", text: "'NoSQL, because it scales to millions of writes per second.'", feedback: "500 writes per second does not need that, and you have not addressed double-booking, the hardest requirement." },
+    { id: "both", text: "'Both SQL and NoSQL, to get the best of both.'", feedback: "Two databases double the operational cost and add a consistency problem between them. It needs a reason, not a hedge." }
+  ]}
+/>
+
+</Step>
+
+<Step id="pushback" title="When the interviewer pushes back">
+
+Pushback is often a probe, not a correction: the interviewer wants to see whether you can reason under challenge. Restate the concern, re-check it against the requirements and numbers, and then either defend your choice with reasons or change it, saying what made you change.
+
+<Choice
+  id="pushback-response"
+  objective="tie-to-requirements"
+  prompt="You chose fan-out on write for timelines. The interviewer asks: 'What happens when a user with 50 million followers posts?' What is the best response?"
+  options={[
+    { id: "adapt", text: "'That is 50 million inserts per post, so delivery would lag for minutes. I'd treat high-follower accounts separately: skip fan-out for them and merge their posts at read time.'", correct: true, feedback: "Right. You quantified the concern, accepted what it breaks, and adapted the design with a reason." },
+    { id: "defend", text: "'It will be fine; the queue will absorb it.'", feedback: "A queue absorbs bursts but does not make 50 million inserts fast. Dismissing a valid concern without numbers is a red flag." },
+    { id: "abandon", text: "'You're right, I'll switch everything to fan-out on read.'", feedback: "Folding completely throws away the benefits for the other 99.9% of users. Change only what the concern actually breaks." },
+    { id: "deflect", text: "'That's an edge case; let's ignore it.'", feedback: "Celebrities generate a large share of reads and writes. Edge cases at scale are the interview's deep dives." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh trade-off cost variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["tradeoff.sync-latency"]} count={3} />
+
+In [interview mode](/interview), the end-of-session rubric scores trade-off communication at every stage. The reference solutions show worked trade-off notes to compare with yours.
+
+</Step>

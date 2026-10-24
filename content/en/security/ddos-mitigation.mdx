@@ -1,0 +1,136 @@
+{/*
+id: ddos-mitigation
+slug: ddos-mitigation
+track: security
+title: "DDoS mitigation"
+description: "Volumetric, protocol and application-layer floods: how reflection amplifies an attack, why anycast edges absorb it, and how to keep a request flood away from the origin."
+objectives:
+  - id: classify-ddos
+    text: Classify an attack as volumetric, protocol or application layer and match it to a defence
+  - id: size-reflection-attack
+    text: Estimate the bandwidth of a reflection and amplification attack
+  - id: absorb-volumetric
+    text: Explain how anycast and edge capacity absorb volumetric attacks, and estimate per-location load
+  - id: mitigate-application-layer
+    text: Mitigate application-layer floods with edge caching, rate limits, challenges and a hidden origin
+requires: [rate-limiting, bandwidth]
+activities: [C, Q]
+limitations:
+  - "Anycast load is assumed to split evenly between locations; real botnets cluster near some locations."
+  - "Amplification factors are illustrative ranges; real factors depend on the protocol, the query and reflector configuration."
+  - "The sandbox's Scale scenarios model DDoS as extra offered load, not packet-level behaviour."
+sources:
+  - title: "UDP-Based Amplification Attacks (Alert TA14-017A)"
+    authors: "CISA"
+    year: 2014
+    url: "https://www.cisa.gov/news-events/alerts/2014/01/17/udp-based-amplification-attacks"
+  - title: "RFC 4987: TCP SYN Flooding Attacks and Common Mitigations"
+    authors: "W. Eddy"
+    year: 2007
+    url: "https://www.rfc-editor.org/rfc/rfc4987"
+  - title: "RFC 2827 (BCP 38): Network Ingress Filtering"
+    authors: "P. Ferguson, D. Senie"
+    year: 2000
+    url: "https://www.rfc-editor.org/rfc/rfc2827"
+  - title: "February 28th DDoS Incident Report"
+    authors: "GitHub"
+    year: 2018
+    url: "https://github.blog/2018-03-01-ddos-incident-report/"
+  - title: "Memcrashed: Major amplification attacks from UDP port 11211"
+    authors: "Cloudflare"
+    year: 2018
+    url: "https://blog.cloudflare.com/memcrashed-major-amplification-attacks-from-port-11211/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="layers" title="Three kinds of flood">
+
+A distributed denial-of-service attack exhausts some resource from many sources at once. Which resource decides the defence:
+
+- **Volumetric**: fill the network links with bits, often UDP reflected off open servers. Measured in Gbit/s or Tbit/s. Only a network bigger than the attack can absorb it.
+- **Protocol**: exhaust connection state in servers, load balancers or firewalls, for example a SYN flood filling TCP's half-open connection table. Measured in packets per second.
+- **Application layer**: send valid-looking requests that are expensive to serve, such as search queries, logins or uncached pages. Measured in requests per second; each one may be indistinguishable from a real user.
+
+<Choice
+  id="classify"
+  objective="classify-ddos"
+  prompt="Your origin's CPU is at 100%, links are at 20%, and logs show millions of well-formed HTTPS search requests with random query strings from residential IP addresses. What kind of attack is this?"
+  options={[
+    { id: "app", text: "An application-layer flood: valid requests chosen to bypass caches and cost CPU", correct: true, feedback: "Right. Bandwidth is fine; the expensive resource is the work each request triggers. Random query strings defeat caching." },
+    { id: "vol", text: "A volumetric attack", feedback: "Links are only 20% full. A volumetric attack would saturate bandwidth before CPU." },
+    { id: "syn", text: "A SYN flood", feedback: "These are complete HTTPS requests, so handshakes are succeeding. A SYN flood leaves connections half-open." },
+    { id: "organic", text: "Organic growth", feedback: "Random query strings at this volume from residential proxies look like a botnet. Real users repeat popular queries." }
+  ]}
+/>
+
+</Step>
+
+<Step id="amplification" title="Reflection multiplies the attack">
+
+In a **reflection** attack, bots send small UDP queries with the victim's address forged as the source. Open servers reply, to the victim, with responses many times larger. CISA's 2014 alert lists amplification factors of roughly 28 to 54 for DNS and over 500 for NTP's `monlist` command. In 2018, exposed memcached servers produced amplification in the tens of thousands, and GitHub absorbed a 1.35 Tbit/s attack built this way.
+
+The root fix is upstream: networks that drop packets with forged source addresses, as BCP 38 asks, and servers that do not answer large UDP responses to the internet.
+
+<VariantQuestion template="ddos.amplification" />
+
+</Step>
+
+<Step id="anycast" title="Absorb it at the edge">
+
+No single data center can absorb a terabit flood. **Anycast** announces the same IP address from many edge locations, so routing sends each packet to the nearest one. A globally distributed botnet's traffic is therefore split across the edge. Each location drops attack traffic (by protocol, port, signature or rate) and forwards only clean traffic to the origin.
+
+Plan for the worst location, not the average: botnets cluster where compromised devices are dense.
+
+<VariantQuestion template="ddos.anycast" />
+
+</Step>
+
+<Step id="protocol" title="SYN floods and connection state">
+
+A TCP server normally stores state for every half-open connection after sending SYN-ACK. A SYN flood sends SYNs from spoofed addresses that never complete, filling that table so real clients cannot connect. RFC 4987 surveys the mitigations; the best known is **SYN cookies**: the server encodes the connection state into its initial sequence number and stores nothing until the client's final ACK proves it is real.
+
+<Choice
+  id="syn-cookies"
+  objective="classify-ddos"
+  prompt="Why do SYN cookies defeat a spoofed SYN flood?"
+  options={[
+    { id: "stateless", text: "The server keeps no state for a connection until the client's ACK returns the cookie, so spoofed SYNs consume nothing", correct: true, feedback: "Right. Spoofed sources never receive the SYN-ACK, so they never complete the handshake and never cost table space." },
+    { id: "block", text: "They block IP addresses that send many SYNs", feedback: "Spoofed floods use random source addresses. Blocking by IP would block nothing useful, and SYN cookies do not block anything." },
+    { id: "encrypt", text: "They encrypt the handshake", feedback: "They encode state in a sequence number; that is not encryption, and encryption would not stop the flood." },
+    { id: "bigger", text: "They make the half-open table larger", feedback: "A larger table only raises the bar a little. SYN cookies remove the need for the table during the attack." }
+  ]}
+/>
+
+</Step>
+
+<Step id="application" title="Application-layer floods">
+
+Application floods look like users, so defences combine several weak signals. In 2023 the HTTP/2 **Rapid Reset** technique (CVE-2023-44487) let attackers open and immediately cancel streams, producing floods of hundreds of millions of requests per second against large providers: proof that even protocol features become attack surface.
+
+<Choice
+  id="app-defences"
+  objective="mitigate-application-layer"
+  multiple
+  prompt="Which measures help against an application-layer flood on your public website? Select all that apply."
+  options={[
+    { id: "cache", text: "Serve as much as possible from the CDN cache, and normalise or ignore cache-busting query parameters", correct: true, feedback: "Right. Every request answered at the edge never reaches the origin." },
+    { id: "hide", text: "Accept origin traffic only from the CDN's addresses, so attackers cannot bypass the edge", correct: true, feedback: "Right. An origin reachable directly makes every edge defence optional for the attacker." },
+    { id: "limit", text: "Rate-limit and challenge expensive endpoints per client, session or fingerprint, not only per IP", correct: true, feedback: "Right. Botnets spread across many IPs, so add signals that cost the attacker more to rotate." },
+    { id: "autoscale", text: "Rely on autoscaling the origin to match the attack", feedback: "You pay for the attacker's traffic, and the attacker can usually grow faster than your budget. Scaling is a buffer, not a defence." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh amplification and anycast variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["ddos.amplification", "ddos.anycast"]} count={4} />
+
+In the [sandbox](/sandbox?template=cache-aside), open the **Scale** tab and run a breaking-point sweep: the load multiple of the first rung is how much extra request load your design absorbs before it fails, which is your application-layer margin. Then continue to [abuse prevention](/learn/security/abuse-prevention), for attackers who want your service to work, just for them.
+
+</Step>

@@ -1,0 +1,134 @@
+{/*
+id: sessions-jwt
+slug: sessions-jwt
+track: security
+title: "Sessions vs JWT"
+description: "Opaque server-side sessions or self-contained signed tokens: what each costs in lookups, revocation and size, how to validate a JWT safely, and where to keep it."
+objectives:
+  - id: compare-session-jwt
+    text: Compare server-side sessions with self-contained tokens on revocation, lookup cost and size
+  - id: validate-jwt
+    text: List the checks a server must make before trusting a JWT
+  - id: revoke-tokens
+    text: Size a denylist for revoking self-contained tokens before they expire
+  - id: choose-token-lifetime
+    text: Choose access and refresh token lifetimes by trading revocation delay against refresh load
+  - id: store-tokens-safely
+    text: Choose where a browser keeps a credential, and which cookie attributes protect it
+requires: [authn-authz]
+activities: [C, Q]
+limitations:
+  - "Denylist and refresh-load estimates assume steady rates; logout storms and mass revocations after a breach are bursty."
+  - "Browser storage guidance covers same-site web apps; native apps and cross-site embedding have different constraints."
+sources:
+  - title: "RFC 7519: JSON Web Token (JWT)"
+    authors: "M. Jones, J. Bradley, N. Sakimura"
+    year: 2015
+    url: "https://www.rfc-editor.org/rfc/rfc7519"
+  - title: "RFC 8725: JSON Web Token Best Current Practices"
+    authors: "Y. Sheffer, D. Hardt, M. Jones"
+    year: 2020
+    url: "https://www.rfc-editor.org/rfc/rfc8725"
+  - title: "Session Management Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"
+  - title: "RFC 9700: Best Current Practice for OAuth 2.0 Security"
+    authors: "T. Lodderstedt, J. Bradley, A. Labunets, D. Fett"
+    year: 2025
+    url: "https://www.rfc-editor.org/rfc/rfc9700"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="two-designs" title="A pointer or a passport">
+
+After sign-in, the server must recognise the user on every later request. Two designs:
+
+- **Server-side session**: the client holds an opaque, random session ID (OWASP asks for at least 64 bits of entropy) and the server looks it up in a session store on each request. Revocation is instant: delete the row. The cost is a store lookup per request, and a store that must be available.
+- **Self-contained token**, usually a **JWT** (RFC 7519): the server signs a set of claims (`sub`, `exp`, `aud`, roles) and the client presents it. Any service with the verification key can check it with no lookup. The cost: the token stays valid until `exp` unless you build revocation, and it is larger than an ID on every request.
+
+A JWT is **signed, not encrypted**: anyone holding it can base64url-decode the claims. Never put secrets in it.
+
+<Choice
+  id="pick-design"
+  objective="compare-session-jwt"
+  prompt="A banking web app must end every session within seconds when a user clicks 'sign out everywhere' or support suspects fraud. Traffic is moderate and served from one region. Which design fits best?"
+  options={[
+    { id: "session", text: "Opaque server-side sessions in a replicated session store", correct: true, feedback: "Right. Instant revocation is the requirement, and a lookup per request is affordable at this scale." },
+    { id: "jwt-long", text: "JWTs that live 24 hours, verified locally by every service", feedback: "A stolen or revoked token keeps working for up to a day. That fails 'within seconds' by four orders of magnitude." },
+    { id: "jwt-no-exp", text: "JWTs with no expiry, to avoid refresh traffic", feedback: "A token without exp is valid forever. RFC 8725 and every guideline require bounded lifetimes." },
+    { id: "client-cookie", text: "Store the user ID in a plain cookie and trust it", feedback: "The client can set any cookie value, so this is no authentication at all. The credential must be unguessable or signed." }
+  ]}
+/>
+
+</Step>
+
+<Step id="validate" title="Validating a JWT">
+
+Most JWT vulnerabilities come from trusting the token's own header. RFC 8725 lists the classic attacks: accepting `"alg": "none"`, and **algorithm confusion**, where a server that expects RS256 is tricked into verifying an HS256 signature using its *public* key as the HMAC secret. The defence is to decide the algorithm and key on the server, never from the token.
+
+<Choice
+  id="jwt-checks"
+  objective="validate-jwt"
+  multiple
+  prompt="Which checks must an API make before trusting an incoming JWT access token? Select all that apply."
+  options={[
+    { id: "alg", text: "Verify the signature with an algorithm and key the server chose in advance, ignoring the token's alg header", correct: true, feedback: "Right. Pinning the algorithm defeats 'none' and key-confusion attacks." },
+    { id: "exp", text: "Reject the token if exp is in the past (allowing a small clock skew)", correct: true, feedback: "Right. Expiry is the only built-in bound on a token's life." },
+    { id: "aud", text: "Check that aud names this API and iss names the expected issuer", correct: true, feedback: "Right. Without an audience check, a token issued for one service can be replayed against another that trusts the same issuer." },
+    { id: "decode", text: "Base64url-decode the payload and trust it if it parses", feedback: "Decoding is not verification. Anyone can write a payload; only the signature proves who issued it." },
+    { id: "kid-url", text: "Fetch the verification key from the URL in the token's header", feedback: "Then the attacker chooses the key. Keys come from a trusted, pre-configured issuer location." }
+  ]}
+/>
+
+</Step>
+
+<Step id="revocation" title="Revoking a token that verifies itself">
+
+A self-contained token cannot be deleted. You can either wait out its lifetime, or keep a **denylist** of revoked token IDs (`jti`) that every service checks. A denylist only needs each entry until the token would have expired anyway, so its size is bounded: by Little's law, revocations per unit of time × token lifetime. Short lifetimes keep it small, and keep the lookup cheap enough to replicate everywhere.
+
+Notice the irony: checking a denylist on every request is a lookup per request, which is the cost JWTs were meant to avoid. It is still a much smaller, read-mostly set than a full session store.
+
+<VariantQuestion template="jwt.denylist" />
+
+</Step>
+
+<Step id="lifetime" title="Short access tokens, rotating refresh tokens">
+
+The standard compromise: **short-lived access tokens** (minutes) that APIs verify locally, plus a **long-lived refresh token** that only the authorisation server accepts and can revoke instantly. A stolen access token is useful only briefly; a stolen refresh token can be detected through **refresh token rotation**: each refresh returns a new refresh token and invalidates the old one, so a reused old token reveals theft and revokes the whole family, as the OAuth security best practice (RFC 9700) describes.
+
+Shorter access lifetimes cost refresh traffic at the token endpoint.
+
+<VariantQuestion template="jwt.refresh-load" />
+
+</Step>
+
+<Step id="storage" title="Where the browser keeps it">
+
+In a browser, any credential readable by JavaScript is readable by an XSS payload. A cookie with **HttpOnly** cannot be read by scripts; **Secure** sends it only over HTTPS; **SameSite=Lax** or **Strict** stops most cross-site requests from carrying it, which is the main defence against CSRF along with anti-CSRF tokens for state-changing requests. Regenerate the session ID at sign-in so a pre-set ID cannot be fixed on the victim.
+
+<Choice
+  id="cookie-flags"
+  objective="store-tokens-safely"
+  prompt="A same-site web app needs to keep its session credential in the browser. Which choice best limits theft through XSS and misuse through CSRF?"
+  options={[
+    { id: "cookie", text: "A cookie with HttpOnly, Secure and SameSite=Lax, plus CSRF tokens on state-changing requests", correct: true, feedback: "Right. Scripts cannot read it, it never travels over plain HTTP, and cross-site requests mostly do not carry it." },
+    { id: "localstorage", text: "localStorage, attached by JavaScript as an Authorization header", feedback: "Any injected script can read localStorage and send the token elsewhere. One XSS bug exfiltrates every session it touches." },
+    { id: "plain-cookie", text: "A plain cookie without attributes", feedback: "Scripts can read it, it can travel over HTTP, and cross-site requests carry it. Each attribute closes one of those holes." },
+    { id: "url", text: "In the URL as a query parameter", feedback: "URLs end up in logs, browser history and Referer headers. Credentials in URLs leak." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh denylist and refresh-load variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["jwt.denylist", "jwt.refresh-load"]} count={4} />
+
+Next, see how one service obtains a token to act for a user at another in [OAuth 2.0 and OpenID Connect](/learn/security/oauth-oidc).
+
+</Step>

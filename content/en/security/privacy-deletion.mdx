@@ -1,0 +1,137 @@
+{/*
+id: privacy-deletion
+slug: privacy-deletion
+track: security
+title: "Privacy and data deletion"
+description: "Collect less, know every copy, and make deletion real: propagate erasure through replicas, indexes, warehouses and backups, and use per-user keys for crypto-shredding."
+objectives:
+  - id: minimise-data
+    text: Apply data minimisation and storage limitation when deciding what to collect and keep
+  - id: map-data-copies
+    text: Find every copy of personal data a deletion must reach, and order a deletion pipeline
+  - id: bound-erasure
+    text: Calculate when the last copy of deleted data disappears, given processing time and retention
+  - id: use-crypto-shredding
+    text: Explain crypto-shredding with per-user keys, and what it does not cover
+requires: [key-management, replication]
+activities: [C, Q]
+limitations:
+  - "This is engineering guidance, not legal advice; obligations depend on jurisdiction, contracts and the purpose of processing."
+  - "Erasure timing assumes copies expire on schedule; legal holds and retention duties can require keeping some data longer."
+sources:
+  - title: "Regulation (EU) 2016/679 (General Data Protection Regulation)"
+    authors: "European Parliament and Council"
+    year: 2016
+    url: "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+  - title: "NIST SP 800-88 Rev. 1: Guidelines for Media Sanitization"
+    authors: "R. Kissel, A. Regenscheid, M. Scholl, K. Stine"
+    year: 2014
+    url: "https://csrc.nist.gov/pubs/sp/800/88/r1/final"
+  - title: "User Privacy Protection Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/User_Privacy_Protection_Cheat_Sheet.html"
+  - title: "NIST SP 800-57 Part 1 Rev. 5: Recommendation for Key Management, Part 1: General"
+    authors: "E. Barker"
+    year: 2020
+    url: "https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="minimise" title="The safest data is data you never kept">
+
+Every field you store is something to secure, back up, disclose on request and eventually delete. The GDPR writes this into its principles: **data minimisation** (collect only what is necessary for the purpose, Article 5(1)(c)), **storage limitation** (keep it identifiable no longer than needed, Article 5(1)(e)), and **data protection by design and by default** (Article 25). Good engineering arrives at the same place for a simpler reason: a breach can only leak what exists.
+
+<Choice
+  id="minimise-choice"
+  objective="minimise-data"
+  prompt="A fitness app wants to show users their weekly step totals. The prototype stores every raw GPS point forever. What do you change?"
+  options={[
+    { id: "aggregate", text: "Keep the weekly totals the feature needs, and delete raw location points after a short processing window", correct: true, feedback: "Right. The feature works, and a breach no longer reveals years of where each user lives and goes." },
+    { id: "encrypt", text: "Keep everything, but encrypt it", feedback: "Encryption is worth having, but the app still holds a lifetime of location history it does not need, and has to protect, disclose and delete it." },
+    { id: "anonymise", text: "Remove the user's name from the GPS traces", feedback: "Location traces are highly identifying on their own: home and work locations re-identify most people. Removing the name is not anonymisation." },
+    { id: "keep", text: "Keep it all in case a future feature needs it", feedback: "'In case' is not a purpose. Storage limitation exists to stop exactly this, and the risk grows every day you keep it." }
+  ]}
+/>
+
+</Step>
+
+<Step id="copies" title="Find every copy">
+
+A user's row in the primary database is only the start. A deletion request must reach every place their data was copied to, and in most systems nobody has the full list until someone writes it down.
+
+<Choice
+  id="data-copies"
+  objective="map-data-copies"
+  multiple
+  prompt="A user asks for their account to be erased. Beyond the primary database, which places can still hold their personal data? Select all that apply."
+  options={[
+    { id: "replicas", text: "Read replicas, caches and search indexes", correct: true, feedback: "Right. Replicas follow the primary, but caches and search indexes need explicit deletes or expiry." },
+    { id: "warehouse", text: "The analytics warehouse and event streams retained for replay", correct: true, feedback: "Right. Raw events are often the largest and least-governed copy." },
+    { id: "logs", text: "Application logs that recorded emails, IP addresses or request bodies", correct: true, feedback: "Right. Logs are personal data too; minimise what they record and give them short retention." },
+    { id: "processors", text: "Third-party processors such as email, support and payment providers", correct: true, feedback: "Right. Deletion must be propagated to processors you shared data with." },
+    { id: "nothing", text: "Nowhere: deleting the primary row is enough because everything else reads from it", feedback: "Systems copy data constantly, into indexes, events, logs and vendors. Each copy needs its own deletion path." }
+  ]}
+/>
+
+</Step>
+
+<Step id="pipeline" title="A deletion pipeline">
+
+Treat deletion as a first-class workflow with an owner, an audit trail and a deadline. Under the GDPR, a controller must act on a request without undue delay and within one month, extendable by two further months for complex cases (Article 12(3)).
+
+<Ordering
+  id="deletion-pipeline"
+  objective="map-data-copies"
+  prompt="Order a robust account-deletion pipeline."
+  items={[
+    { id: "verify", text: "Verify the request comes from the account holder" },
+    { id: "stop", text: "Mark the account deleted so no system processes or shows it any more" },
+    { id: "primary", text: "Delete or anonymise the user's records in the primary stores" },
+    { id: "propagate", text: "Publish a deletion event that caches, search, the warehouse and processors consume and acknowledge" },
+    { id: "confirm", text: "Record completion in an audit log once every consumer has acknowledged, then confirm to the user" }
+  ]}
+  explanation="Verification prevents an attacker from deleting someone else's account. Marking first stops new copies while deletion runs. An event with acknowledgements makes every downstream copy accountable, and the audit log proves completion without keeping the deleted data."
+/>
+
+</Step>
+
+<Step id="backups" title="Backups and the last copy">
+
+Backups are usually immutable, by design. Rewriting them to remove one user defeats their purpose. The common approach is to keep backup retention short and documented, make sure a restored backup re-applies outstanding deletions before it serves traffic, and treat erasure as complete when the last copy expires. So the real deletion time is processing time plus the longest retention of any copy you do not purge on request.
+
+<VariantQuestion template="privacy.erasure-days" />
+
+</Step>
+
+<Step id="crypto-shred" title="Crypto-shredding">
+
+**Crypto-shredding** encrypts each user's data with a per-user key held in a key store. To erase the user, destroy their key: every copy encrypted under it, including those in immutable backups, becomes unreadable at once. NIST SP 800-88 recognises cryptographic erase as a sanitisation method when the key is reliably destroyed.
+
+It works only for data that was actually encrypted under that key. Derived data, plaintext in logs, data shared with processors and copies of the key itself in key-store backups all escape it.
+
+<Choice
+  id="crypto-shred-limits"
+  objective="use-crypto-shredding"
+  prompt="You encrypt each user's profile rows with a per-user key and destroy the key on erasure. Which copy does this not cover?"
+  options={[
+    { id: "logs", text: "The user's email address written in plaintext to application logs", correct: true, feedback: "Right. Crypto-shredding reaches only ciphertext under that key. Plaintext copies need their own deletion or, better, never to be logged." },
+    { id: "backup", text: "Encrypted profile rows inside last week's immutable database backup", feedback: "Those rows are ciphertext under the destroyed key, so they are unreadable. This is the case crypto-shredding is designed for." },
+    { id: "replica", text: "Encrypted profile rows on a read replica", feedback: "Replicas hold the same ciphertext. Without the key it cannot be decrypted." },
+    { id: "snapshot", text: "A disk snapshot of the database volume", feedback: "The snapshot contains the same per-user ciphertext, which became unreadable when the key was destroyed." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh erasure-timing variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["privacy.erasure-days"]} count={3} />
+
+This completes the security track. Put it to work on a whole system in the [interview framework](/learn/interview/interview-framework).
+
+</Step>

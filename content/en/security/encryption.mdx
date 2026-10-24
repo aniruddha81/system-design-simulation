@@ -1,0 +1,136 @@
+{/*
+id: encryption
+slug: encryption
+track: security
+title: "Encryption in transit and at rest"
+description: "What TLS does and does not promise, what handshakes cost, which at-rest layer stops which attacker, and why an AES-GCM key has a usage limit."
+objectives:
+  - id: explain-tls-guarantees
+    text: Explain what TLS guarantees, what it does not, and why internal traffic needs it too
+  - id: cost-tls
+    text: Estimate handshake load and the effect of session resumption
+  - id: choose-at-rest-layer
+    text: Choose between disk, database and application-level encryption for a given threat
+  - id: rotate-by-usage
+    text: Explain why authenticated encryption keys have usage limits and nonces must never repeat
+requires: [how-the-web-works]
+activities: [C, Q]
+limitations:
+  - "Handshake cost is reduced to whether a certificate signature is needed; key-exchange cost and hardware acceleration are not modelled."
+  - "The AES-GCM limit used is the NIST random-IV bound; deterministic IV construction and other AEADs have different limits."
+  - "Encryption choices are compared by threat; performance overheads of each layer are not measured here."
+sources:
+  - title: "RFC 8446: The Transport Layer Security (TLS) Protocol Version 1.3"
+    authors: "E. Rescorla"
+    year: 2018
+    url: "https://www.rfc-editor.org/rfc/rfc8446"
+  - title: "RFC 9325: Recommendations for Secure Use of TLS and DTLS"
+    authors: "Y. Sheffer, P. Saint-Andre, T. Fossati"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9325"
+  - title: "RFC 6797: HTTP Strict Transport Security (HSTS)"
+    authors: "J. Hodges, C. Jackson, A. Barth"
+    year: 2012
+    url: "https://www.rfc-editor.org/rfc/rfc6797"
+  - title: "NIST SP 800-38D: Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) and GMAC"
+    authors: "M. Dworkin"
+    year: 2007
+    url: "https://csrc.nist.gov/pubs/sp/800/38/d/final"
+  - title: "Cryptographic Storage Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="in-transit" title="What TLS promises">
+
+TLS 1.3 (RFC 8446) gives a connection three properties: **confidentiality** (an eavesdropper sees ciphertext), **integrity** (tampering is detected), and **server authentication** (the certificate proves the server holds a key for that name). Every TLS 1.3 key exchange is ephemeral, so recorded traffic stays safe even if the server's certificate key leaks later: **forward secrecy**.
+
+TLS does not protect data once it arrives: the server, its logs and its database see plaintext. Nor does it stop a user from visiting `http://` first, where an attacker can strip the upgrade; **HSTS** (RFC 6797) tells the browser to use HTTPS only for that site.
+
+<Choice
+  id="tls-limits"
+  objective="explain-tls-guarantees"
+  prompt="Your login page is served over TLS 1.3 with a valid certificate. Which of these does TLS protect against?"
+  options={[
+    { id: "wifi", text: "Someone on the same café Wi-Fi reading or modifying the password in transit", correct: true, feedback: "Right. That is exactly the network attacker TLS is built to defeat." },
+    { id: "logs", text: "The password being written to your application logs", feedback: "TLS ends at your server. What your code does with the plaintext, including logging it, is outside its scope." },
+    { id: "phish", text: "A phishing site at a look-alike domain with its own valid certificate", feedback: "TLS proves the server owns the name in the address bar. If that name is the attacker's, TLS faithfully secures the connection to the attacker." },
+    { id: "breach", text: "An attacker who has already compromised the web server", feedback: "A compromised endpoint sees decrypted traffic. TLS protects the wire, not the machines at either end." }
+  ]}
+/>
+
+</Step>
+
+<Step id="internal" title="Inside the network too">
+
+"It is behind the firewall" assumes nobody is inside the network. Attackers who get one foothold, a misconfigured load balancer, or a cloud provider's shared fabric all break that assumption. Encrypt service-to-service traffic as well, and prefer **mutual TLS**, where both sides present certificates, so a service can authenticate its caller rather than trusting its IP address.
+
+<Choice
+  id="internal-traffic"
+  objective="explain-tls-guarantees"
+  prompt="Your services talk over plain HTTP inside one VPC. Why is mutual TLS worth adding?"
+  options={[
+    { id: "mtls", text: "It encrypts traffic against anyone who gains access inside the network, and lets each service verify which service is calling", correct: true, feedback: "Right. Encryption protects against an insider on the network path; client certificates replace 'trust the source IP' with a cryptographic identity." },
+    { id: "speed", text: "It makes requests faster", feedback: "Encryption adds a little cost, not speed. You add it for security, and connection reuse keeps the cost small." },
+    { id: "replaces-authz", text: "It removes the need for application authorisation", feedback: "mTLS tells you which service is calling, not whether this user may do this action. Authorisation still runs." },
+    { id: "nothing", text: "Nothing, because a VPC is private", feedback: "Private addressing is not secrecy. Any compromised host or misrouted packet on that network can read plain HTTP." }
+  ]}
+/>
+
+</Step>
+
+<Step id="handshakes" title="What handshakes cost">
+
+A full TLS handshake costs the server a signature with its certificate's private key, and the client a round trip. **Session resumption** with a pre-shared key from an earlier connection skips the certificate signature, and connection reuse (HTTP keep-alive, HTTP/2 multiplexing) avoids handshakes entirely. On a busy edge, the resumption rate decides how much CPU goes to signatures.
+
+<VariantQuestion template="tls.full-handshakes" />
+
+</Step>
+
+<Step id="at-rest" title="Encryption at rest: which attacker?">
+
+Encryption at rest comes in layers, and each one stops a different attacker:
+
+- **Disk or volume encryption**: protects against a stolen or discarded disk. Anyone who can query the running database still sees plaintext.
+- **Database-level encryption** (often called transparent data encryption): protects data files and backups if copied off the server. The database decrypts transparently for any authorised connection.
+- **Application or field-level encryption**: the application encrypts specific fields (a national ID, a card number) with keys the database never sees. A SQL injection or a stolen database credential returns ciphertext.
+
+The more selective the layer, the more it protects, and the more it costs: encrypted fields cannot be indexed or searched normally.
+
+<Choice
+  id="at-rest-layer"
+  objective="choose-at-rest-layer"
+  prompt="Your threat is SQL injection or a leaked read-only database credential exposing customers' tax IDs. Which layer protects the tax IDs?"
+  options={[
+    { id: "field", text: "Application-level encryption of the tax ID field, with keys held outside the database", correct: true, feedback: "Right. The database only ever stores ciphertext for that field, so a query through any credential returns ciphertext." },
+    { id: "disk", text: "Full-disk encryption on the database servers", feedback: "The disk is decrypted while the server runs. Queries return plaintext to anyone with a working connection." },
+    { id: "tde", text: "Transparent database encryption", feedback: "It protects files and backups copied off the server. A connected attacker reads decrypted rows, transparently." },
+    { id: "tls", text: "TLS between the application and the database", feedback: "TLS protects the network hop. The injected query is sent over that same encrypted connection." }
+  ]}
+/>
+
+</Step>
+
+<Step id="nonce-limit" title="Keys wear out: the AES-GCM limit">
+
+AES-GCM is an **authenticated** encryption mode: it encrypts and detects tampering in one step, and it needs a unique **nonce** (IV) for every message under a key. Reusing one nonce is catastrophic: it reveals the XOR of the two plaintexts and lets an attacker recover the authentication key and forge messages.
+
+With random 96-bit IVs, collisions become likely long before 2^96 messages, so NIST SP 800-38D limits a key to **2^32 encryptions** with random IVs. A busy service reaches that faster than intuition suggests. Rotate keys by **usage**, not just by calendar, which envelope encryption makes cheap.
+
+<VariantQuestion template="crypto.gcm-days" />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh handshake and key-usage variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["tls.full-handshakes", "crypto.gcm-days"]} count={4} />
+
+Next: every one of these layers is only as safe as its keys. Continue to [key management and secrets](/learn/security/key-management).
+
+</Step>

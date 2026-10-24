@@ -1,0 +1,152 @@
+{/*
+id: slo-error-budgets
+slug: slo-error-budgets
+track: reliability
+title: "SLIs, SLOs and error budgets"
+description: "Define an SLI users would recognise, turn an SLO into an error budget, alert on burn rate instead of thresholds, and let the budget decide when to ship."
+objectives:
+  - id: choose-sli
+    text: Choose an SLI that measures user-visible success at the right boundary, with a sensible target
+  - id: compute-error-budget
+    text: Compute an error budget in bad minutes from an SLO and its window
+  - id: alert-on-burn-rate
+    text: Compute a burn rate and explain why multiwindow burn-rate alerts beat static thresholds
+  - id: apply-budget-policy
+    text: Apply an error budget policy to release and reliability decisions
+requires: [availability, observability]
+activities: [C, Q]
+limitations:
+  - "Burn-rate thresholds follow the SRE Workbook's 30-day examples; other windows need the thresholds recomputed."
+  - "Budgets are computed as if traffic were uniform; a request-based budget burns faster during peak hours."
+  - "Error budget policies are organisational agreements; the lesson shows common shapes, not a standard."
+sources:
+  - title: "Service Level Objectives, Site Reliability Engineering"
+    authors: "Chris Jones, John Wilkes, Niall Murphy, Cody Smith"
+    year: 2016
+    url: "https://sre.google/sre-book/service-level-objectives/"
+  - title: "Embracing Risk, Site Reliability Engineering"
+    authors: "Marc Alvidrez"
+    year: 2016
+    url: "https://sre.google/sre-book/embracing-risk/"
+  - title: "Implementing SLOs, The Site Reliability Workbook"
+    year: 2018
+    url: "https://sre.google/workbook/implementing-slos/"
+  - title: "Alerting on SLOs, The Site Reliability Workbook"
+    year: 2018
+    url: "https://sre.google/workbook/alerting-on-slos/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="sli" title="Measure what users feel">
+
+An **SLI** is a ratio: **good events ÷ valid events**. The art is choosing the events and the boundary. Measure as close to the user as you can: load balancer logs see requests your servers never logged because they crashed; client-side telemetry also sees DNS and network failures, but is noisier.
+
+For latency, do not use an average. Use the **proportion of requests faster than a threshold**: "99% of valid requests are served in under 300 ms". It is a ratio like availability, so it has a budget, and it composes correctly across hosts, which percentiles do not.
+
+<Choice
+  id="latency-sli"
+  objective="choose-sli"
+  prompt="Which is a well-formed latency SLI for a search API?"
+  options={[
+    { id: "ratio", text: "The proportion of valid search requests answered within 300 ms, measured at the load balancer", correct: true, feedback: "Right. It is a good-over-valid ratio at a boundary close to the user, and it has a natural error budget." },
+    { id: "mean", text: "Mean search latency over the last 5 minutes", feedback: "A mean hides the tail: 1% of requests can take 10 s while the mean stays flat. And a mean has no natural budget." },
+    { id: "avg-p99", text: "The average of every host's p99 latency", feedback: "Percentiles do not average. Ten hosts' p99s say nothing exact about the fleet's p99; combine histograms or count requests under the threshold instead." },
+    { id: "cpu", text: "Search tier CPU stays below 70%", feedback: "That is a capacity signal, not something users experience. Users can be suffering at 30% CPU." }
+  ]}
+/>
+
+</Step>
+
+<Step id="target" title="100% is the wrong target">
+
+The SRE book's argument: a user on a 99% reliable phone cannot tell 99.99% from 99.999%, because their own device, Wi-Fi and ISP fail far more often. Meanwhile cost rises steeply: each increment of reliability can cost far more than the previous one. A **100% SLO** also leaves no room to ship, since any change risks a failure.
+
+Pick the target from what users need and what the system has achieved, then keep a slightly stricter **internal SLO** than any external **SLA**, so you notice trouble before you owe credits.
+
+<Choice
+  id="pick-target"
+  objective="choose-sli"
+  prompt="Your API has delivered 99.97% over the past quarter. Product wants a 100% availability SLO. What do you propose?"
+  options={[
+    { id: "realistic", text: "An SLO around 99.9 to 99.95% that users would notice missing, with a looser external SLA", correct: true, feedback: "Right. It reflects what users need, leaves an error budget to spend on releases and experiments, and keeps the SLA safely below what you can deliver." },
+    { id: "hundred", text: "Accept 100%, and treat every failed request as an incident", feedback: "With zero budget, every deploy is a violation and teams freeze. Users would not perceive the difference from 99.95% anyway." },
+    { id: "match", text: "Set the SLO to exactly 99.97%, last quarter's result", feedback: "Past performance is a ceiling you happened to hit, not a need. Locking it in turns lucky quarters into obligations." },
+    { id: "sla-tight", text: "Publish a 99.99% SLA to customers and an internal SLO of 99.9%", feedback: "That is backwards. The internal SLO should be stricter than the SLA, so you react before breaching the contract." }
+  ]}
+/>
+
+</Step>
+
+<Step id="budget" title="Turn the SLO into a budget">
+
+The **error budget** is 1 − SLO, applied to the window. For a good-minutes SLO of 99.9% over 30 days, that is 30 × 1,440 × 0.001 = **43.2 bad minutes**. For a request-based SLO, it is a number of failed requests instead, and it burns faster at peak.
+
+A **rolling** window (the last 28 or 30 days) changes smoothly; a **calendar** window resets on the 1st, which can encourage risky launches on the last day.
+
+<VariantQuestion template="slo.budget-minutes" />
+
+</Step>
+
+<Step id="burn-rate" title="Burn rate: how fast is the budget going?">
+
+The **burn rate** is the observed error ratio divided by the budgeted error ratio. At burn rate 1 you spend exactly the whole budget over the window. At burn rate 14.4, a 30-day budget lasts about two days, and one hour consumes 2% of it.
+
+<VariantQuestion template="slo.burn-rate" />
+
+</Step>
+
+<Step id="alerting" title="Alert on burn rate, over two windows">
+
+A static threshold such as "error rate above 1%" is either too noisy for a loose SLO or too slow for a strict one. The SRE Workbook instead pages on **fast burn** and tickets on **slow burn**, for a 30-day budget:
+
+- page when **2%** of the budget burns in **1 hour** (burn rate 14.4) or **5%** in **6 hours** (burn rate 6);
+- open a ticket when **10%** burns in **3 days** (burn rate 1).
+
+Each long window is paired with a **short window** (5 minutes for the 1-hour alert, 30 minutes for the 6-hour alert). Both must exceed the threshold, so the alert stops firing soon after the problem is fixed, instead of staying red for an hour while the long window drains.
+
+<Choice
+  id="multiwindow"
+  objective="alert-on-burn-rate"
+  prompt="Why does the 1-hour burn-rate alert also require the last 5 minutes to exceed the threshold?"
+  options={[
+    { id: "reset", text: "So the alert resets quickly once the problem is fixed, rather than firing until the bad hour ages out", correct: true, feedback: "Right. The long window gives significance; the short window confirms the burn is still happening now." },
+    { id: "faster", text: "So it fires within 5 minutes of any error at all", feedback: "The long window still has to reach 14.4× burn, so a short blip does not page. The short window gates reset, not sensitivity." },
+    { id: "cheaper", text: "Because 5-minute queries are cheaper than 1-hour queries", feedback: "Query cost is not the reason. Both windows run; the pair trades detection time against reset time." },
+    { id: "sla", text: "Because SLAs are measured in 5-minute intervals", feedback: "The windows come from budget arithmetic, not from any SLA convention." }
+  ]}
+/>
+
+</Step>
+
+<Step id="policy" title="Let the budget decide">
+
+An error budget turns "move fast" versus "be careful" into arithmetic both sides agreed on in advance. A typical **error budget policy**: while budget remains, teams ship at their own pace; when it is exhausted, feature launches pause except for reliability fixes and security patches until the window recovers; a single incident that burns a large share of the budget gets a postmortem.
+
+The policy must be written and signed by product and engineering before the bad month, not negotiated during it.
+
+<Choice
+  id="budget-exhausted"
+  objective="apply-budget-policy"
+  prompt="With 9 days left in the window, a bad config push has spent the entire error budget. The team has a feature launch scheduled for tomorrow. What does a typical error budget policy say?"
+  options={[
+    { id: "freeze", text: "Hold the launch; spend the time on fixes that prevent a repeat, and resume when the budget recovers", correct: true, feedback: "Right. The budget is gone, so further risk is spent from users' tolerance. The freeze also funds the reliability work that caused the overspend." },
+    { id: "ship", text: "Ship anyway; the budget resets next month", feedback: "This makes the SLO decorative. If budgets are ignored when exhausted, they stop guiding anything." },
+    { id: "lower", text: "Lower the SLO for this month so the budget is not exhausted", feedback: "Moving the target after missing it hides the problem. Revisit the SLO deliberately, with data, not mid-incident." },
+    { id: "exclude", text: "Exclude the config-push failures as an anomaly", feedback: "Users felt those failures. Excluding real errors after the fact is the most common way SLOs lose credibility." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh budgets and burn rates. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["slo.budget-minutes", "slo.burn-rate"]} count={4} />
+
+Next, see what actually spends the budget in [failure modes and metastability](/learn/reliability/failure-modes), and how releases spend it safely in [deployments](/learn/reliability/deployments).
+
+</Step>

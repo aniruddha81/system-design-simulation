@@ -1,0 +1,164 @@
+{/*
+id: observability
+slug: observability
+track: reliability
+title: "Metrics, logs and traces"
+description: "Pick the right signal for an operational question, alert on symptoms, keep metric cardinality bounded, and budget what traces cost to keep."
+objectives:
+  - id: choose-signal
+    text: Choose between metrics, logs and traces for a given operational question
+  - id: monitor-symptoms
+    text: Alert on user-visible symptoms using the four golden signals rather than on causes
+  - id: control-cardinality
+    text: Predict how labels multiply metric time series and keep cardinality bounded
+  - id: propagate-context
+    text: Explain how trace context propagates across services and why the sampling decision must travel with it
+  - id: budget-telemetry
+    text: Estimate stored trace volume from traffic, sampling rate and span size
+requires: [percentiles]
+activities: [C, Q]
+limitations:
+  - "Storage estimates ignore compression, indexing and replication in the telemetry backend, which can each change the bill by several times."
+  - "Sampling is described as head-based or tail-based; adaptive and per-endpoint sampling policies are not modelled."
+  - "The sandbox shows metrics and single-request traces from the simulator, not a production telemetry pipeline."
+sources:
+  - title: "Monitoring Distributed Systems, Site Reliability Engineering"
+    authors: "Rob Ewaschuk"
+    year: 2016
+    url: "https://sre.google/sre-book/monitoring-distributed-systems/"
+  - title: "Dapper, a Large-Scale Distributed Systems Tracing Infrastructure"
+    authors: "B. H. Sigelman, L. A. Barroso, M. Burrows, P. Stephenson, M. Plakal, D. Beaver, S. Jaspan, C. Shanbhag"
+    year: 2010
+    url: "https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/"
+  - title: "Trace Context (W3C Recommendation)"
+    authors: "W3C Distributed Tracing Working Group"
+    url: "https://www.w3.org/TR/trace-context/"
+  - title: "The USE Method"
+    authors: "Brendan Gregg"
+    url: "https://www.brendangregg.com/usemethod.html"
+  - title: "Metric and label naming, Prometheus documentation"
+    url: "https://prometheus.io/docs/practices/naming/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="three-signals" title="Three signals, three different questions">
+
+At 14:05 the checkout p99 doubles. You need to know three things: *is it real and how bad*, *which requests*, and *where did the time go*. Each question has a signal built for it.
+
+- **Metrics** are numbers aggregated over time: counters, gauges and histograms per label set. They are cheap to store and fast to query, so they drive dashboards and alerts. They cannot tell you about one specific request.
+- **Logs** are discrete events with arbitrary detail. A structured log line (JSON with a trace ID, user tier, error code) answers "what happened to *this* request". They cost per event, so high-traffic paths sample or drop them.
+- **Traces** record the causal path of one request across services as a tree of **spans**, each with a start, a duration and a parent. Google's Dapper paper showed that a trace of a sampled fraction of requests is enough to find where latency goes in a deep call graph.
+
+<Choice
+  id="pick-signal"
+  objective="choose-signal"
+  prompt="Checkout p99 doubled at 14:05. The service calls inventory, pricing, payments and fraud scoring. Which signal tells you which downstream call got slow for the slow requests?"
+  options={[
+    { id: "traces", text: "Traces of slow checkout requests, compared span by span with fast ones", correct: true, feedback: "Right. A trace shows each downstream span's duration inside one request, so you can see which child span grew. Metrics per dependency help too, but only a trace ties the slow parent to its slow child." },
+    { id: "cpu", text: "The CPU utilisation graph of the checkout hosts", feedback: "CPU tells you whether checkout itself is busy. Time spent waiting on a slow dependency usually shows up as idle CPU, so this can point you the wrong way." },
+    { id: "logs-grep", text: "Grep every checkout log line from 14:00 to 14:10", feedback: "Logs can contain the answer if every call was logged with its duration, but you would be rebuilding a trace by hand from millions of lines. Start from traces, then pull logs by trace ID." },
+    { id: "error-rate", text: "The checkout error-rate metric", feedback: "Error rate measures failures, and nothing says the slow requests are failing. It cannot locate latency in the call graph." }
+  ]}
+/>
+
+</Step>
+
+<Step id="golden-signals" title="Page on symptoms, investigate causes">
+
+The SRE book's **four golden signals** for a user-facing system are **latency, traffic, errors and saturation**. Two conventions turn them into practice: **RED** (rate, errors, duration) for each request-driven service, and Brendan Gregg's **USE** (utilisation, saturation, errors) for each resource such as a disk, a CPU or a connection pool.
+
+Page a human on **symptoms**, things users feel: error ratio, latency over a threshold. Use **causes** (CPU, disk, queue depth) on dashboards and tickets. A cause-based page fires when nothing is wrong for users, and stays silent for failures nobody predicted.
+
+Two traps: measure the latency of **errors separately**, because a fast 500 drags the average down and hides an outage; and use **histograms**, not averages, because you cannot average percentiles across hosts.
+
+<Choice
+  id="what-pages"
+  objective="monitor-symptoms"
+  prompt="Which of these should wake someone up at 3 a.m.?"
+  options={[
+    { id: "symptom", text: "More than 2% of checkout requests failed or took over 2 s for 5 minutes", correct: true, feedback: "Right. It is a user-visible symptom with a threshold and a duration, so it fires for any cause, including ones nobody predicted." },
+    { id: "cpu", text: "Any checkout host is above 85% CPU", feedback: "High CPU might be harmless (a batch job, efficient packing). It is a cause to graph and investigate, not proof that users are suffering." },
+    { id: "restart", text: "A pod restarted", feedback: "Orchestrators restart pods routinely and the service may be fine. Page only if the restarts produce a symptom." },
+    { id: "avg", text: "Average latency across all hosts went up 10%", feedback: "An average hides the tail and mixes fast errors with slow successes. Alert on a percentile or a 'requests slower than X' ratio." }
+  ]}
+/>
+
+</Step>
+
+<Step id="cardinality" title="Labels multiply">
+
+A metric's cost is its number of **time series**: one per distinct combination of label values. Labels multiply. A histogram with 20 endpoints, 5 status classes and 100 pods is already 10,000 combinations, and each one stores a series per bucket.
+
+That is why IDs never go in metric labels. A `user_id` label on a service with a million users creates a million combinations per metric and can take down the metrics backend. Per-request detail belongs in logs and traces; link them to metrics with **exemplars** (a trace ID attached to a histogram bucket sample).
+
+<VariantQuestion template="obs.cardinality" />
+
+</Step>
+
+<Step id="cardinality-fix" title="Which labels are safe?">
+
+A safe label has a small, **bounded** set of values that does not grow with traffic or users. Normalise unbounded values before they become labels: the route template `/users/:id`, not the raw path; the status class `5xx`, not the error message.
+
+<Choice
+  id="safe-labels"
+  objective="control-cardinality"
+  multiple
+  prompt="You are adding labels to an http_request_duration_seconds histogram. Which labels are safe? Select all that apply."
+  options={[
+    { id: "route", text: "route, as the route template such as /orders/:id", correct: true, feedback: "Right. Route templates are bounded by your code, typically tens to hundreds of values." },
+    { id: "status", text: "status_class: 2xx, 3xx, 4xx, 5xx", correct: true, feedback: "Right. Four or five values, and enough to split errors from successes." },
+    { id: "region", text: "region", correct: true, feedback: "Right. A handful of values, and you will want to compare them during an incident." },
+    { id: "raw-path", text: "path, as the raw URL such as /orders/81723", feedback: "Every order ID makes a new series. Normalise to the route template first." },
+    { id: "user", text: "user_id", feedback: "Unbounded: it grows with your user base. Put user IDs in logs or trace attributes and find them through exemplars." }
+  ]}
+/>
+
+</Step>
+
+<Step id="context" title="Follow the trace context">
+
+A trace survives service hops because every call carries **trace context**. The W3C `traceparent` header holds a version, a 128-bit trace ID shared by the whole request, the ID of the calling span, and flags whose lowest bit says whether this trace is **sampled**. For example: `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`.
+
+Each service starts a child span whose parent is the incoming span ID, and passes its own span ID downstream. If one hop drops the header, for example a message queue or a proxy that strips unknown headers, the trace breaks into disconnected fragments.
+
+<Ordering
+  id="trace-propagation"
+  objective="propagate-context"
+  prompt="Put the steps of tracing one request through a gateway and an orders service in order."
+  items={[
+    { id: "root", text: "The gateway receives a request with no traceparent, creates a trace ID and a root span, and makes the sampling decision" },
+    { id: "inject", text: "The gateway calls the orders service with traceparent carrying the trace ID, its span ID and the sampled flag" },
+    { id: "child", text: "The orders service starts a child span whose parent is the gateway's span ID" },
+    { id: "db", text: "The orders service queries the database inside its own child span" },
+    { id: "export", text: "Each service ends its spans and exports them; the backend joins them by trace ID into one tree" }
+  ]}
+  explanation="The root decides the trace ID and whether to sample, and every hop propagates both. Because the sampled flag travels with the context, all services keep or drop the same traces, so you never store half a trace."
+/>
+
+</Step>
+
+<Step id="sampling" title="Sample, and budget what you keep">
+
+Traces are the most expensive signal per request: one request can produce dozens of spans. Two families of sampling control the cost.
+
+- **Head-based** sampling decides at the root, for example keeping 1% of traces, and propagates the decision. It is cheap and consistent, but it keeps 1% of your rare errors too.
+- **Tail-based** sampling buffers every span until the trace completes, then keeps the interesting ones: errors, slow requests, rare routes. It catches what matters but needs a collector tier that holds every span for the length of the slowest trace.
+
+Estimate before you turn tracing on. The volume is requests × sampling fraction × spans per trace × bytes per span.
+
+<VariantQuestion template="obs.trace-volume" />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh variants on cardinality and trace volume. Score 80% or more to master the lesson; a wrong answer links back to the step that teaches it.
+
+<MasteryCheck templates={["obs.cardinality", "obs.trace-volume"]} count={4} />
+
+Then open the [cache-aside design in the sandbox](/sandbox?template=cache-aside), and send one request from the **Trace** tab. Read the span tree the way you would read a production trace: which hop holds the time? Next, turn these signals into promises in [SLIs, SLOs and error budgets](/learn/reliability/slo-error-budgets).
+
+</Step>

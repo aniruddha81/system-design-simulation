@@ -1,0 +1,138 @@
+{/*
+id: multi-region
+slug: multi-region
+track: reliability
+title: "Multi-region: active-passive and active-active"
+description: "When a second region is worth it, how active-passive fails over, what active-active costs in capacity and conflicts, and why a cross-region commit costs a round trip."
+objectives:
+  - id: choose-topology
+    text: Choose between active-passive and active-active for a workload's RPO, RTO and consistency needs
+  - id: size-region-failover
+    text: Size each region so the survivors can absorb a failed region's traffic
+  - id: resolve-write-conflicts
+    text: Choose how an active-active design handles concurrent writes to the same data
+  - id: estimate-cross-region-latency
+    text: Estimate the commit latency of a write that needs a cross-region majority
+requires: [replication, disaster-recovery]
+activities: [C, Q]
+limitations:
+  - "Regions are treated as independent failure domains; shared control planes, global configuration and DNS can fail all of them together."
+  - "Latency is round-trip time only; real commits add queueing, disk sync and, in Spanner-style systems, commit wait."
+  - "Traffic is assumed to move instantly after failover; DNS TTLs and client caches delay it in practice."
+sources:
+  - title: "Spanner: Google's Globally-Distributed Database"
+    authors: "J. C. Corbett et al."
+    year: 2012
+    url: "https://www.usenix.org/conference/osdi12/technical-sessions/presentation/corbett"
+  - title: "Static stability using Availability Zones"
+    authors: "Becky Weiss, Mike Furr"
+    url: "https://aws.amazon.com/builders-library/static-stability-using-availability-zones/"
+  - title: "Disaster Recovery of Workloads on AWS: Recovery in the Cloud"
+    authors: "Amazon Web Services"
+    url: "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-workloads-on-aws.html"
+  - title: "October 21 post-incident analysis"
+    authors: "GitHub"
+    year: 2018
+    url: "https://github.blog/2018-10-30-oct21-post-incident-analysis/"
+  - title: "Designing Data-Intensive Applications, chapter 5: Replication"
+    authors: "Martin Kleppmann"
+    year: 2017
+    url: "https://dataintensive.net/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="active-passive" title="Active-passive: one region writes">
+
+In **active-passive**, one region serves writes (and usually reads). A second region holds a replica and stands by. On a regional failure you **promote** the standby and move traffic to it.
+
+It is simple, because there is one writer and no conflicts. Its costs: the standby's capacity is mostly idle; RPO equals the replication lag at the moment of failure (unless replication is synchronous); and RTO includes detection, the failover decision, promotion and moving traffic, where DNS TTLs and client connection pools keep some clients on the dead region for minutes.
+
+The dangerous step is promotion. If the old primary is only partitioned rather than dead, you now have two writers. GitHub's October 2018 incident started with a 43-second partition and an automated cross-country failover; writes accepted on both sides took about a day to reconcile. Fence the old primary before promoting the new one.
+
+<Choice
+  id="topology"
+  objective="choose-topology"
+  prompt="A ledger service needs strongly consistent balances, can tolerate 15 minutes of downtime per regional disaster, and must not lose committed transactions. Which design fits best?"
+  options={[
+    { id: "ap-sync", text: "Active-passive with synchronous replication to the standby region and a fenced, rehearsed failover", correct: true, feedback: "Right. One writer keeps balances simple and consistent, synchronous replication gives an RPO of zero, and 15 minutes is enough for a deliberate failover." },
+    { id: "aa-lww", text: "Active-active with last-writer-wins replication", feedback: "Last-writer-wins silently discards one of two concurrent updates. For balances, that is lost money." },
+    { id: "ap-async", text: "Active-passive with asynchronous replication", feedback: "Async replication can lose the transactions in flight at failure time, which violates 'must not lose committed transactions'." },
+    { id: "single", text: "One region with three availability zones", feedback: "Zones protect against data-center failures, not a regional disaster, which the requirement explicitly covers." }
+  ]}
+/>
+
+</Step>
+
+<Step id="capacity" title="The survivors must carry the peak">
+
+In **active-active**, every region serves live traffic. When one fails, the others absorb its share instantly, so there is no promotion step. But only if they have the capacity **already running**. Autoscaling during a regional failure means depending on a control plane that may itself be degraded, while every customer of that provider scales at the same moment.
+
+AWS calls the alternative **static stability**: provision enough capacity in advance that the system keeps working through a failure without making any changes. With N regions, each must handle peak ÷ (N − 1).
+
+<VariantQuestion template="region.n-plus-one" />
+
+</Step>
+
+<Step id="conflicts" title="Active-active writes: who wins?">
+
+If two regions accept writes to the same record concurrently, they conflict. There are three ways out, and each costs something:
+
+- **Home each record in one region.** A user's data is written only in their home region; other regions forward writes or serve stale reads. No conflicts, but a region failure makes its users' writes unavailable until you re-home them.
+- **Merge automatically.** Last-writer-wins by timestamp is simple and silently loses one update. CRDTs (counters, sets, registers designed to merge) keep every update but fit only some data types.
+- **Agree before committing.** A consensus protocol across regions, as Spanner does with Paxos, gives one serial order everywhere and costs at least one cross-region round trip per write.
+
+<Choice
+  id="cart-conflicts"
+  objective="resolve-write-conflicts"
+  prompt="A shopping cart is active-active in two regions. A user adds an item on their phone (routed to region A) and another on their laptop (routed to region B) in the same second. Which approach keeps both items?"
+  options={[
+    { id: "crdt", text: "Model the cart as a set CRDT whose replicas merge by union", correct: true, feedback: "Right. Adds commute, so merging the two replicas keeps both items. Removes need care, such as an observed-remove set." },
+    { id: "lww", text: "Last-writer-wins on the whole cart object", feedback: "The later write replaces the earlier cart, so one of the two items disappears." },
+    { id: "clock", text: "Synchronise both regions' clocks precisely, then use last-writer-wins", feedback: "Better clocks pick the true later write, but last-writer-wins still discards the other update." },
+    { id: "ignore", text: "Nothing is needed; replication delivers both writes to both regions", feedback: "Both writes arrive, but each replaces the whole cart. Without a merge rule, one overwrite wins." }
+  ]}
+/>
+
+</Step>
+
+<Step id="consensus-latency" title="The price of agreeing across regions">
+
+Speed of light sets a floor: a round trip between US coasts is roughly 60 to 80 ms, and between continents often well over 100 ms. A write that must reach a majority of regions pays at least the round trip to the **nearest** replica that completes the majority, because the leader does not wait for the slowest.
+
+That is why consensus deployments place a majority of replicas close together (for example three regions on one continent plus witnesses elsewhere), and why reads that need the latest value pay a similar cost.
+
+<VariantQuestion template="region.quorum-latency" />
+
+</Step>
+
+<Step id="hidden-coupling" title="Shared fate across regions">
+
+Multi-region buys independence only if nothing important is shared. Global configuration pushes, a single identity provider, one DNS provider, a global deployment pipeline and cross-region control planes can each take down every region together.
+
+<Choice
+  id="shared-fate"
+  objective="choose-topology"
+  multiple
+  prompt="Your service runs active-active in three regions. Which of these can still cause an outage in all three at once? Select all that apply."
+  options={[
+    { id: "config", text: "A bad global feature-flag or config push applied to every region at once", correct: true, feedback: "Right. Configuration is code; roll it out region by region with bake time, exactly like a binary." },
+    { id: "auth", text: "A single global authentication service that every request depends on", correct: true, feedback: "Right. A shared hard dependency is a single failure domain, whatever the topology above it." },
+    { id: "deploy", text: "A deployment that updates all regions simultaneously", correct: true, feedback: "Right. Stagger rollouts so a bad build is caught in one region." },
+    { id: "power", text: "A power failure in one region's data centers", feedback: "That is the failure multi-region is designed for. The other two regions absorb the traffic if they have the capacity." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh capacity and commit-latency variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["region.n-plus-one", "region.quorum-latency"]} count={4} />
+
+Try it at scale: in the [sandbox](/sandbox?template=cache-aside), add a crash of one service replica to the chaos timeline in the **Scenario** tab, then run the **Scale** tab. Watch whether the survivors saturate: that is the N + 1 question at a smaller scale.
+
+</Step>

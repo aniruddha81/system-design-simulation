@@ -1,0 +1,134 @@
+{/*
+id: multi-tenancy
+slug: multi-tenancy
+track: security
+title: "Multi-tenancy isolation"
+description: "Silo, pool or bridge: how SaaS systems keep tenants' data apart, stop noisy neighbours, and use shuffle sharding and cells to shrink a bad tenant's blast radius."
+objectives:
+  - id: choose-isolation-model
+    text: Choose between silo, pool and bridge tenancy models for isolation, cost and operations
+  - id: enforce-tenant-scoping
+    text: Enforce tenant scoping on every data access, with defence in depth such as row-level security
+  - id: limit-noisy-neighbours
+    text: Apply per-tenant quotas and fair scheduling so one tenant cannot exhaust shared capacity
+  - id: contain-blast-radius
+    text: Count shuffle shards and explain how they shrink the blast radius of a bad tenant
+requires: [authn-authz, partitioning]
+activities: [C, Q]
+limitations:
+  - "Shuffle-shard counts assume shards are chosen uniformly at random; real assignment also balances load and placement."
+  - "Isolation is discussed at the application and data layers; hypervisor and side-channel isolation are out of scope."
+sources:
+  - title: "SaaS Tenant Isolation Strategies"
+    authors: "Amazon Web Services"
+    url: "https://docs.aws.amazon.com/whitepapers/latest/saas-tenant-isolation-strategies/saas-tenant-isolation-strategies.html"
+  - title: "Workload isolation using shuffle-sharding"
+    authors: "Colm MacCárthaigh"
+    url: "https://aws.amazon.com/builders-library/workload-isolation-using-shuffle-sharding/"
+  - title: "Row Security Policies, PostgreSQL documentation"
+    url: "https://www.postgresql.org/docs/current/ddl-rowsecurity.html"
+  - title: "OWASP API Security Top 10 (2023)"
+    authors: "OWASP"
+    year: 2023
+    url: "https://owasp.org/API-Security/editions/2023/en/0x11-t10/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="models" title="Silo, pool or bridge">
+
+A **tenant** is a customer organisation sharing your SaaS system with others. AWS's tenant isolation whitepaper names three models:
+
+- **Silo**: each tenant gets its own stack or at least its own database. Strong isolation, simple per-tenant backup and deletion, easy to explain to auditors. Expensive per tenant, and thousands of silos are thousands of things to upgrade.
+- **Pool**: all tenants share the same services and tables, separated by a `tenant_id`. Cheapest and simplest to operate. Isolation depends entirely on your code being right every time.
+- **Bridge**: a mix, for example a pooled application tier with siloed databases, or pooled for the long tail and siloed for the largest or most regulated tenants.
+
+<Choice
+  id="tenancy-model"
+  objective="choose-isolation-model"
+  prompt="You serve 20,000 small businesses and 15 large banks. The banks contractually require their data in separate databases with their own encryption keys. Which model fits?"
+  options={[
+    { id: "bridge", text: "Bridge: pool the small businesses, give each bank a siloed database with its own key", correct: true, feedback: "Right. You pay silo costs only where a contract requires it, and keep the long tail cheap to run." },
+    { id: "silo-all", text: "Silo every tenant", feedback: "Isolation would be excellent, but 20,000 databases is a fleet to patch, migrate and monitor for customers who never asked for it." },
+    { id: "pool-all", text: "Pool everyone, including the banks", feedback: "That breaks the banks' contractual requirement. A tenant_id column is not a separate database or key." },
+    { id: "per-region", text: "One database per region", feedback: "Regions separate geography, not tenants. Banks would still share tables with everyone in their region." }
+  ]}
+/>
+
+</Step>
+
+<Step id="scoping" title="Scope every query to the tenant">
+
+In a pooled model, one missing `WHERE tenant_id = ?` leaks another customer's data: the multi-tenant version of broken object level authorisation. Two rules keep this from happening. First, take the tenant from the **authenticated context** (the token or session), never from a request parameter the caller controls. Second, add **defence in depth** so a single bug is not enough: PostgreSQL's row-level security, for example, applies a policy to every query on a table, so a query that forgets the filter returns only the current tenant's rows.
+
+<Choice
+  id="tenant-source"
+  objective="enforce-tenant-scoping"
+  prompt="An API endpoint receives tenant_id as a query parameter and uses it to filter results. What is wrong?"
+  options={[
+    { id: "trust", text: "The caller chooses the tenant. It must come from the authenticated identity, and be enforced again at the data layer", correct: true, feedback: "Right. Any caller can change a parameter. Derive the tenant from the verified token, and let row-level policies catch any query that forgets." },
+    { id: "nothing", text: "Nothing, as long as the endpoint requires authentication", feedback: "Authentication tells you who the caller is. It does not stop a caller from asking for someone else's tenant." },
+    { id: "encode", text: "The parameter should be base64-encoded", feedback: "Encoding is not access control. The attacker can encode a different tenant ID just as easily." },
+    { id: "uuid", text: "Tenant IDs should be random UUIDs", feedback: "Unguessable IDs reduce enumeration, but IDs leak through invites, logs and support tickets. Check, do not hide." }
+  ]}
+/>
+
+</Step>
+
+<Step id="noisy" title="Noisy neighbours">
+
+Shared capacity means one tenant's spike, runaway script or huge export can slow everyone. Isolation of **performance** matters as much as isolation of data. The tools are familiar from rate limiting, applied per tenant: quotas on requests and storage, per-tenant concurrency limits in workers, fair queueing so one tenant's backlog cannot starve others, and separate pools for tenants that are consistently large.
+
+<Choice
+  id="noisy-fix"
+  objective="limit-noisy-neighbours"
+  prompt="One tenant's nightly bulk import fills the shared job queue, and every other tenant's jobs wait hours. Which change fixes this without new hardware?"
+  options={[
+    { id: "fair", text: "Per-tenant concurrency limits in the workers and fair scheduling across tenants' queues", correct: true, feedback: "Right. Each tenant gets a bounded share; the bulk import still runs, just without monopolising the workers." },
+    { id: "fifo", text: "Keep one FIFO queue but make it larger", feedback: "A bigger FIFO holds more of the bulk import in front of everyone else. Waiting gets longer, not shorter." },
+    { id: "priority", text: "Give the bulk-import tenant the highest priority so it finishes sooner", feedback: "That makes everyone else wait for it explicitly. The problem is the lack of fairness, not the import's speed." },
+    { id: "ban", text: "Disable bulk imports", feedback: "It removes a feature customers pay for. Bounded per-tenant shares solve the same problem and keep the feature." }
+  ]}
+/>
+
+</Step>
+
+<Step id="shuffle" title="Shuffle sharding shrinks the blast radius">
+
+Some failures are caused *by* a tenant: a poison request that crashes workers, or an attack aimed at one customer. With classic sharding, n workers split into fixed groups of k, and a bad tenant takes down its whole group, along with every other tenant in that group.
+
+**Shuffle sharding**, described in AWS's Builders' Library, gives each tenant its own random set of k workers out of n. Two tenants rarely get the same set, so when one tenant's set fails, most other tenants still have at least one healthy worker. The number of distinct sets is n choose k, and a random other tenant shares your exact set with probability 1 ÷ (n choose k).
+
+<VariantQuestion template="tenancy.shuffle-shards" />
+
+</Step>
+
+<Step id="cells" title="Cells: isolation for the whole stack">
+
+Shuffle sharding isolates one tier. **Cell-based architecture** applies the same idea to the whole stack: each cell is a complete, independent copy of the service serving a subset of tenants, with a thin routing layer in front. A bad deploy, a poison tenant or a database failure affects one cell. Deploy cell by cell, and the first cell is your canary.
+
+<Choice
+  id="cell-benefit"
+  objective="choose-isolation-model"
+  prompt="You split a pooled service into 10 cells, each serving a tenth of the tenants. What do you gain?"
+  options={[
+    { id: "blast", text: "A failure or bad deploy in one cell affects about a tenth of tenants, and rollouts can proceed cell by cell", correct: true, feedback: "Right. Cells bound the blast radius and turn every deployment into a staged one." },
+    { id: "cheaper", text: "The system becomes cheaper to run", feedback: "Usually the opposite: each cell carries its own overhead and headroom. You pay for isolation." },
+    { id: "no-routing", text: "You no longer need a routing layer", feedback: "You now need one: something must map each tenant to its cell, and it must be highly available and simple." },
+    { id: "no-big", text: "No tenant can ever outgrow a cell", feedback: "A large tenant can still outgrow one. Cells need a plan for moving or splitting tenants." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh shuffle-shard variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["tenancy.shuffle-shards"]} count={3} />
+
+Next, when a tenant or user leaves, their data must go too: [privacy and data deletion](/learn/security/privacy-deletion).
+
+</Step>

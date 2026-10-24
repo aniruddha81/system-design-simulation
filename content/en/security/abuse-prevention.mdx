@@ -1,0 +1,125 @@
+{/*
+id: abuse-prevention
+slug: abuse-prevention
+track: security
+title: "Abuse prevention"
+description: "Credential stuffing, fake accounts and scraping use your product as designed. Why per-IP limits fail, which signals work, and why false positives dominate at scale."
+objectives:
+  - id: stop-credential-stuffing
+    text: Explain why per-IP rate limits alone fail against credential stuffing, and estimate an attack's pace
+  - id: layer-abuse-signals
+    text: Combine account, credential, device and velocity signals into layered defences
+  - id: weigh-false-positives
+    text: Calculate the share of blocks that hit legitimate users, given base rates
+  - id: choose-friction
+    text: Choose graduated friction proportionate to risk instead of a single block decision
+requires: [rate-limiting, authn-authz]
+activities: [C, Q]
+limitations:
+  - "Attack pace assumes the attacker uses the full rate limit on every IP; real attacks also pace themselves to stay below detection."
+  - "The classifier is reduced to two rates; real systems score risk continuously and adapt as attackers do."
+sources:
+  - title: "Credential stuffing"
+    authors: "OWASP"
+    url: "https://owasp.org/www-community/attacks/Credential_stuffing"
+  - title: "OWASP Automated Threats to Web Applications"
+    authors: "OWASP"
+    url: "https://owasp.org/www-project-automated-threats-to-web-applications/"
+  - title: "Credential Stuffing Prevention Cheat Sheet"
+    authors: "OWASP"
+    url: "https://cheatsheetseries.owasp.org/cheatsheets/Credential_Stuffing_Prevention_Cheat_Sheet.html"
+  - title: "NIST SP 800-63B: Digital Identity Guidelines, Authentication and Lifecycle Management"
+    authors: "P. Grassi et al."
+    year: 2017
+    url: "https://pages.nist.gov/800-63-3/sp800-63b.html"
+  - title: "Validating Leaked Passwords with k-Anonymity"
+    authors: "Junade Ali"
+    year: 2018
+    url: "https://blog.cloudflare.com/validating-leaked-passwords-with-k-anonymity/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="abuse" title="Attacks that use the product as designed">
+
+Abuse is not a bug in your code. It is your login, sign-up, search and checkout used **at scale with bad intent**: testing leaked passwords, creating fake accounts for spam or promotions, scraping prices, testing stolen cards with small purchases. OWASP's catalogue of automated threats names each of these patterns. Every request is individually valid, so the signal is in the **pattern**.
+
+<Choice
+  id="which-abuse"
+  objective="layer-abuse-signals"
+  prompt="Checkout sees thousands of 1-dollar purchases per hour, each with a different card number, most of them declined. What is most likely happening?"
+  options={[
+    { id: "carding", text: "Card testing: attackers checking which stolen cards are live before using them elsewhere", correct: true, feedback: "Right. Tiny amounts, many cards and a high decline rate are the signature. Your payment fees and decline ratios suffer too." },
+    { id: "sale", text: "A successful promotion", feedback: "Real customers do not arrive with a fresh card per order and mostly fail. The decline rate gives it away." },
+    { id: "ddos", text: "A DDoS attack", feedback: "The volume is modest and each request completes. The goal is to validate cards, not to take you down." },
+    { id: "bug", text: "A bug in the payment provider", feedback: "A provider bug would affect real customers' existing cards, not produce a stream of unknown cards at minimal amounts." }
+  ]}
+/>
+
+</Step>
+
+<Step id="stuffing" title="Credential stuffing beats per-IP limits">
+
+**Credential stuffing** replays username and password pairs leaked from other sites, betting on password reuse. Attackers rent residential proxy networks with very large pools of IP addresses, so a per-IP limit that would stop one machine barely slows a distributed attack. Each IP looks like one household making a few login attempts.
+
+<VariantQuestion template="abuse.stuffing-hours" />
+
+</Step>
+
+<Step id="signals" title="Layer the signals">
+
+No single signal holds. Effective defences stack several that are expensive for an attacker to fake at once.
+
+<Choice
+  id="stuffing-defences"
+  objective="layer-abuse-signals"
+  multiple
+  prompt="Which measures meaningfully reduce credential stuffing? Select all that apply."
+  options={[
+    { id: "breached", text: "Reject or force a reset for passwords that appear in known breach corpora, as NIST SP 800-63B requires", correct: true, feedback: "Right. Stuffing only works on reused, leaked passwords. A k-anonymity range query lets you check without sending the password anywhere." },
+    { id: "mfa", text: "Offer and encourage multi-factor authentication, and require it for risky sign-ins", correct: true, feedback: "Right. A correct leaked password is no longer enough to take over the account." },
+    { id: "velocity", text: "Track failure rates per account, per device fingerprint and globally, not only per IP", correct: true, feedback: "Right. A global spike in failed logins is visible even when every IP stays under its limit." },
+    { id: "messages", text: "Return 'wrong password' or 'no such user' precisely so users know what went wrong", feedback: "Distinct messages tell the attacker which usernames exist, which makes their list more valuable. Use one generic message." },
+    { id: "ip-only", text: "Lower the per-IP limit to one attempt per hour", feedback: "It hurts households and offices sharing an IP, while a proxy pool simply uses more addresses." }
+  ]}
+/>
+
+</Step>
+
+<Step id="false-positives" title="The base-rate trap">
+
+At scale, most traffic is legitimate. A classifier that wrongly blocks "only" 1% of good logins can still produce more wrongful blocks than correct ones when abuse is a small share of the traffic. Those wrongly blocked users raise support tickets, churn, and learn to distrust your security. Always compute the share of blocks that are false, not just the false-positive rate.
+
+<VariantQuestion template="abuse.base-rate" />
+
+</Step>
+
+<Step id="friction" title="Graduated friction">
+
+Because every signal is imperfect, respond in proportion to risk instead of a binary allow or block. Low risk passes silently; medium risk gets a step-up such as an email confirmation, an MFA prompt or a challenge; high risk is blocked or held for review. Do not tell the attacker which signal fired: precise feedback is a free tuning tool for them.
+
+<Choice
+  id="graduated"
+  objective="choose-friction"
+  prompt="A sign-in comes from a new device in a new country with the correct password, for an account with no MFA. Your risk score is elevated but not certain. What is the best response?"
+  options={[
+    { id: "step-up", text: "Ask for a step-up: a code to the account's verified email or phone, then remember the device if it succeeds", correct: true, feedback: "Right. A real user passes with a little friction; an attacker holding only the leaked password is stopped." },
+    { id: "block", text: "Block the sign-in permanently and lock the account", feedback: "Travellers and new phones are common. A hard lock punishes real users and lets attackers lock out victims at will." },
+    { id: "allow", text: "Allow it; the password was correct", feedback: "A correct password is exactly what credential stuffing produces. The other signals are why you score risk at all." },
+    { id: "explain", text: "Reject it and explain that the new country triggered the block", feedback: "That teaches the attacker to use a proxy in the victim's country. Keep the signals private." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+The mastery check draws fresh stuffing-pace and base-rate variants. Score 80% or more to master the lesson.
+
+<MasteryCheck templates={["abuse.stuffing-hours", "abuse.base-rate"]} count={4} />
+
+Next, keep one customer's problems from becoming everyone's in [multi-tenancy isolation](/learn/security/multi-tenancy).
+
+</Step>
