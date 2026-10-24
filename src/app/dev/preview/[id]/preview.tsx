@@ -9,9 +9,11 @@ import type { NodeId, Scenario } from "@/engine/types";
 import { widgetSchemas, type WidgetName } from "@/lib/content/schema";
 import { diagnose, generate, isCorrect, randomSeed, seedFrom, templateIds, templates } from "@/lib/content/variants";
 import { generateHashRingVariant, generateIsolationVariant, solveHashRingVariant, solveIsolationVariant } from "@/models";
+import type { ModelName } from "@/components/models/ModelQuestion";
+import { focusedModelNames, focusedQuestion, displayAnswer } from "@/components/models/question-data";
 import { useMDXComponents } from "../../../../../mdx-components";
 
-type Ctx = { seed: number; template: string; model: "hashRing" | "isolation" };
+type Ctx = { seed: number; template: string; model: ModelName };
 
 const SAMPLES: Record<WidgetName, (c: Ctx) => Record<string, unknown>> = {
   Step: () => ({ id: "preview", title: "A preview step", children: "Step body. Every lesson step needs one interactive widget." }),
@@ -40,6 +42,16 @@ const SAMPLES: Record<WidgetName, (c: Ctx) => Record<string, unknown>> = {
   MasteryCheck: () => ({ templates: templateIds, count: 3 }),
   HashRingPlayer: (c) => ({ seed: c.seed }),
   IsolationPlayer: (c) => ({ seed: c.seed }),
+  RaftPlayer: (c) => ({ seed: c.seed }),
+  ClocksPlayer: (c) => ({ seed: c.seed }),
+  TwoPhasePlayer: (c) => ({ seed: c.seed }),
+  GossipPlayer: (c) => ({ seed: c.seed }),
+  QuorumPlayer: (c) => ({ seed: c.seed }),
+  CrdtPlayer: (c) => ({ seed: c.seed }),
+  MatchingPlayer: (c) => ({ seed: c.seed }),
+  SpatialPlayer: (c) => ({ seed: c.seed }),
+  SketchesPlayer: (c) => ({ seed: c.seed }),
+  WindowingPlayer: (c) => ({ seed: c.seed }),
   ModelQuestion: (c) => ({ id: "preview", objective: "sample", model: c.model, seed: c.seed }),
 };
 
@@ -55,7 +67,7 @@ export function Preview({ id, ids }: { id: string; ids: string[] }) {
   const props = isWidget ? SAMPLES[name]({ seed, template, model }) : {};
   const valid = isWidget ? widgetSchemas[name].safeParse(props) : null;
   const Widget = widgets[id];
-  const seeded = id === "HashRingPlayer" || id === "IsolationPlayer" || id === "ModelQuestion";
+  const seeded = id.endsWith("Player") || id === "ModelQuestion";
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 px-4 py-8 md:grid-cols-[12rem_1fr]">
@@ -95,6 +107,7 @@ export function Preview({ id, ids }: { id: string; ids: string[] }) {
             <select aria-label="Model" className="field" value={model} onChange={(e) => setModel(e.target.value as Ctx["model"])}>
               <option value="hashRing">hashRing</option>
               <option value="isolation">isolation</option>
+              {focusedModelNames.map(name => <option key={name}>{name}</option>)}
             </select>
           )}
         </div>
@@ -140,11 +153,14 @@ function Invariants({ id, ctx }: { id: string; ctx: Ctx }) {
     if (ctx.model === "hashRing") {
       const v = generateHashRingVariant(ctx.seed);
       rows.push([v.id, `${v.prompt} → solver: ${solveHashRingVariant(v)} keys move`]);
-    } else {
+    } else if (ctx.model === "isolation") {
       const v = generateIsolationVariant(ctx.seed);
       rows.push([v.id, `${v.level}, ${v.scenario.anomaly} schedule → solver observes: ${solveIsolationVariant(v).join(", ") || "none"}`]);
+    } else {
+      const question = focusedQuestion(ctx.model, ctx.seed);
+      rows.push([`${ctx.model} @ seed ${ctx.seed}`, question.fields.map(f => `${f.label}: ${displayAnswer(f.answer)}`).join("; ")]);
     }
-  } else if (id === "HashRingPlayer" || id === "IsolationPlayer") {
+  } else if (id.endsWith("Player")) {
     rows.push(["invariants", "Shown live inside the player (violated invariants list), recomputed after every step."]);
   }
   if (!rows.length) return null;

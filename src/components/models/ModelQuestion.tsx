@@ -5,10 +5,12 @@ import { useStepDone } from "@/components/lesson/stepper";
 import { parseAnswer, randomSeed, seedFrom } from "@/lib/content/variants";
 import { anomalyNames, generateHashRingVariant, generateIsolationVariant, solveHashRingVariant, solveIsolationVariant, type Anomaly } from "@/models";
 import { ANOMALY_NAMES, LEVEL_NAMES, opText } from "./IsolationPlayer";
+import { focusedQuestion, checkFocusedAnswer, displayAnswer, type FocusedModelName } from "./question-data";
+import { describeAction } from "./FocusedPlayer";
 
 const TOLERANCE = 0.3;
 
-export type ModelName = "hashRing" | "isolation";
+export type ModelName = "hashRing" | "isolation" | FocusedModelName;
 
 /** Seeded variant question over a focused model; the model's solver is the answer key (PLAN §9). */
 export function ModelQuestion({ id, model, seed }: { id: string; objective: string; model: ModelName; seed?: number }) {
@@ -16,9 +18,41 @@ export function ModelQuestion({ id, model, seed }: { id: string; objective: stri
   const fresh = () => setCurrent(randomSeed());
   return (
     <div role="group" aria-label="Model question" className="panel my-6 p-5 sm:p-6">
-      {model === "hashRing" ? <RingQuestion key={current} seed={current} onFresh={fresh} /> : <IsolationQuestion key={current} seed={current} onFresh={fresh} />}
+      {model === "hashRing" ? <RingQuestion key={`${model}-${current}`} seed={current} onFresh={fresh} /> : model === "isolation" ? <IsolationQuestion key={`${model}-${current}`} seed={current} onFresh={fresh} /> : <FocusedQuestion key={`${model}-${current}`} model={model} seed={current} onFresh={fresh} />}
     </div>
   );
+}
+
+function FocusedQuestion({ model, seed, onFresh }: { model: FocusedModelName; seed: number; onFresh: () => void }) {
+  const done = useStepDone();
+  const question = focusedQuestion(model, seed);
+  const [answers, setAnswers] = useState<string[]>(question.fields.map(() => ""));
+  const [result, setResult] = useState<boolean | null>(null);
+  return <form onSubmit={e => {
+    e.preventDefault();
+    const ok = question.fields.every((field, i) => checkFocusedAnswer(field, answers[i]));
+    setResult(ok);
+    if (ok) done();
+  }}>
+    <p className="mb-3 font-medium">{question.prompt}</p>
+    <p className="mb-2 text-sm text-muted">Seed {seed}. Start from the supplied configuration and replay the actions in order.</p>
+    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-surface-2 p-3 text-xs" aria-label="Question configuration">{JSON.stringify(question.context, null, 2)}</pre>
+    <ol className="my-4 max-h-80 list-decimal overflow-auto pl-6 text-sm" aria-label="Question schedule">{question.actions.map((a, i) => <li key={i} className="break-words py-1 num">{describeAction(a)}</li>)}</ol>
+    <fieldset disabled={result !== null} className="grid gap-3">
+      <legend className="sr-only">Your prediction</legend>
+      {question.fields.map((field, i) => {
+        const choices = typeof field.answer === "boolean" ? ["yes", "no"] : field.choices;
+        return <label key={field.label} className="grid gap-1 text-sm">{field.label}
+          {choices ? <select className="field" required value={answers[i]} onChange={e => setAnswers(answers.map((v, j) => j === i ? e.target.value : v))}><option value="">Choose an answer</option>{choices.map(c => <option key={c}>{c}</option>)}</select> : <input className="field" required inputMode={typeof field.answer === "number" ? "decimal" : "text"} value={answers[i]} onChange={e => setAnswers(answers.map((v, j) => j === i ? e.target.value : v))} />}
+        </label>;
+      })}
+    </fieldset>
+    {result === null && <button type="submit" className="btn btn-primary mt-4">Check</button>}
+    <div aria-live="polite">{result !== null && <Result ok={result} onFresh={onFresh}>
+      <p>{question.explanation}</p>
+      <ul>{question.fields.map(field => <li key={field.label}>{field.label}: {displayAnswer(field.answer)}</li>)}</ul>
+    </Result>}</div>
+  </form>;
 }
 
 function Result({ ok, children, onFresh }: { ok: boolean; children: ReactNode; onFresh: () => void }) {

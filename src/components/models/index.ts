@@ -1,3 +1,13 @@
 export { HashRingPlayer } from "./HashRingPlayer";
 export { IsolationPlayer } from "./IsolationPlayer";
 export { ModelQuestion } from "./ModelQuestion";
+export { RaftPlayer } from "./RaftPlayer";
+export { ClocksPlayer } from "./ClocksPlayer";
+export { TwoPhasePlayer } from "./TwoPhasePlayer";
+export { GossipPlayer } from "./GossipPlayer";
+export { QuorumPlayer } from "./QuorumPlayer";
+export { CrdtPlayer } from "./CrdtPlayer";
+export { MatchingPlayer } from "./MatchingPlayer";
+export { SpatialPlayer } from "./SpatialPlayer";
+export { SketchesPlayer } from "./SketchesPlayer";
+export { WindowingPlayer } from "./WindowingPlayer";

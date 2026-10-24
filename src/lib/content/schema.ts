@@ -96,7 +96,17 @@ export const widgetSchemas = {
   MasteryCheck: z.strictObject({ templates: z.array(z.enum(templateIds)).min(1), count: z.number().int().min(3).max(10) }),
   HashRingPlayer: z.strictObject({ seed: z.number().int().optional() }),
   IsolationPlayer: z.strictObject({ anomaly: z.enum(anomalyNames).optional(), level: z.enum(isolationLevels).optional(), seed: z.number().int().optional() }),
-  ModelQuestion: z.strictObject({ id: stableId, objective, model: z.enum(["hashRing", "isolation"]), seed: z.number().int().optional() }),
+  RaftPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  ClocksPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  TwoPhasePlayer: z.strictObject({ seed: z.number().int().optional() }),
+  GossipPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  QuorumPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  CrdtPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  MatchingPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  SpatialPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  SketchesPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  WindowingPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  ModelQuestion: z.strictObject({ id: stableId, objective, model: z.enum(["hashRing", "isolation", "raft", "clocks", "twoPhase", "gossip", "quorum", "crdt", "matching", "spatial", "sketches", "windowing"]), seed: z.number().int().optional() }),
 } as const;
 export type WidgetName = keyof typeof widgetSchemas;
 

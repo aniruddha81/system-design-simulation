@@ -14,7 +14,7 @@ objectives:
   - id: choose-pattern
     text: Choose between a local transaction, 2PC and a saga for a cross-service workflow
 requires: [transactions, queues, idempotency]
-activities: [C, Q, R]
+activities: [M, C, Q, R]
 limitations:
   - "2PC costs assume equal round trips to every participant and a fixed fsync time; real participants differ."
   - "Saga isolation anomalies (other transactions seeing intermediate states) are described but not simulated."
@@ -76,11 +76,19 @@ The weak point is the window after a participant votes yes. It has promised to c
 
 That is why 2PC is called a **blocking** protocol. Gray and Lamport (2006) showed that replicating the coordinator's decision with Paxos removes the single point of blocking; systems like Spanner run 2PC over Paxos-replicated groups for exactly this reason.
 
+Keep Transaction protocol set to **Two-phase commit** and select **coordinator crash after prepare** in Script. Watch prepared participants retain their state when the coordinator goes offline.
+
+<TwoPhasePlayer />
+
 <VariantQuestion template="twopc.decision-latency" />
 
 </Step>
 
 <Step id="in-doubt" title="The in-doubt participant">
+
+With Transaction protocol set to **Two-phase commit**, select **coordinator crash after prepare** in Script. Step through the participant timeout and check whether it releases the prepared participant; then answer below.
+
+<TwoPhasePlayer />
 
 <Choice
   id="prepared-timeout"
@@ -112,6 +120,10 @@ Compensation is semantic, not a rollback: you cannot un-send an email, but you c
 
 Compensations run in reverse order, so each undo sees the state its forward step left. Steps that cannot be undone, such as shipping a parcel or sending a wire transfer that cannot be recalled, should be the **pivot**: placed after every step that might still fail, so that once the pivot commits, the remaining steps are ones that can be retried until they succeed.
 
+Set Transaction protocol to **Saga** and select **saga failure and reverse compensation** in Script. Follow the completed steps and the reverse compensation path after the next step fails.
+
+<TwoPhasePlayer />
+
 <Ordering
   id="compensation-order"
   objective="saga-compensation"
@@ -133,6 +145,10 @@ Compensations run in reverse order, so each undo sees the state its forward step
 Every saga step must do two things: commit its local change and tell the next step, usually by publishing a message. Writing to a database and to a broker are two separate systems. Commit then publish, and a crash in between loses the message; publish then commit, and a failed commit leaves a message about something that never happened.
 
 The **transactional outbox** writes the message into an outbox table in the *same* local transaction as the business change. A separate relay reads the outbox and publishes to the broker, marking rows as sent. A crash after publishing but before marking means the relay publishes again, so delivery is at least once and consumers must deduplicate, as in the [idempotency lesson](/learn/distributed-systems/idempotency).
+
+Set Transaction protocol to **Transactional outbox** and select **transactional outbox** in Script. Watch the atomic local write, the relay retry after a crash and the consumer deduplicate the repeated delivery.
+
+<TwoPhasePlayer />
 
 <Choice
   id="dual-write"

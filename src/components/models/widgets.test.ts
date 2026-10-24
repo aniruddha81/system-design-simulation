@@ -5,12 +5,36 @@ import { LessonStepper, Step } from "@/components/lesson/stepper";
 import { assessedObjectives, widgetSchemas } from "@/lib/content/schema";
 import { generateHashRingVariant, generateIsolationVariant } from "@/models";
 import { HashRingPlayer, IsolationPlayer, ModelQuestion } from "./index";
+import * as players from "./index";
+import { focusedModelNames, focusedQuestion } from "./question-data";
 
 const inLesson = (widget: ReturnType<typeof createElement>) => renderToStaticMarkup(
   createElement(LessonStepper, { lessonId: "test", revision: 1, stepIds: ["model"], stepTitles: ["Model"] } as ComponentProps<typeof LessonStepper>, createElement(Step, { id: "model", title: "Model" }, widget)),
 );
 
 describe("model lesson widgets", () => {
+  it("registers every focused player with keyboard controls and text alternatives", () => {
+    for (const [name, Component] of Object.entries(players)) {
+      if (name === "ModelQuestion") continue;
+      const schema = widgetSchemas[name as keyof typeof widgetSchemas];
+      expect(schema.safeParse({ seed: 7 }).success).toBe(true);
+      expect(schema.safeParse({ seed: 1.5 }).success).toBe(false);
+      const html = inLesson(createElement(Component as typeof HashRingPlayer, { seed: 7 }));
+      expect(html).toContain('aria-label="Step forward"');
+      expect(html).toContain('type="range"');
+      expect(html).toContain(name === "IsolationPlayer" ? 'aria-label="Anomalies observed under' : 'aria-label="Invariants"');
+    }
+  });
+
+  it.each(focusedModelNames)("registers and renders the %s seeded question", model => {
+    const props = { id: "question", objective: "model", model, seed: 17 };
+    expect(widgetSchemas.ModelQuestion.safeParse(props).success).toBe(true);
+    expect(assessedObjectives("ModelQuestion", props)).toEqual(["model"]);
+    const html = inLesson(createElement(ModelQuestion, props));
+    expect(html).toContain(focusedQuestion(model, 17).prompt.replace(/'/g, "&#x27;"));
+    expect(html).toContain('aria-label="Question schedule"');
+    expect(html).toContain("Check");
+  });
   it("registers validated props and counts model questions toward lesson objectives", () => {
     expect(widgetSchemas.HashRingPlayer.safeParse({ seed: 1 }).success).toBe(true);
     expect(widgetSchemas.IsolationPlayer.safeParse({ level: "serializable", anomaly: "writeSkew" }).success).toBe(true);

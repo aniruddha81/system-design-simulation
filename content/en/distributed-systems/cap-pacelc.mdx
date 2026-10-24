@@ -12,7 +12,7 @@ objectives:
   - id: classify-systems
     text: Classify a concrete store configuration by what it gives up during a partition and in normal operation
 requires: [replication]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
   - "CAP is taught with Gilbert and Lynch's definitions: linearizable consistency, a response from every non-failed node, and arbitrary message loss. Other definitions give other conclusions."
   - "Latency figures ignore disk, queuing and processing time; real systems add these on top of the round trips shown."
@@ -113,6 +113,10 @@ Consistency costs latency because a write cannot be acknowledged until enough re
 PACELC gives two letters per configuration. Abadi's own examples: Dynamo-style stores such as Cassandra and Riak, in their default setup, are **PA/EL**: available under partition and low-latency otherwise. Fully consistent systems built on consensus are **PC/EC**. Yahoo's PNUTS was **PC/EL**: it kept a per-record master, so it gave up availability for that record under partition, but read from local replicas that could be stale.
 
 Most modern stores let each request choose. A Cassandra read at consistency level ONE and a read at QUORUM are different points in the space, issued against the same cluster.
+
+Select **quorum overlap** in Script and inspect the read and write sets. Then keep Sloppy quorum with spare replicas checked and select **sloppy quorum and hinted handoff**. A spare acknowledges for an unavailable home replica; watch the home-only read miss the write before handoff repairs it. R + W > N guarantees overlap only when both sets come from the same fixed replica group.
+
+<QuorumPlayer />
 
 <Choice
   id="classify-quorum"

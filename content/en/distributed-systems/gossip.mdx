@@ -12,10 +12,10 @@ objectives:
   - id: phi
     text: Compute phi accrual suspicion levels and choose a threshold for a detection-speed trade-off
 requires: [replication]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
-  - "Gossip round estimates assume push gossip with fanout 1, uniform peer choice and no message loss."
-  - "Phi is computed with the exponential approximation Cassandra uses; Hayashibara et al.'s original detector fits a normal distribution to recent heartbeat gaps."
+  - "Gossip round estimates assume push gossip with fanout 1, uniform peer choice and no message loss; the player also offers pull and push-pull."
+  - "Numeric phi questions use Cassandra's exponential approximation; the player fits a normal distribution to recent heartbeat gaps, as in the original detector."
   - "SWIM's suspicion sub-protocol and incarnation numbers are summarised, not simulated."
 sources:
   - title: "Epidemic algorithms for replicated database maintenance"
@@ -70,6 +70,10 @@ In push gossip with fanout 1, each informed node tells one random peer per round
 
 Push-pull gossip, where the contacted peer also sends back what it knows, finishes the tail much faster, because uninformed nodes now pull from informed ones as well as being pushed.
 
+Select **push spread** in Script and step through the infection curve. Compare **pull spread** and **pushPull spread** with the same seed, especially as the last uninformed nodes are reached.
+
+<GossipPlayer />
+
 <VariantQuestion template="gossip.rounds" />
 
 </Step>
@@ -103,6 +107,10 @@ A fixed timeout is a yes/no answer that ignores how regular a node's heartbeats 
 
 Cassandra approximates the gap distribution as exponential, which gives a simple formula: φ = silence ÷ (mean gap × ln 10). Its default conviction threshold is 8.
 
+Select **phi false positive** in Script. Watch a delayed heartbeat make a live node suspected, then clear suspicion when it arrives. The player fits a normal heartbeat-gap distribution; the calculation below uses the exponential approximation.
+
+<GossipPlayer />
+
 <VariantQuestion template="gossip.phi" />
 
 </Step>
@@ -110,6 +118,10 @@ Cassandra approximates the gap distribution as exponential, which gives a simple
 <Step id="threshold" title="Choosing the threshold">
 
 The application chooses a threshold on φ. A low threshold suspects quickly and makes mistakes more often; a high threshold suspects slowly and rarely errs. The useful property is that the same threshold adapts: on a jittery network, the mean gap rises and so does the silence needed to reach the same φ.
+
+Select **phi failure detection** in Script and watch the higher threshold delay suspicion after a crash. Compare **phi false positive** to see the cost of the lower threshold.
+
+<GossipPlayer />
 
 <VariantQuestion template="gossip.phi-silence" />
 

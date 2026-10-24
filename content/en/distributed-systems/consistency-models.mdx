@@ -14,7 +14,7 @@ objectives:
   - id: estimate-staleness
     text: Estimate the chance a read misses a recent write when read and write sets need not overlap
 requires: [cap-pacelc]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
   - "Models are described for single objects or simple key-value histories; transactional models such as serializability and snapshot isolation are covered in the transactions lesson."
   - "The stale-read model assumes the read picks replicas uniformly at random and that no repair runs during the read; real coordinators often prefer nearby or fast replicas."
@@ -165,6 +165,10 @@ Causal consistency is attractive because it is close to the strongest model a st
 <Step id="eventual" title="How stale is eventual?">
 
 Eventual consistency gives no bound at all, so you have to measure or model it. In a leaderless store the dial is quorum size: with N replicas, a write acknowledged by W and a read of R, overlap is guaranteed only when R + W > N. Below that, a read can land entirely on replicas the write has not reached yet. Bailis et al. formalised this as "probabilistically bounded staleness"; the simple case is a counting problem.
+
+Select **read repair** in Script and watch an older replica catch up when the read repairs it. Then compare **quorum overlap** with **sloppy quorum and hinted handoff** (keep Sloppy quorum with spare replicas checked): a spare can acknowledge a write that a home-only read misses until handoff.
+
+<QuorumPlayer />
 
 <VariantQuestion template="consistency.stale-read" />
 

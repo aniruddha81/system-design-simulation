@@ -14,7 +14,7 @@ objectives:
   - id: partition-behaviour
     text: Predict what a leader cut off in a minority partition can and cannot do
 requires: [replication, consistency-models]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
   - "No membership changes: joint consensus and single-server changes are out of scope."
   - "Log compaction, snapshots and InstallSnapshot are not covered."
@@ -96,6 +96,10 @@ Followers expect regular heartbeats (empty AppendEntries). If a follower hears n
 
 Raft makes split votes rare by randomising each timeout, for example uniformly between 150 and 300 ms as in the paper. The first follower to time out usually wins before anyone else wakes. Raft also adds the **election restriction**: a server only votes for a candidate whose log is at least as up to date as its own, comparing the last entry's term and then its index. So a winner always holds every committed entry.
 
+Select **normal election** in Script and step through the vote requests and replies. Watch the term, each vote and the transition from candidate to leader; then compare **split vote**.
+
+<RaftPlayer />
+
 <VariantQuestion template="raft.election-time" />
 
 </Step>
@@ -127,7 +131,15 @@ The leader tracks a **matchIndex** per follower: the highest index known to be o
 
 Without that rule, the Raft paper's Figure 8 shows a disaster: an old-term entry reaches a majority, the leader counts it as committed, then a different server with a newer conflicting entry wins an election and overwrites it.
 
+Select **normal election** in Script. Step through the client proposal and compare the log length with the commit index: appending locally is not enough; a majority must replicate the current-term entry.
+
+<RaftPlayer />
+
 <VariantQuestion template="raft.commit-index" />
+
+Now predict whether the generated proposal advances the leader's commit index. Replay the supplied schedule and apply the majority rule.
+
+<ModelQuestion id="commit-index-model" objective="commit-rule" model="raft" />
 
 </Step>
 
@@ -136,6 +148,10 @@ Without that rule, the Raft paper's Figure 8 shows a disaster: an old-term entry
 Partition a five-server cluster into two and three. If the old leader is on the two-server side, it keeps believing it is leader until it hears a higher term. It still accepts client commands and appends them to its log, but it can never reach three servers, so those entries never commit. Meanwhile the three-server side elects a new leader in a higher term and carries on.
 
 When the partition heals, the old leader sees the higher term, steps down, and its uncommitted entries are overwritten. Clients that wrote to it got timeouts, never success. Reads are the trap: if the old leader answers reads from its own state, it serves stale data. Raft prevents this by confirming leadership with a majority round of heartbeats before serving a read (ReadIndex) or by relying on a leader lease, which assumes bounded clock drift.
+
+Select **minority partition** in Script and watch the isolated leader append without advancing its commit index. Then select **partition heal with log repair** to see the uncommitted suffix replaced.
+
+<RaftPlayer />
 
 <Choice
   id="minority-leader"

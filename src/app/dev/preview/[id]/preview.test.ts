@@ -16,7 +16,7 @@ describe("development author preview", () => {
       expect(html).toContain('aria-label="Widgets"');
       expect(html).not.toContain("Invalid props");
       expect(html).toContain(`href="/dev/preview/${id}"`);
-      if (["HashRingPlayer", "IsolationPlayer", "ModelQuestion"].includes(id)) expect(html).toContain("New seed");
+      if (id.endsWith("Player") || id === "ModelQuestion") expect(html).toContain("New seed");
     }
   });
 

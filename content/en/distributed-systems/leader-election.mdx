@@ -12,7 +12,7 @@ objectives:
   - id: fencing
     text: Explain how a paused or partitioned holder corrupts data, and how fencing tokens checked by the resource prevent it
 requires: [consensus, clocks]
-activities: [C, Q, R]
+activities: [M, C, Q, R]
 limitations:
   - "Lease arithmetic covers clock drift only; network delay is assumed to shorten the holder's view, and process pauses are treated separately."
   - "Fencing is taught for a single storage resource that can compare tokens; resources without conditional writes need other protection."
@@ -114,6 +114,10 @@ Some resources cannot check anything, such as a third-party API or a plain file 
 <Step id="leader-reads" title="Leases for reads, and what they assume">
 
 Leases also speed up reads. A Raft leader must normally confirm it is still leader with a round of heartbeats before serving a read, or it might be a stale leader in a minority partition. With a **leader lease**, followers promise not to elect anyone else until the lease expires, so the leader can answer reads locally during the lease. This trades a network round trip for a dependence on bounded clock drift.
+
+Select **minority partition** in Script. Compare the isolated old leader with the leader elected by the majority. The player shows their terms and logs; it does not simulate leases or ReadIndex. Use that stale-leader state to explain why a local read needs an authority check.
+
+<RaftPlayer />
 
 <Choice
   id="lease-read-risk"

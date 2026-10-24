@@ -14,10 +14,10 @@ objectives:
   - id: choose-clock
     text: Choose between physical, Lamport, vector, hybrid logical and TrueTime-style clocks for a requirement
 requires: [consistency-models]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
   - "Drift is modelled as a constant worst-case rate between syncs; real oscillators drift with temperature and age, and synchronisation itself has an error that is not included."
-  - "Clock steps, leap-second smearing and virtual-machine pauses are described but not simulated."
+  - "The HLC player includes a backwards clock step; leap-second smearing and virtual-machine pauses are not simulated."
   - "The commit-wait calculation assumes a constant uncertainty bound; Spanner's bound grows between synchronisations."
 sources:
   - title: "Time, Clocks, and the Ordering of Events in a Distributed System"
@@ -56,6 +56,10 @@ Between corrections, two clocks drift apart. If each can drift ρ ppm in either 
 
 Many stores resolve conflicting writes with **last-writer-wins** (LWW): keep the value with the larger timestamp. With wall-clock timestamps this discards data whenever clocks disagree by more than the gap between two writes. Node A's clock runs 100 ms fast. A writes "first" at its time 1,100. Node B, whose clock is accurate, reads that value and then writes "later" at its time 1,050. B's write happened after A's, but it carries a smaller timestamp, so LWW keeps "first" and drops B's update, without any error.
 
+Select **last-writer-wins loses an update under skew** in Script. Follow the message from A to B, then watch B's causally later write lose to the larger physical timestamp.
+
+<ClocksPlayer />
+
 <Choice
   id="lww-loss"
   objective="bound-skew"
@@ -81,6 +85,10 @@ A Lamport clock is a counter per process with three rules:
 3. On receive, set the counter to max(local, message stamp) and then increment.
 
 This guarantees that if a happens before b, then L(a) is less than L(b).
+
+Select **lamport clock** in Script. Step through sends and receives and check that every receive advances beyond both the local counter and the message stamp.
+
+<ClocksPlayer />
 
 <VariantQuestion template="clocks.lamport" />
 
@@ -110,6 +118,10 @@ A **vector clock** keeps one counter per process. A process increments its own e
 
 Dynamo used vector clocks to keep concurrent versions of an object as siblings for the application to merge, instead of silently dropping one. The cost is size: one entry per writer, so systems truncate or use dotted version vectors bounded by replicas rather than clients.
 
+Select **vector clock** in Script. Compare the vectors before the exchange to find concurrent events, then watch a receive merge the sender's causal history.
+
+<ClocksPlayer />
+
 <Choice
   id="vector-compare"
   objective="detect-concurrency"
@@ -129,6 +141,10 @@ Dynamo used vector clocks to keep concurrent versions of an object as siblings f
 Logical clocks capture causality but say nothing about real time, so you cannot ask "what was the state at 10:00?". Physical clocks give real time but break causality. A **hybrid logical clock** (Kulkarni et al., 2014) combines them: the timestamp is a pair (l, c), where l is the largest physical time the node has heard of and c is a small counter for events that share the same l.
 
 On each event or receive, l becomes the maximum of the local physical clock, its previous l, and any incoming l; c increments if l did not change and resets to zero if it did; on a receive that adopts the sender's l, c continues from the sender's counter. The result respects happens-before like a Lamport clock, fits in a 64-bit timestamp, and never strays from physical time by more than the clock offset. CockroachDB uses HLC timestamps for its transactions.
+
+Select **hlc clock** in Script. Watch the physical clock move backwards while the hybrid timestamp continues to respect causal order.
+
+<ClocksPlayer />
 
 <Choice
   id="pick-clock"

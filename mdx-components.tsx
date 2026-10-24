@@ -4,7 +4,7 @@ import type { ComponentProps, ComponentType } from "react";
 import { HitRateCalculator } from "@/components/lesson/calculator";
 import { Choice, MasteryCheck, Ordering, VariantQuestion } from "@/components/lesson/questions";
 import { Step } from "@/components/lesson/stepper";
-import { HashRingPlayer, IsolationPlayer, ModelQuestion } from "@/components/models";
+import { HashRingPlayer, IsolationPlayer, ModelQuestion, RaftPlayer, ClocksPlayer, TwoPhasePlayer, GossipPlayer, QuorumPlayer, CrdtPlayer, MatchingPlayer, SpatialPlayer, SketchesPlayer, WindowingPlayer } from "@/components/models";
 import { widgetSchemas, type WidgetName } from "@/lib/content/schema";
 
 // Widget registry → implementations. Props are validated against the registry's zod
@@ -18,6 +18,16 @@ const implementations = {
   MasteryCheck,
   HashRingPlayer,
   IsolationPlayer,
+  RaftPlayer,
+  ClocksPlayer,
+  TwoPhasePlayer,
+  GossipPlayer,
+  QuorumPlayer,
+  CrdtPlayer,
+  MatchingPlayer,
+  SpatialPlayer,
+  SketchesPlayer,
+  WindowingPlayer,
   ModelQuestion,
 } satisfies Record<WidgetName, unknown>;
 

@@ -14,10 +14,10 @@ objectives:
   - id: ot-vs-crdt
     text: Transform concurrent text edits with OT and contrast OT with sequence CRDTs
 requires: [consistency-models, clocks]
-activities: [C, Q]
+activities: [M, C, Q]
 limitations:
-  - "Examples use state-based counters and sets with a few replicas; delta-state and operation-based variants are described, not simulated."
-  - "OT is shown for single-character and run inserts against one server-ordered history; full transformation functions for deletes and multi-site OT are not covered."
+  - "Written counter examples use state merges; the player merges uniquely identified operations across a few replicas. Delta-state variants are not simulated."
+  - "The OT player handles inserts and deletes against one server-ordered history, with one outstanding edit per client; multi-site OT is not covered."
   - "Metadata growth and tombstone garbage collection are described qualitatively."
 sources:
   - title: "Conflict-free Replicated Data Types"
@@ -68,6 +68,10 @@ A shared counter is the simplest CRDT and shows the core trick. A **G-Counter** 
 
 A **PN-Counter** supports decrements by pairing two G-Counters, one for increments and one for decrements, with value = sum(P) − sum(N).
 
+Keep Replication algorithm set to **CRDT counters, set and RGA** and select **counter messages reorder and duplicate** in Script. Compare the replicas as messages arrive out of order and twice. This player merges uniquely identified operations, so duplicate delivery does not count an increment again.
+
+<CrdtPlayer />
+
 <VariantQuestion template="crdt.gcounter" />
 
 </Step>
@@ -99,6 +103,10 @@ Sets are where merge semantics become a product decision. Alice removes "milk" f
 
 Dynamo's cart, which merged by union, could resurrect deleted items. The OR-Set gets the semantics right because it can tell "removed after I saw it" from "added concurrently".
 
+With Replication algorithm set to **CRDT counters, set and RGA**, select **observed-remove add wins** in Script. Watch the remove discard the observed add while the concurrent fresh add survives.
+
+<CrdtPlayer />
+
 <Choice
   id="orset-outcome"
   objective="orset"
@@ -119,6 +127,10 @@ Text editing is harder because positions shift. If Alice inserts at index 3 and 
 
 Correct transformation functions for every pair of operations are notoriously hard to get right without a central order. Production OT systems, including Google Docs and its predecessors, rely on a server that puts all operations into one sequence, which makes transformation tractable.
 
+Set Replication algorithm to **OT with transformation** and select **concurrent insertion** in Script. Compare the server and client text after delivery, then repeat under **OT without transformation** to see why unchanged positions can diverge.
+
+<CrdtPlayer />
+
 <VariantQuestion template="ot.transform" />
 
 </Step>
@@ -128,6 +140,10 @@ Correct transformation functions for every pair of operations are notoriously ha
 Sequence CRDTs such as RGA, Logoot and the structures inside Yjs and Automerge avoid index arithmetic altogether. Every character gets a unique, permanent identifier, and an insert says "after character X" rather than "at index 10". Deletion leaves a **tombstone** so later inserts can still refer to the deleted character. Concurrent inserts at the same spot are ordered by a deterministic tie-break on their identifiers.
 
 This works peer to peer with no central server, which is why the local-first movement favours it. The cost is metadata: identifiers and tombstones can make the document's internal state much larger than its visible text, and garbage collecting tombstones requires knowing that every replica has seen the deletion.
+
+With Replication algorithm set to **CRDT counters, set and RGA**, select **concurrent RGA edits** in Script. Follow the concurrent deletion and insertion, then compare the text and tombstones after all messages arrive.
+
+<CrdtPlayer />
 
 <Choice
   id="ot-or-crdt"
