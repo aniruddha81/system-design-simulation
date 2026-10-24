@@ -12,7 +12,8 @@ $dirs = "pending", "running", "done", "failed", "logs" | ForEach-Object { Join-P
 $pending, $running, $done, $failed, $logs = $dirs
 $lock = Join-Path $root "runner.lock"
 
-if ((Test-Path $lock) -and (Get-Process -Id ([int](Get-Content $lock)) -ErrorAction SilentlyContinue)) { exit 0 } # already running
+# Standby: if another runner is alive (e.g. one started inside a Claude session), wait and take over when it dies.
+while ((Test-Path $lock) -and (Get-Process -Id ([int](Get-Content $lock)) -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 30 }
 Set-Content $lock $PID
 $jobs = @{}
 
