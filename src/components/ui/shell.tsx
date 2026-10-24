@@ -78,30 +78,34 @@ export function Providers({ children }: { children: ReactNode }) {
 }
 
 const NAV = [
-  { href: "/learn", label: "Learn" },
-  { href: "/sandbox", label: "Sandbox" },
-  { href: "/challenges", label: "Challenges" },
-  { href: "/case-studies", label: "Case studies" },
-  { href: "/interview", label: "Interview" },
-  { href: "/teach", label: "Teach" },
-  { href: "/reference", label: "Reference" },
-  { href: "/progress", label: "Progress" },
-  { href: "/settings", label: "Settings" },
+  { href: "/learn", label: "Learn", group: "primary" },
+  { href: "/sandbox", label: "Sandbox", group: "primary" },
+  { href: "/challenges", label: "Challenges", group: "primary" },
+  { href: "/case-studies", label: "Case studies", group: "primary" },
+  { href: "/interview", label: "Interview", group: "primary" },
+  { href: "/teach", label: "Teach", group: "primary" },
+  { href: "/reference", label: "Reference", group: "utility" },
+  { href: "/progress", label: "Progress", group: "utility" },
+  { href: "/settings", label: "Settings", group: "utility" },
 ] as const;
 
 /** Static list (Suspense fallback while the pathname is unknown during prerender). */
 export function NavList({ pathname = "" }: { pathname?: string }) {
   // Notebook divider tabs: the current tab is cut from the page itself and joins it.
   return (
-    <ul className="flex flex-wrap items-end gap-0.5 text-[0.9375rem] scrollbar-none">
-      {NAV.map(({ href, label }) => {
+    <ul className="flex flex-wrap items-end gap-0.5 text-[0.875rem] scrollbar-none">
+      {NAV.map(({ href, label, group }, index) => {
         const active = pathname === href || pathname.startsWith(`${href}/`);
+        const showDivider = index > 0 && NAV[index - 1].group !== group;
         return (
-          <li key={href} className="flex">
+          <li key={href} className="flex items-center">
+            {showDivider && (
+              <span aria-hidden className="mx-1.5 mb-2.5 hidden h-3.5 w-px bg-rule/50 sm:inline-block" />
+            )}
             <Link
               href={href}
               aria-current={active ? "page" : undefined}
-              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-3.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
+              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-2.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
             >
               {label}
             </Link>

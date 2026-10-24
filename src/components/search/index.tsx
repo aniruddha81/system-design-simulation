@@ -68,8 +68,21 @@ export function CommandPalette() {
 
   return (
     <>
-      <button type="button" onClick={open} aria-haspopup="dialog" className="flex min-h-10 items-center gap-3 rounded-(--radius-sm) px-3 text-sm text-(--text) hover:bg-(--surface-2)">
-        Search <kbd className="hidden rounded-(--radius-sm) border border-(--rule) px-1.5 font-mono text-xs sm:inline">⌘K / Ctrl K</kbd>
+      <button
+        type="button"
+        onClick={open}
+        aria-haspopup="dialog"
+        aria-label="Search (Command+K or Control+K)"
+        className="group flex h-8 shrink-0 items-center gap-2 rounded-[var(--radius)] border border-rule bg-surface px-2.5 text-[0.8125rem] font-medium text-ink-2 transition-colors hover:border-fg hover:text-fg"
+      >
+        <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 text-muted transition-colors group-hover:text-fg" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="7" cy="7" r="4.5" />
+          <path d="m10.5 10.5 3 3" />
+        </svg>
+        <span>Search</span>
+        <kbd className="hidden rounded-[var(--radius-sm)] border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[0.6875rem] leading-none text-muted sm:inline">
+          ⌘K
+        </kbd>
       </button>
       <dialog
         ref={dialog}

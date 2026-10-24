@@ -53,17 +53,23 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </a>
         <Providers>
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
-            <nav aria-label="Main" className="mx-auto flex max-w-6xl flex-wrap items-end gap-x-6 px-4">
-              <Link href="/" className="group flex min-h-12 flex-1 items-center gap-2.5 self-center sm:min-h-14 sm:flex-none">
+            <nav
+              aria-label="Main"
+              className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 px-4 sm:px-6"
+            >
+              <Link
+                href="/"
+                className="group flex min-h-12 shrink-0 items-center gap-2.5 py-1.5 lg:min-h-13 lg:border-r lg:border-border lg:pr-5"
+              >
                 <Logo />
-                <span className="font-display text-[1.1875rem] leading-none tracking-tight">
+                <span className="font-display text-[1.125rem] leading-none tracking-tight whitespace-nowrap">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
-              <div className="order-last -mx-4 w-[calc(100%+2rem)] px-2">
+              <div className="order-last -mx-4 w-[calc(100%+2rem)] border-t border-border px-4 pt-1 sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 lg:order-none lg:mx-0 lg:w-auto lg:flex-1 lg:self-end lg:border-t-0 lg:px-0 lg:pt-1.5">
                 <NavLinks />
               </div>
-              <div className="flex min-h-12 items-center self-center sm:min-h-14">
+              <div className="ml-auto flex min-h-12 shrink-0 items-center gap-2 py-1.5 lg:ml-0 lg:min-h-13">
                 <CommandPalette />
                 <ThemeToggle />
               </div>
