@@ -17,6 +17,20 @@ export function add(into: Histogram, h: Histogram, weight = 1) {
 export const scaled = (h: Histogram, weight: number) => add(new Map(), h, weight);
 export const mixture = (...hs: Histogram[]) => hs.reduce((h, next) => add(h, next), new Map());
 export const cdf = (h: Histogram, us: number) => [...h].reduce((a, [x, p]) => a + (x <= us ? p : 0), 0);
+export function orderStatistic(branches: Histogram[], k: number): Histogram {
+  const times = [...new Set(branches.flatMap(h => [...h.keys()]))].sort((a, b) => a - b);
+  const result: Histogram = new Map(); let previous = 0;
+  for (const t of times) {
+    const counts = Array(branches.length + 1).fill(0); counts[0] = 1;
+    branches.forEach((h, i) => {
+      const p = cdf(h, t);
+      for (let j = i + 1; j >= 0; j--) counts[j] = (counts[j] ?? 0) * (1 - p) + (j ? counts[j - 1] * p : 0);
+    });
+    const cumulative = counts.slice(k).reduce((a, b) => a + b, 0);
+    add(result, point(t, Math.max(0, cumulative - previous))); previous = cumulative;
+  }
+  return result;
+}
 export function percentile(h: Histogram, q: number): number | null {
   let left = mass(h) * q;
   if (left <= 0) return null;
@@ -105,6 +119,7 @@ export function distribution(d: Dist, factor = 1): Histogram {
 export function erlangC(load: number, workers: number): number {
   if (load <= 0) return 0;
   if (load >= workers) return 1;
+  if (workers > 100 && load < workers / 2) return 0; // Negligible delay probability; avoids large unbounded-store loops.
   // Erlang-B recurrence avoids factorial overflow even for 250k workers.
   let b = 1;
   for (let k = 1; k <= workers; k++) b = load * b / (k + load * b);

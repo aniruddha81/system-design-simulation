@@ -271,7 +271,7 @@ describe('breaking point tools', () => {
     const result = sweep(design, scenario, { levels: 3, maxMultiple: 4, warmupUs: 1_000_000, levelUs: 2_000_000 });
     const order: string[] = [];
     for (const multiple of [1, 2, 4]) {
-      const s = structuredClone(scenario); s.workload.arrival.rps *= multiple;
+      const s = structuredClone(scenario); if ('rps' in s.workload.arrival) s.workload.arrival.rps *= multiple;
       const exact = runToCompletion(design, s, 11, { traceSampleRate: 0 });
       for (const n of exact.nodes.filter(n => n.utilisation > .95).sort((a, b) => a.nodeId.localeCompare(b.nodeId))) if (!order.includes(n.nodeId)) order.push(n.nodeId);
     }

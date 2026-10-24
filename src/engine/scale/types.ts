@@ -2,7 +2,7 @@ import type { Design, Percentiles, Scenario } from '../types';
 
 export type Support = 'supported' | 'approximate' | 'unsupported';
 export type Prediction = 'utilisation' | 'backlog' | 'drops' | 'latency' | 'hitRate' | 'timelySuccess' | 'cost' | 'correctness';
-export type PredictionState = { enabled: true } | { enabled: false; reasons: string[] };
+export type PredictionState = { enabled: true; reasons?: string[] } | { enabled: false; reasons: string[] };
 export type FidelityReport = {
   predictions: Record<Prediction, PredictionState>;
   paths: { endpointId: string; predictions: Record<Prediction, PredictionState> }[];
@@ -16,12 +16,15 @@ export type ScaleNode = {
   nodeId: string; utilisation: number; backlog: number; avgQueue: number; maxQueue: number;
   arrivals: number; completions: number; drops: number; errors: number;
   capacityPerSec: number; latency: Percentiles; unavailableReason?: string;
+  concurrency?: number;
   cache?: { occupancy: number; hitRate: number | null; steadyHitRate: number; timeTo90Us: number | null; originPerSec: number };
+  queue?: { depth: number; depthMax: number; consumerPerSec: number; consumerLagMaxUs: number };
+  replication?: { backlog: number; lagUs: number; meanLagUs: number; maxLagUs: number };
 };
 export type ScalePoint = {
   tUs: number; dtUs: number; offeredPerSec: number; succeededPerSec: number;
   estimatedTimelySuccessRatio: number | null; retryAmplification: number | null;
-  nodes: Record<string, { utilisation: number; backlog: number; arrivalsPerSec: number; completionsPerSec: number; dropsPerSec: number; cacheHitRate?: number; occupancy?: number }>;
+  nodes: Record<string, { utilisation: number; backlog: number; arrivalsPerSec: number; completionsPerSec: number; dropsPerSec: number; cacheHitRate?: number; occupancy?: number; consumerLag?: number; replicationLagUs?: number; concurrency?: number }>;
 };
 export type ScaleMetrics = {
   offered: number; admitted: number; succeeded: number; failed: number; unfinished: number; attempts: number;

@@ -1,0 +1,21 @@
+{
+  "replayCompatId": "exact-p2-2026-10-24.1",
+  "machine": "win32 x64; AMD Ryzen 5 7535HS with Radeon Graphics        ; Node v24.21.0; machine-specific",
+  "samples": {
+    "S": {
+      "wallMs": 742.6287000000001,
+      "eventsPerSec": 1009919.2234288816,
+      "events": 749995
+    },
+    "M": {
+      "wallMs": 12729.1384,
+      "eventsPerSec": 589198.9515959697,
+      "events": 7499995
+    },
+    "L": {
+      "wallMs": 82652.7038,
+      "eventsPerSec": 362964.4720709064,
+      "events": 29999995
+    }
+  }
+}

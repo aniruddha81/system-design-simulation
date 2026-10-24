@@ -12,11 +12,11 @@ export function failureLadder(levels: SweepLevel[]): FailureRung[] {
   };
   for (const { multiple, result } of levels) {
     for (const n of [...result.nodes].sort((a, b) => b.utilisation - a.utilisation || a.nodeId.localeCompare(b.nodeId))) {
-      if (n.utilisation >= .95 || (n.capacityPerSec === 0 && n.arrivals > 0)) rung(multiple, n.nodeId, 'capacity saturates', `${(n.utilisation * 100).toFixed(1)}% busy; capacity ${n.capacityPerSec.toFixed(1)}/s under this scenario.`, 'Test additional capacity or reduced downstream holding time.');
-      if (n.drops / Math.max(1, n.arrivals) > .001) rung(multiple, n.nodeId, 'queue overflows', `${n.drops.toFixed(1)} attempts exceed the bounded queue or arrive during an outage.`, 'Test admission control or additional capacity.');
+      if (result.fidelity.predictions.utilisation.enabled && (n.utilisation >= .95 || (n.capacityPerSec === 0 && n.arrivals > 0))) rung(multiple, n.nodeId, 'capacity saturates', `${(n.utilisation * 100).toFixed(1)}% busy; capacity ${n.capacityPerSec.toFixed(1)}/s under this scenario.`, 'Test additional capacity or reduced downstream holding time.');
+      if (result.fidelity.predictions.drops.enabled && n.drops / Math.max(1, n.arrivals) > .001) rung(multiple, n.nodeId, 'queue overflows', `${n.drops.toFixed(1)} attempts exceed the bounded queue or arrive during an outage.`, 'Test admission control or additional capacity.');
     }
     const retry = result.metrics.retryAmplification;
-    if (retry !== null && retry > 1.05) rung(multiple, result.bottleneck ?? 'global', 'retry amplification', `Timeout/error feedback raises attempts to ${retry.toFixed(2)} per logical request.`, 'Test a smaller retry budget and longer backoff.');
+    if (result.fidelity.predictions.utilisation.enabled && retry !== null && retry > 1.05) rung(multiple, result.bottleneck ?? 'global', 'retry amplification', `Timeout/error feedback raises attempts to ${retry.toFixed(2)} per logical request.`, 'Test a smaller retry budget and longer backoff.');
     const timely = result.metrics.estimatedTimelySuccessRatio;
     if (timely !== null && timely < .99) rung(multiple, 'global', 'timely-success falls', `${(timely * 100).toFixed(1)}% estimated timely-success; correctness remains unknown.`, 'Test the first bottleneck remedy against the same scenario.');
   }

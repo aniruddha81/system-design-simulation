@@ -15,13 +15,45 @@ const dist = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("empirical"), buckets: z.array(z.object({ us: positive, weight: z.number().nonnegative() })).min(1).refine(buckets => buckets.some(bucket => bucket.weight > 0), "At least one bucket must have positive weight") }),
 ]);
 const retry = z.object({ max: count, backoffUs: count, multiplier: positive, jitter: z.enum(["none", "full"]), retryOn: z.array(z.enum(["timeout", "5xx", "429"])) });
+const condition = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("cacheHit") }),
+  z.object({ kind: z.literal("found") }),
+  z.object({ kind: z.literal("dedupHit") }),
+  z.object({ kind: z.literal("prob"), p: fraction }),
+  z.object({ kind: z.literal("leaderAlive"), store: id }),
+  z.object({ kind: z.literal("breakerClosed"), breaker: id }),
+]);
+const dataOp = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("get") }),
+  ...(["insert", "put", "delete"] as const).map(kind => z.object({ kind: z.literal(kind) })),
+  z.object({ kind: z.literal("conditionalPut"), expectedVersion: count.optional() }),
+  z.object({ kind: z.literal("query"), index: id.optional(), limit: count }),
+  z.object({ kind: z.literal("update"), field: id, op: z.enum(["set", "increment", "append"]), value: z.union([z.number(), z.string()]).optional() }),
+  z.object({ kind: z.literal("decrementIfPositive"), field: id }),
+]);
+const inputGen = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("zipf"), min: z.number().int(), max: z.number().int(), s: positive }).refine(g => g.max >= g.min),
+  z.object({ kind: z.literal("uniform"), min: z.number().int(), max: z.number().int() }).refine(g => g.max >= g.min),
+  z.object({ kind: z.literal("sequence"), start: z.number().int() }),
+  z.object({ kind: z.literal("size"), meanBytes: z.number().nonnegative(), sdBytes: z.number().nonnegative() }),
+]);
+const keyDist = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("uniform"), n: count.min(1).max(1_000_000) }),
+  z.object({ kind: z.literal("sequential"), n: count.min(1).max(1_000_000) }),
+  z.object({ kind: z.literal("zipf"), n: count.min(1).max(1_000_000), s: positive }),
+  z.object({ kind: z.literal("hotspot"), n: count.min(1).max(1_000_000), hotFraction: fraction }),
+]);
 const step: z.ZodType<Step> = z.lazy(() => z.discriminatedUnion("type", [
-  z.object({ type: z.literal("call"), target: id, timeoutUs: positive, retry: retry.optional(), cancelOnTimeout: z.boolean().optional() }),
+  z.object({ type: z.literal("call"), target: id, timeoutUs: positive, retry: retry.optional(), cancelOnTimeout: z.boolean().optional(), propagateDeadline: z.boolean().optional() }),
   ...(["cacheGet", "cacheSet", "cacheDelete"] as const).map(type => z.object({ type: z.literal(type), cache: id, timeoutUs: positive })),
-  z.object({ type: z.literal("branch"), cond: z.discriminatedUnion("kind", [z.object({ kind: z.literal("cacheHit") }), z.object({ kind: z.literal("prob"), p: fraction })]), then: z.array(step), else: z.array(step) }),
+  z.object({ type: z.literal("branch"), cond: condition, then: z.array(step), else: z.array(step) }),
   z.object({ type: z.literal("respond"), status: z.union([z.literal(200), z.literal(201), z.literal(404), z.literal(409), z.literal(429), z.literal(503), z.literal(504)]) }),
+  z.object({ type: z.literal("parallel"), branches: z.array(z.array(step)), join: z.discriminatedUnion("kind", [z.object({ kind: z.literal("all") }), z.object({ kind: z.literal("any") }), z.object({ kind: z.literal("quorum"), k: count.min(1) }), z.object({ kind: z.literal("firstN"), n: count.min(1) })]), cancelLosers: z.boolean() }),
+  z.object({ type: z.literal("publish"), queue: id, timeoutUs: positive, orderedByKey: z.boolean() }),
+  z.object({ type: z.literal("data"), target: id, entity: id, op: dataOp, timeoutUs: positive, retry: retry.optional() }),
+  z.object({ type: z.literal("dedup"), store: id, timeoutUs: positive }),
 ]));
-const queue = { concurrency: count.min(1), queueCapacity: count, queueDiscipline: z.enum(["fifo", "lifo"]), costPerHour: z.number().nonnegative(), region: z.string(), zone: z.string() };
+const queue = { concurrency: count.min(1), queueCapacity: count, queueDiscipline: z.enum(["fifo", "lifo"]), costPerHour: z.number().nonnegative(), region: z.string(), zone: z.string(), restartWarmupUs: count.optional() };
 const node = { id, label: z.string(), position: z.object({ x: z.number(), y: z.number() }), handlers: z.record(id, z.array(step)).optional() };
 
 export const designSchema: z.ZodType<Design> = z.object({
@@ -31,11 +63,26 @@ export const designSchema: z.ZodType<Design> = z.object({
     z.object({ ...node, kind: z.literal("loadBalancer"), params: z.object({ ...queue, algorithm: z.enum(["roundRobin", "leastConnections", "p2c", "consistentHash"]), serviceTime: dist, healthCheck: z.object({ intervalUs: positive, unhealthyThreshold: count.min(1), healthyThreshold: count.min(1) }) }) }),
     z.object({ ...node, kind: z.literal("service"), params: z.object({ ...queue, serviceTime: dist }) }),
     z.object({ ...node, kind: z.literal("cache"), params: z.object({ ...queue, serviceTime: dist, capacityBytes: count, eviction: z.enum(["lru", "lfu"]), ttlUs: count.optional(), coalesce: z.boolean() }) }),
-    z.object({ ...node, kind: z.literal("database"), params: z.object({ ...queue, readTime: dist, writeTime: dist, replicas: count.min(1) }) }),
-    z.object({ ...node, kind: z.literal("rateLimiter"), params: z.object({ ...queue, serviceTime: dist, algorithm: z.enum(["tokenBucket", "leakyBucket", "fixedWindow", "slidingWindow"]), ratePerSec: positive, burst: positive }) }),
+    z.object({ ...node, kind: z.literal("database"), params: z.object({ ...queue, readTime: dist, writeTime: dist, replicas: count.min(1), replication: z.enum(["sync", "semiSync", "async"]).optional(), replicationLag: dist.optional(), readFromReplicas: z.boolean().optional(), walDurable: z.boolean().optional(), connectionPool: count.min(1).optional(), failover: z.object({ heartbeatUs: positive, missedHeartbeats: count.min(1), electionUs: count, fencing: z.boolean() }).optional() }) }),
+    z.object({ ...node, kind: z.literal("rateLimiter"), params: z.object({ ...queue, serviceTime: dist, algorithm: z.enum(["tokenBucket", "leakyBucket", "fixedWindow", "slidingWindow"]), ratePerSec: positive, burst: positive, centralised: z.boolean().optional() }) }),
+    z.object({ ...node, kind: z.literal("dns"), params: z.object({ resolutionTime: dist, ttlUs: count, records: z.array(id) }) }),
+    z.object({ ...node, kind: z.literal("cdn"), params: z.object({ ...queue, serviceTime: dist, capacityBytes: count, eviction: z.enum(["lru", "lfu"]), ttlUs: count.optional(), originShield: z.boolean(), costPerGB: z.number().nonnegative() }) }),
+    z.object({ ...node, kind: z.literal("apiGateway"), params: z.object({ ...queue, serviceTime: dist, maxRequestBytes: count }) }),
+    z.object({ ...node, kind: z.literal("kvStore"), params: z.object({ ...queue, readTime: dist, writeTime: dist, members: count.min(1), vnodes: count.min(1), replicationFactor: count.min(1), readQuorum: count.min(1), writeQuorum: count.min(1), hintedHandoff: z.boolean(), readRepair: z.boolean(), tombstoneGcUs: count }) }),
+    z.object({ ...node, kind: z.literal("queue"), params: z.object({ partitions: count.min(1), capacityMessages: count, visibilityTimeoutUs: positive, maxDeliveries: count.min(1), retentionUs: positive, publishTime: dist, costPerHour: z.number().nonnegative(), region: z.string(), zone: z.string() }) }),
+    z.object({ ...node, kind: z.literal("worker"), params: z.object({ ...queue, serviceTime: dist, source: id, batchSize: count.min(1) }) }),
+    z.object({ ...node, kind: z.literal("objectStore"), params: z.object({ readTime: dist, writeTime: dist, costPerGBMonth: z.number().nonnegative(), costPerMillionRequests: z.number().nonnegative(), region: z.string(), zone: z.string() }) }),
+    z.object({ ...node, kind: z.literal("searchIndex"), params: z.object({ ...queue, serviceTime: dist, indexLag: dist, source: id }) }),
+    z.object({ ...node, kind: z.literal("dedupStore"), params: z.object({ ...queue, serviceTime: dist, ttlUs: count, atomic: z.boolean(), durable: z.boolean() }) }),
+    z.object({ ...node, kind: z.literal("autoscaler"), params: z.object({ targets: z.array(id), metric: z.enum(["utilisation", "queueLength"]), targetValue: positive, min: count.min(1), max: count.min(1), cooldownUs: count, provisionUs: count, warmupUs: count, evaluateEveryUs: positive }) }),
+    z.object({ ...node, kind: z.literal("circuitBreaker"), params: z.object({ failureRateThreshold: fraction, windowUs: positive, minRequests: count.min(1), openUs: positive, halfOpenProbes: count.min(1), bulkheadMax: count.min(1).optional() }) }),
   ])).max(200),
   edges: z.array(z.object({ id, from: id, to: id, latency: dist, bandwidthBytesPerSec: positive, lossRate: fraction })).max(600),
-  endpoints: z.array(z.object({ id, name: z.string(), op: z.enum(["read", "write"]), keyTemplate: z.string(), requestBytes: count, responseBytes: count, idempotent: z.boolean() })),
+  endpoints: z.array(z.object({ id, name: z.string(), op: z.enum(["read", "write"]), keyTemplate: z.string(), requestBytes: count, responseBytes: count, idempotent: z.boolean(), inputs: z.record(id, inputGen).optional(), responseFields: z.array(id).optional() })),
+  entities: z.array(z.object({ name: id, store: id, fields: z.array(z.object({ name: id, type: z.enum(["string", "int", "float", "bool", "timestamp"]), bytes: z.object({ meanBytes: z.number().nonnegative(), sdBytes: z.number().nonnegative() }) })), primaryKey: id, indexes: z.array(z.object({ name: id, fields: z.array(id), unique: z.boolean() })), shardKey: id.optional(), dataset: z.object({ count: count.max(1_000_000), keys: keyDist, initial: z.record(id, z.number()).optional() }) })).optional(),
+  regions: z.object({ names: z.array(id), latencyUs: z.array(z.array(count)), egressCostPerGB: z.array(z.array(z.number().nonnegative())) }).optional(),
+  groups: z.array(z.object({ id, kind: z.enum(["region", "zone"]), name: z.string(), position: z.object({ x: z.number(), y: z.number() }), size: z.object({ w: positive, h: positive }) })).optional(),
+  annotations: z.array(z.json()).optional(),
 });
 
 const base = { schemaVersion: z.literal(1), revision: count };

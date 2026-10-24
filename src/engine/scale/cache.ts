@@ -15,7 +15,7 @@ export class FluidCache {
   originPerSec = 0;
   readonly capacity: number;
 
-  constructor(readonly spec: NodeSpec<'cache'>, scenario: Scenario, objectBytes: number) {
+  constructor(readonly spec: NodeSpec<'cache'> | NodeSpec<'cdn'>, scenario: Scenario, objectBytes: number) {
     const keys = scenario.workload.keys;
     this.capacity = Math.min(keys.n, Math.floor(spec.params.capacityBytes / Math.max(1, objectBytes)));
     // Log-rank quadrature bounds memory for billion-key populations; small benchmarks retain each key.
@@ -62,7 +62,7 @@ export class FluidCache {
       const lambda = rate * g.p;
       const distinctPerSec = Math.max(0, 1 - g.present - g.pending) * -Math.expm1(-lambda * dt) / dt;
       const waiters = Math.max(0, lambda * (1 - g.present) - distinctPerSec);
-      const coalescing = this.spec.params.coalesce && this.originUs <= cacheTimeoutUs;
+      const coalescing = this.spec.kind === 'cache' && this.spec.params.coalesce && this.originUs <= cacheTimeoutUs;
       const suppressed = coalescing ? waiters * this.originSuccess : 0;
       resident += g.p * g.count * g.present;
       coalesced += rate > 0 ? suppressed * g.count / rate : 0;
