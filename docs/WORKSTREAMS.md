@@ -137,3 +137,14 @@ C1 mounts it as a **Scale** tab in the editor and paints `onHeat` values (0..1+)
 ## P2 exit
 
 All components of §5.3 run in Exact mode with contended links, the full chaos set, all correctness invariants, replication/failover and live edits. Learners can define data models and endpoints (§8A.1–8A.2), edit workloads and chaos, export designs, and run Scale mode from the sandbox. Benchmarks and golden runs are in CI-ready scripts. Every new behaviour has a must-trigger and a must-not-trigger test.
+
+## P2 wave 2 (added while P2 runs)
+
+| Stream | Owner | Paths |
+|---|---|---|
+| D1 Visual identity | Claude | `src/app/globals.css`, `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/not-found.tsx`, `src/components/ui/**`, `src/components/lesson/**`, `src/app/learn/**`, `src/app/progress/**`, `src/app/settings/**`, `src/app/reference/**` (visual changes; keep behaviour) |
+| M1 Models: consensus & time | Codex | `src/models/raft/**`, `src/models/clocks/**`, `src/models/two-phase/**`, `src/models/gossip/**`, `src/models/quorum/**` |
+| M2 Models: data structures | Codex | `src/models/crdt/**`, `src/models/matching/**`, `src/models/spatial/**`, `src/models/sketches/**`, `src/models/windowing/**` |
+| K1 Content: Tracks 0–1 | Codex | `content/en/foundations/**`, `content/en/building-blocks/**`, `content/matrix.json`, `src/lib/content/variants.ts` (append templates only) |
+
+**Colour rule for every UI stream:** use only the CSS tokens from `globals.css` (`var(--…)` / Tailwind token classes). No hard-coded hex/rgb/oklch in components, because D1 is replacing the palette and the type system.
