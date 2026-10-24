@@ -1,0 +1,159 @@
+{/*
+id: sagas
+slug: sagas
+track: distributed-systems
+title: "Distributed transactions: 2PC, sagas and the outbox"
+description: "Two-phase commit and why it blocks, sagas with compensations, and the transactional outbox that fixes the dual-write problem between a database and a queue."
+objectives:
+  - id: two-pc
+    text: Explain how two-phase commit reaches atomic agreement, what it costs, and why it blocks when the coordinator fails after prepare
+  - id: saga-compensation
+    text: Design a saga with compensations in the right order and place irreversible steps last
+  - id: outbox
+    text: Explain the dual-write problem and how the transactional outbox and idempotent consumers solve it
+  - id: choose-pattern
+    text: Choose between a local transaction, 2PC and a saga for a cross-service workflow
+requires: [transactions, queues, idempotency]
+activities: [C, Q, R]
+limitations:
+  - "2PC costs assume equal round trips to every participant and a fixed fsync time; real participants differ."
+  - "Saga isolation anomalies (other transactions seeing intermediate states) are described but not simulated."
+  - "The outbox is shown with a polling relay; log-based change capture behaves similarly but is not modelled."
+sources:
+  - title: "Sagas"
+    authors: "H. Garcia-Molina, K. Salem"
+    year: 1987
+    url: "https://doi.org/10.1145/38713.38742"
+  - title: "Consensus on Transaction Commit"
+    authors: "J. Gray, L. Lamport"
+    year: 2006
+    url: "https://doi.org/10.1145/1132863.1132867"
+  - title: "Pattern: Transactional outbox"
+    authors: "C. Richardson"
+    url: "https://microservices.io/patterns/data/transactional-outbox.html"
+  - title: "Pattern: Saga"
+    authors: "C. Richardson"
+    url: "https://microservices.io/patterns/data/saga.html"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="the-problem" title="One business action, several databases">
+
+Booking a trip reserves a flight, a hotel room and a car, each owned by a different service with its own database. The business wants all three or none. Inside one database, a transaction gives you that. Across services, there is no shared transaction, and naive sequencing leaves you with a flight and no hotel when the second call fails.
+
+There are two broad answers. **Atomic commit** protocols such as two-phase commit make all participants commit or abort together. **Sagas** give up atomicity and isolation, commit each step locally, and undo with compensations when a later step fails.
+
+<Choice
+  id="pick-pattern"
+  objective="choose-pattern"
+  prompt="An order service must create an order row and its order-line rows. Both tables live in the same Postgres database. What should it use?"
+  options={[
+    { id: "local", text: "A single local database transaction", correct: true, feedback: "Right. When the data is in one database, its transaction gives atomicity and isolation for free. Reach for distributed patterns only when the data really is split." },
+    { id: "2pc", text: "Two-phase commit between the two tables", feedback: "2PC coordinates separate resource managers. Two tables in one database need no coordinator; the database's own transaction is atomic." },
+    { id: "saga", text: "A saga: insert the order, then the lines, compensating on failure", feedback: "A saga gives up isolation and adds compensation logic you do not need. One local transaction is simpler and stronger." },
+    { id: "outbox", text: "Write the order, publish an event, and insert the lines in a consumer", feedback: "That splits one atomic write into an eventually consistent pipeline for no benefit." }
+  ]}
+/>
+
+</Step>
+
+<Step id="two-pc" title="Two-phase commit">
+
+In 2PC a **coordinator** asks every participant to **prepare**. A participant that votes yes durably records that it can commit, holding its locks, and promises to obey the coordinator's decision. If every vote is yes, the coordinator durably records **commit** and tells everyone; any no vote, or a missing vote, means **abort**. Participants then acknowledge so the coordinator can forget the transaction.
+
+The cost is at least two round trips and several forced log writes on the commit path, with locks held throughout. Databases use 2PC internally for distributed transactions, and the XA standard exposes it across vendors.
+
+<VariantQuestion template="twopc.messages" />
+
+</Step>
+
+<Step id="blocking" title="Why 2PC blocks">
+
+The weak point is the window after a participant votes yes. It has promised to commit if told to, so it cannot abort on its own; it also cannot commit, because another participant may have voted no. If the coordinator crashes now, the participant must hold its locks and wait until the coordinator recovers. Its rows are unavailable to everyone else in the meantime.
+
+That is why 2PC is called a **blocking** protocol. Gray and Lamport (2006) showed that replicating the coordinator's decision with Paxos removes the single point of blocking; systems like Spanner run 2PC over Paxos-replicated groups for exactly this reason.
+
+<VariantQuestion template="twopc.decision-latency" />
+
+</Step>
+
+<Step id="in-doubt" title="The in-doubt participant">
+
+<Choice
+  id="prepared-timeout"
+  objective="two-pc"
+  prompt="A participant voted yes and then hears nothing from the coordinator for a minute. What may it safely do on its own?"
+  options={[
+    { id: "wait", text: "Nothing decisive: keep its locks and wait, or ask other participants whether any of them learned the decision", correct: true, feedback: "Right. Having voted yes, it is in doubt. If another participant knows the outcome, it can follow that; otherwise it must wait for the coordinator." },
+    { id: "abort", text: "Abort after a timeout to release its locks", feedback: "The coordinator may already have decided commit and told others. Aborting here breaks atomicity." },
+    { id: "commit", text: "Commit, since it voted yes and probably everyone else did too", feedback: "Another participant may have voted no, making the decision abort. Committing breaks atomicity." },
+    { id: "restart", text: "Restart the transaction from scratch", feedback: "Its yes vote is a durable promise; it cannot be withdrawn by restarting." }
+  ]}
+/>
+
+A participant that has *not* voted yet is in a different position: it may unilaterally abort, because the coordinator cannot have decided commit without its vote.
+
+</Step>
+
+<Step id="saga" title="Sagas: local commits and compensations">
+
+Garcia-Molina and Salem introduced **sagas** in 1987 for long-lived transactions that would hold locks far too long under 2PC. A saga is a sequence of local transactions T1, T2 … Tn, each with a **compensating transaction** C1, C2 … that semantically undoes it. If Tk fails, the saga runs C(k−1) down to C1.
+
+Compensation is semantic, not a rollback: you cannot un-send an email, but you can send a correction; you cannot erase a charge, but you can refund it. That gives sagas their two famous weaknesses: other transactions can see intermediate states (no isolation), and some steps cannot be compensated at all.
+
+<VariantQuestion template="saga.compensations" />
+
+</Step>
+
+<Step id="compensate" title="Order the compensations, place the irreversible step last">
+
+Compensations run in reverse order, so each undo sees the state its forward step left. Steps that cannot be undone, such as shipping a parcel or sending a wire transfer that cannot be recalled, should be the **pivot**: placed after every step that might still fail, so that once the pivot commits, the remaining steps are ones that can be retried until they succeed.
+
+<Ordering
+  id="compensation-order"
+  objective="saga-compensation"
+  prompt="A trip saga reserved the flight, then the hotel, then the car. Charging the card fails. Put the recovery in order."
+  items={[
+    { id: "fail", text: "The card charge fails and its local transaction rolls back" },
+    { id: "car", text: "Cancel the car reservation" },
+    { id: "hotel", text: "Cancel the hotel reservation" },
+    { id: "flight", text: "Cancel the flight reservation" },
+    { id: "notify", text: "Mark the saga as compensated and notify the customer" }
+  ]}
+  explanation="Compensations run in the reverse order of the steps that committed. The failed step needs no compensation because it rolled back locally. Each compensation must itself be idempotent and retried until it succeeds."
+/>
+
+</Step>
+
+<Step id="outbox" title="The dual-write problem and the outbox">
+
+Every saga step must do two things: commit its local change and tell the next step, usually by publishing a message. Writing to a database and to a broker are two separate systems. Commit then publish, and a crash in between loses the message; publish then commit, and a failed commit leaves a message about something that never happened.
+
+The **transactional outbox** writes the message into an outbox table in the *same* local transaction as the business change. A separate relay reads the outbox and publishes to the broker, marking rows as sent. A crash after publishing but before marking means the relay publishes again, so delivery is at least once and consumers must deduplicate, as in the [idempotency lesson](/learn/distributed-systems/idempotency).
+
+<Choice
+  id="dual-write"
+  objective="outbox"
+  prompt="An order service commits an order and then publishes OrderCreated to a broker. It crashes after the commit and before the publish. With a transactional outbox, what happens instead?"
+  options={[
+    { id: "relay", text: "The event was committed in the outbox with the order, so the relay publishes it after the restart", correct: true, feedback: "Right. The order and its event commit atomically. The relay may publish twice after a crash, which idempotent consumers absorb." },
+    { id: "lost", text: "The event is lost, because the publish never happened", feedback: "That is the failure without an outbox. With one, the event row is part of the committed transaction." },
+    { id: "rollback", text: "The order is rolled back because the event was not published", feedback: "The order commit does not depend on the broker at all, which is the point. The broker can be down and orders still commit." },
+    { id: "exactly-once", text: "The relay guarantees each event is delivered exactly once", feedback: "The relay can crash between publishing and marking the row sent, so it delivers at least once. Consumers deduplicate by event ID." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then redeliver">
+
+Score at least 80% on fresh variants.
+
+<MasteryCheck templates={["twopc.messages", "twopc.decision-latency", "saga.compensations"]} count={5} />
+
+In the [sandbox](/sandbox), publish from a service to a queue and consume into a database. Kill the consumer mid-run so the queue redelivers, and look for duplicate effects; then make the consumer deduplicate with a dedup store and run the same seed again.
+
+</Step>

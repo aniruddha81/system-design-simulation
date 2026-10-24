@@ -1,0 +1,200 @@
+{/*
+id: consistency-models
+slug: consistency-models
+track: distributed-systems
+title: "Consistency models"
+description: "Linearizable, sequential, causal, session guarantees and eventual: what each forbids, how to spot a violation, and how to pick the weakest one that is safe."
+objectives:
+  - id: order-models
+    text: Order the common consistency models by strength and say what each one forbids
+  - id: identify-violation
+    text: Identify which guarantee a concrete history of reads and writes violates
+  - id: choose-model
+    text: Choose the weakest model that meets a product requirement, and implement session guarantees with log positions
+  - id: estimate-staleness
+    text: Estimate the chance a read misses a recent write when read and write sets need not overlap
+requires: [cap-pacelc]
+activities: [C, Q]
+limitations:
+  - "Models are described for single objects or simple key-value histories; transactional models such as serializability and snapshot isolation are covered in the transactions lesson."
+  - "The stale-read model assumes the read picks replicas uniformly at random and that no repair runs during the read; real coordinators often prefer nearby or fast replicas."
+  - "Session guarantees are shown with a single log position token; multi-shard sessions need one position per shard or a hybrid timestamp."
+sources:
+  - title: "Linearizability: A Correctness Condition for Concurrent Objects"
+    authors: "M. Herlihy, J. Wing"
+    year: 1990
+    url: "https://doi.org/10.1145/78969.78972"
+  - title: "How to Make a Multiprocessor Computer That Correctly Executes Multiprocess Programs"
+    authors: "L. Lamport"
+    year: 1979
+    url: "https://doi.org/10.1109/TC.1979.1675439"
+  - title: "Session guarantees for weakly consistent replicated data"
+    authors: "D. Terry, A. Demers, K. Petersen, M. Spreitzer, M. Theimer, B. Welch"
+    year: 1994
+    url: "https://doi.org/10.1109/PDIS.1994.331722"
+  - title: "Eventually Consistent"
+    authors: "W. Vogels"
+    year: 2009
+    url: "https://doi.org/10.1145/1435417.1435432"
+  - title: "Consistency Models"
+    authors: "Jepsen"
+    url: "https://jepsen.io/consistency"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="contract" title="A consistency model is a contract">
+
+A consistency model is a rule about which **histories** a store may produce: which values each read is allowed to return, given the writes that happened around it. Stronger models allow fewer histories, which makes programs easier to reason about, and cost more coordination.
+
+The strongest common single-object model is **linearizability** (Herlihy and Wing, 1990). Every operation appears to take effect atomically at some point between its invocation and its response, and those points respect real time. Once a write has returned, every read that *starts* later must see it or something newer.
+
+<Choice
+  id="real-time"
+  objective="order-models"
+  prompt="Client A's write x = 1 returns at t = 10 ms. Client B, on another continent, starts a read of x at t = 12 ms and gets the old value 0. Which model does this history violate?"
+  options={[
+    { id: "linear", text: "Linearizability", correct: true, feedback: "Right. The write completed before the read began, so in real-time order the read must return 1. B saw the past." },
+    { id: "eventual", text: "Eventual consistency", feedback: "Eventual consistency only promises that replicas converge if writes stop. A stale read 2 ms later is allowed." },
+    { id: "ryw", text: "Read-your-writes", feedback: "Read-your-writes constrains a session reading its own writes. B never wrote x, so this guarantee says nothing about B's read." },
+    { id: "none", text: "None: B is on another continent, so it cannot know yet", feedback: "Physics is exactly why linearizability is expensive, not an exemption from it. A linearizable store would have made B's read wait or contact a replica that has the write." }
+  ]}
+/>
+
+</Step>
+
+<Step id="ladder" title="The ladder of models">
+
+From strongest to weakest, for a single object:
+
+- **Linearizable**: one global order that matches real time.
+- **Sequential** (Lamport, 1979): one global order that every client agrees on and that respects each client's own program order, but it may disagree with real time across clients.
+- **Causal**: everyone agrees on the order of causally related operations, meaning a write that depends on something its writer had read; concurrent writes may be seen in different orders by different readers.
+- **Eventual**: if writes stop, replicas eventually converge. Nothing is said about what you see in the meantime.
+
+The session guarantees of the next steps sit beside causal: causal consistency implies all four of them.
+
+<Ordering
+  id="model-strength"
+  objective="order-models"
+  prompt="Order these models from strongest (allows the fewest histories) to weakest."
+  items={[
+    { id: "linearizable", text: "Linearizable" },
+    { id: "sequential", text: "Sequential" },
+    { id: "causal", text: "Causal" },
+    { id: "eventual", text: "Eventual" }
+  ]}
+  explanation="Each model drops a constraint of the one above. Sequential drops real time, causal drops a single agreed order for concurrent writes, and eventual drops any ordering promise before convergence."
+/>
+
+</Step>
+
+<Step id="sequential" title="Sequential is not linearizable">
+
+The difference between the top two rungs is real time. Under sequential consistency, a single client sees its own operations in order, and all clients agree on one interleaving, but that interleaving can place a completed write after a later read.
+
+<Choice
+  id="seq-vs-lin"
+  objective="identify-violation"
+  prompt="Client A writes x = 1 and the write returns. Afterwards, client B reads x = 0, then reads x = 1. Every client observes the same overall order. Which is true?"
+  options={[
+    { id: "seq-only", text: "Sequentially consistent but not linearizable", correct: true, feedback: "Right. The order 'B reads 0, A writes 1, B reads 1' is a valid single interleaving consistent with each client's program order. It contradicts real time, since A's write finished before B's first read began." },
+    { id: "neither", text: "Neither sequential nor linearizable", feedback: "There is a single order everyone agrees on that respects each client's program order, which is all sequential consistency needs." },
+    { id: "both", text: "Both sequential and linearizable", feedback: "Linearizability also respects real time. A read that starts after a completed write cannot return the older value." },
+    { id: "causal-violation", text: "It violates causal consistency", feedback: "B had not observed A's write before reading 0, so there is no causal dependency being broken." }
+  ]}
+/>
+
+</Step>
+
+<Step id="session" title="Session guarantees, and how to build one">
+
+Terry et al. (1994) named four guarantees a single client session can get from a weakly consistent store:
+
+- **Read-your-writes**: a session sees its own earlier writes.
+- **Monotonic reads**: once a session has seen a version, it never sees an older one.
+- **Monotonic writes**: a session's writes apply in the order it issued them.
+- **Writes-follow-reads**: a write is ordered after the writes its session had already read.
+
+These guarantees are cheap because they only order one client's view. The standard implementation is a token: after each write, the session remembers the log position or timestamp it committed at, and a replica serves that session only once it has applied at least that far. A follower that is behind waits, or the request is routed elsewhere.
+
+<VariantQuestion template="consistency.session-wait" />
+
+</Step>
+
+<Step id="violations" title="Spot the violation">
+
+The most common real-world bug here is a load balancer that sends each read of one session to a different replica, with replicas at different lag. Nothing is "broken"; each replica is merely behind by a different amount. The user sees a comment appear, refreshes, and it is gone.
+
+<Choice
+  id="flip-flop"
+  objective="identify-violation"
+  prompt="A user who did not write anything reloads a page three times. Their reads return post version 7, then version 5, then version 7. Which guarantee is violated?"
+  options={[
+    { id: "monotonic", text: "Monotonic reads", correct: true, feedback: "Right. After observing version 7, the session went back in time to version 5. Pin the session to a replica, or carry its highest seen position as a token." },
+    { id: "ryw", text: "Read-your-writes", feedback: "This user wrote nothing, so read-your-writes has nothing to promise them." },
+    { id: "monotonic-writes", text: "Monotonic writes", feedback: "Monotonic writes orders a session's own writes. This session only read." },
+    { id: "linear-only", text: "Only linearizability; every weaker guarantee holds", feedback: "Going backwards within one session already breaks monotonic reads, which is weaker than linearizability and much cheaper to provide." }
+  ]}
+/>
+
+</Step>
+
+<Step id="causal" title="Causal consistency">
+
+Causal consistency keeps cause before effect for every reader. The classic failure without it: Alice posts "I lost my job", then, after reading the replies, posts "Never mind, it was a joke, I got promoted." Bob's replica receives the second post first and he congratulates her on losing her job.
+
+Causal consistency is attractive because it is close to the strongest model a store can provide while staying available on every side of a partition. Linearizability requires a side to stop answering; causal ordering only requires each replica to delay showing an update until it has shown the updates it depends on.
+
+<Choice
+  id="reply-before-post"
+  objective="identify-violation"
+  prompt="Bob reads Alice's question, then posts an answer. Carol's replica shows Bob's answer but not Alice's question. Which is the weakest model this violates?"
+  options={[
+    { id: "causal", text: "Causal consistency", correct: true, feedback: "Right. Bob's answer causally depends on Alice's question because Bob read it first. Showing the effect without the cause is the defining causal violation." },
+    { id: "eventual", text: "Eventual consistency", feedback: "Carol's replica may still converge and show both posts later, which is all eventual consistency asks." },
+    { id: "ryw", text: "Read-your-writes", feedback: "Carol did not write either post, so read-your-writes does not apply to her session." },
+    { id: "linear", text: "Linearizability is the weakest model violated", feedback: "Linearizability is violated too, but a weaker model is violated already: causal consistency forbids exactly this." }
+  ]}
+/>
+
+</Step>
+
+<Step id="eventual" title="How stale is eventual?">
+
+Eventual consistency gives no bound at all, so you have to measure or model it. In a leaderless store the dial is quorum size: with N replicas, a write acknowledged by W and a read of R, overlap is guaranteed only when R + W > N. Below that, a read can land entirely on replicas the write has not reached yet. Bailis et al. formalised this as "probabilistically bounded staleness"; the simple case is a counting problem.
+
+<VariantQuestion template="consistency.stale-read" />
+
+</Step>
+
+<Step id="choose" title="Choose the weakest safe model">
+
+Strong models are not free: each step up adds round trips, refusals during partitions, or both. A good design picks per feature. Linearizability is for things where two observers acting on different answers causes harm: uniqueness, locks, leader election, account balances. Session guarantees cover "my own changes must show up". Most social and analytical reads tolerate eventual consistency.
+
+<Choice
+  id="needs-linear"
+  objective="choose-model"
+  multiple
+  prompt="Which features need a linearizable operation? Select all that apply."
+  options={[
+    { id: "username", text: "Two people must never claim the same username", correct: true, feedback: "Right. A check-then-claim on a stale replica would let both succeed. The claim needs a linearizable compare-and-set or a unique constraint at one authority." },
+    { id: "leader", text: "Exactly one worker may act as the cron leader at a time", correct: true, feedback: "Right. Leadership is a lock; a stale read of 'no leader' produces two leaders." },
+    { id: "profile", text: "A user must see their own new profile photo immediately", feedback: "That is read-your-writes, a session guarantee. Route the user's reads by their write token; others can see the photo a little later." },
+    { id: "views", text: "A video's view count shown on its page", feedback: "A count that is a few seconds behind harms no one. Eventual consistency with a mergeable counter is enough." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. State the token and replica positions for the session wait, and count distinct replica picks for the stale-read probability.
+
+<MasteryCheck templates={["consistency.session-wait", "consistency.stale-read"]} count={4} />
+
+Next, the [clocks lesson](/learn/distributed-systems/clocks) shows how systems track the causal order this lesson relied on.
+
+</Step>

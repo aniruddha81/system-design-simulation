@@ -1,0 +1,158 @@
+{/*
+id: cap-pacelc
+slug: cap-pacelc
+track: distributed-systems
+title: "CAP and PACELC"
+description: "What CAP really forces during a partition, who loses availability, and why PACELC's latency-versus-consistency choice matters every day."
+objectives:
+  - id: state-cap
+    text: State precisely what CAP forces during a network partition and which clients lose availability
+  - id: apply-pacelc
+    text: Use PACELC to name and quantify the latency cost of consistency when there is no partition
+  - id: classify-systems
+    text: Classify a concrete store configuration by what it gives up during a partition and in normal operation
+requires: [replication]
+activities: [C, Q]
+limitations:
+  - "CAP is taught with Gilbert and Lynch's definitions: linearizable consistency, a response from every non-failed node, and arbitrary message loss. Other definitions give other conclusions."
+  - "Latency figures ignore disk, queuing and processing time; real systems add these on top of the round trips shown."
+  - "System classifications describe typical configurations. Most stores let you choose per operation, so the label belongs to a configuration, not a product."
+sources:
+  - title: "Towards Robust Distributed Systems (PODC keynote)"
+    authors: "E. Brewer"
+    year: 2000
+    url: "https://people.eecs.berkeley.edu/~brewer/cs262b-2004/PODC-keynote.pdf"
+  - title: "Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services"
+    authors: "S. Gilbert, N. Lynch"
+    year: 2002
+    url: "https://doi.org/10.1145/564585.564601"
+  - title: "CAP twelve years later: How the \"rules\" have changed"
+    authors: "E. Brewer"
+    year: 2012
+    url: "https://doi.org/10.1109/MC.2012.37"
+  - title: "Consistency Tradeoffs in Modern Distributed Database System Design"
+    authors: "D. Abadi"
+    year: 2012
+    url: "https://doi.org/10.1109/MC.2012.33"
+  - title: "Dynamo: Amazon's Highly Available Key-value Store"
+    authors: "G. DeCandia et al."
+    year: 2007
+    url: "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="what-cap-says" title="What the theorem actually says">
+
+Brewer stated CAP as a conjecture in 2000; Gilbert and Lynch proved it in 2002 with precise definitions, and those definitions are the whole point:
+
+- **Consistency** means *linearizability*: every operation appears to take effect at a single instant between its call and its return, so a read never returns a value older than a write that already completed. This is not the C in ACID.
+- **Availability** means every request to a node that has not crashed eventually gets a non-error response. A timeout or "try again later" counts as unavailable.
+- **Partition tolerance** means the system keeps its promises while the network drops an arbitrary set of messages between nodes.
+
+The theorem: when a partition happens, a replicated store must give up one of C or A for the operations that cross it. You cannot opt out of partitions in a system that spans more than one machine, so "CA" is not a real third option. It only describes a system that has not yet met a partition.
+
+<Choice
+  id="cap-statement"
+  objective="state-cap"
+  prompt="Which statement matches the proven CAP theorem?"
+  options={[
+    { id: "pick-two", text: "Every system picks two of consistency, availability and partition tolerance, permanently", feedback: "This is the popular slogan, and Brewer himself called it misleading in 2012. Partitions are not optional, and the C-or-A choice only binds while one is happening." },
+    { id: "during-partition", text: "While the network is partitioned, a replicated store cannot both answer every request on every side and keep reads linearizable", correct: true, feedback: "Right. Gilbert and Lynch prove exactly this: a node cut off from the latest write must either answer with possibly stale data or refuse to answer." },
+    { id: "acid", text: "A distributed database cannot provide ACID transactions", feedback: "CAP's C is linearizability of a single register, not ACID consistency. Spanner and CockroachDB run distributed ACID transactions; they give up availability on the minority side of a partition instead." },
+    { id: "always-slow", text: "Consistent systems are always slower than available ones", feedback: "CAP says nothing about latency. That trade-off is real, but it is the subject of PACELC, not CAP." }
+  ]}
+/>
+
+</Step>
+
+<Step id="partition" title="Who loses availability, and how many">
+
+"Giving up availability" sounds like an outage, but it is usually much narrower. Take a five-replica store that commits a write only when three replicas, a strict majority, have it. A partition cuts two replicas away from the other three.
+
+The three-replica side still holds a majority and keeps committing. The two-replica side cannot form a majority, so to stay linearizable it must refuse writes and refuse reads it cannot prove are current. Only the clients stuck with the minority see errors. That is what etcd, ZooKeeper and every Raft- or Paxos-based store do.
+
+<VariantQuestion template="cap.minority-clients" />
+
+</Step>
+
+<Step id="ap-side" title="The available choice, and its bill">
+
+The alternative is to keep answering on both sides. Amazon's Dynamo did this for the shopping cart: an "add to cart" must never fail, so any reachable replica accepts the write, and the two sides diverge. When the partition heals, the system must reconcile. Dynamo returned all concurrent versions to the application, which merged carts by union. The known side effect: a deleted item could reappear, because a union cannot tell "removed on one side" from "never added on the other".
+
+Availability is a real business choice, but it moves work to conflict resolution. Before you choose it, say what happens when both sides change the same thing.
+
+<Choice
+  id="choose-ap"
+  objective="classify-systems"
+  prompt="During a partition, which feature is the best fit for 'stay available and reconcile later'?"
+  options={[
+    { id: "balance", text: "Debiting an account balance that must never go negative", feedback: "Both sides could approve debits against the same balance, and no merge can undo an overdraft that already paid out. This needs a single authority, so refuse writes on the minority side." },
+    { id: "username", text: "Claiming a unique username", feedback: "Both sides could hand the same name to two people. Uniqueness needs one side to decide, so it needs consistency, not availability." },
+    { id: "likes", text: "Counting likes on a post", correct: true, feedback: "Right. Increments from both sides can be merged exactly with a counter CRDT, and a briefly stale count harms no one." },
+    { id: "lock", text: "Granting a distributed lock", feedback: "A lock granted on both sides is two holders, which is the failure a lock exists to prevent." }
+  ]}
+/>
+
+</Step>
+
+<Step id="else-latency" title="PACELC: the trade-off you pay every day">
+
+Partitions are rare. Abadi's 2012 observation is that the trade-off people actually feel is present all the time: **if there is a Partition, choose Availability or Consistency; Else, choose Latency or Consistency.**
+
+Consistency costs latency because a write cannot be acknowledged until enough replicas have it, and replicas worth having are far apart. Put five replicas in five regions and require a majority: every write waits for the round trip to the second-nearest follower. Serve reads and writes from the local replica alone and you answer in microseconds, at the price of stale or conflicting data.
+
+<VariantQuestion template="pacelc.majority-latency" />
+
+</Step>
+
+<Step id="classify" title="Classify a configuration, not a product">
+
+PACELC gives two letters per configuration. Abadi's own examples: Dynamo-style stores such as Cassandra and Riak, in their default setup, are **PA/EL**: available under partition and low-latency otherwise. Fully consistent systems built on consensus are **PC/EC**. Yahoo's PNUTS was **PC/EL**: it kept a per-record master, so it gave up availability for that record under partition, but read from local replicas that could be stale.
+
+Most modern stores let each request choose. A Cassandra read at consistency level ONE and a read at QUORUM are different points in the space, issued against the same cluster.
+
+<Choice
+  id="classify-quorum"
+  objective="classify-systems"
+  prompt="A leaderless store has N = 3 replicas per key, one per region. Every read and write uses R = 2 and W = 2. Which description fits?"
+  options={[
+    { id: "pa-el", text: "PA/EL: always available and as fast as one local replica", feedback: "With W = 2, a client cut off with one replica cannot complete a write, so it is not available under partition. And every operation waits for a remote replica, so it does not have local-replica latency." },
+    { id: "pc-ec", text: "Closer to PC/EC: minority-side requests fail under partition, and every request waits for a second replica's round trip", correct: true, feedback: "Right. R + W > N buys overlap at the cost of a cross-region round trip on every request and refusals on the isolated side. Overlap alone still is not full linearizability; that needs extra rules such as read repair before returning." },
+    { id: "ca", text: "CA: consistent and available because the quorums overlap", feedback: "Quorum overlap does not keep the isolated side available. A client that can reach only one replica cannot assemble two." },
+    { id: "pa-ec", text: "PA/EC: available under partition but slow normally", feedback: "The isolated side cannot reach two replicas, so it must fail requests: that is PC, not PA." }
+  ]}
+/>
+
+</Step>
+
+<Step id="beyond-cap" title="What CAP does not tell you">
+
+CAP is a statement about one corner case, so it is easy to over-apply. In 2012 Brewer suggested designing for partitions explicitly instead: detect the partition, enter a partition mode that limits risky operations, and run a recovery step that merges state and repairs invariants afterwards. ATMs famously do this: offline, they still dispense cash up to a limit and reconcile later.
+
+<Choice
+  id="cap-limits"
+  objective="state-cap"
+  multiple
+  prompt="Which of these are real limits of the CAP theorem as a design tool? Select all that apply."
+  options={[
+    { id: "latency", text: "It ignores latency, which is the cost you pay with no partition at all", correct: true, feedback: "Right. That gap is exactly why Abadi proposed PACELC." },
+    { id: "binary", text: "It treats availability as all-or-nothing, while real systems degrade some operations and keep others", correct: true, feedback: "Right. A store can keep reads up and refuse writes, or refuse only the minority side. Real availability is per operation and per client." },
+    { id: "slow-node", text: "In practice a very slow network is indistinguishable from a partition, so the choice arises whenever a timeout fires", correct: true, feedback: "Right. A node cannot tell a dropped message from a delayed one, so every timeout is a small CAP decision." },
+    { id: "single-node", text: "It means a single-machine database is not partition tolerant and therefore unsafe", feedback: "A single machine has no internal network to partition. CAP is about replicated state; the single machine instead loses availability when it fails." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. For each one, ask which side keeps a majority, and which replica's round trip the client waits for.
+
+<MasteryCheck templates={["cap.minority-clients", "pacelc.majority-latency"]} count={4} />
+
+Next, the [consistency models lesson](/learn/distributed-systems/consistency-models) unpacks what "C" can mean between linearizable and eventual, and [CRDTs](/learn/distributed-systems/crdts) show how to make the available side merge safely.
+
+</Step>

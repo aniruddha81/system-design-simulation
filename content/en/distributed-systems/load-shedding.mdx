@@ -1,0 +1,135 @@
+{/*
+id: load-shedding
+slug: load-shedding
+track: distributed-systems
+title: "Load shedding"
+description: "Why an overloaded server that accepts everything ends up serving no one, and how to reject early, bound queues by deadline and choose what to drop."
+objectives:
+  - id: goodput-collapse
+    text: Explain why goodput collapses when a server queues work it cannot finish before clients give up
+  - id: shed-amount
+    text: Compute how much load to shed and the deepest queue that can still meet a deadline
+  - id: choose-shedding
+    text: Choose what to shed and where, using priority, cheap early rejection, LIFO or CoDel-style queues and client-side throttling
+requires: [retries, throughput]
+activities: [C, Q, R]
+limitations:
+  - "Overload is modelled with constant rates and a FIFO queue; real arrivals are bursty and service times vary."
+  - "Rejection is assumed to cost nothing; in practice it costs a little CPU and must stay far cheaper than serving."
+  - "Client behaviour after rejection, such as retries, is covered in the retries lesson and not modelled here."
+sources:
+  - title: "Using load shedding to avoid overload"
+    authors: "D. Yanacek, Amazon Builders' Library"
+    url: "https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/"
+  - title: "Handling Overload, Site Reliability Engineering"
+    authors: "A. Forero Cuervo (B. Beyer et al., eds.)"
+    year: 2016
+    url: "https://sre.google/sre-book/handling-overload/"
+  - title: "Controlling Queue Delay"
+    authors: "K. Nichols, V. Jacobson"
+    year: 2012
+    url: "https://queue.acm.org/detail.cfm?id=2209336"
+  - title: "Fail at Scale"
+    authors: "B. Maurer"
+    year: 2015
+    url: "https://queue.acm.org/detail.cfm?id=2839461"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="goodput" title="Throughput is not goodput">
+
+**Goodput** is the rate of requests that succeed in time to be useful. Below capacity, goodput equals throughput. Above capacity, an unprotected server keeps accepting work, its queue grows, and every request waits longer. Soon the wait alone exceeds the client's timeout. The server is still 100% busy, but it is now busy computing answers for clients that have already given up, and goodput falls towards zero.
+
+Amazon's Builders' Library describes exactly this curve: without load shedding, latency rises, then goodput drops off a cliff while measured throughput stays high.
+
+<Choice
+  id="goodput-graph"
+  objective="goodput-collapse"
+  prompt="Offered load rises from 80% to 150% of a server's capacity. It has an unbounded FIFO queue and clients time out after 1 s. What happens to goodput after a while?"
+  options={[
+    { id: "collapse", text: "It falls towards zero, because queued requests wait past the timeout before they are served", correct: true, feedback: "Right. Each request is served after a wait that keeps growing; once the wait exceeds 1 s, every response arrives too late." },
+    { id: "capacity", text: "It stays at 100% of capacity, because the server is fully busy", feedback: "The server is busy, but busy on requests that have already timed out. Busy is not useful." },
+    { id: "150", text: "It rises to 150% of capacity, because the queue absorbs the excess", feedback: "A queue cannot create capacity. It only stores work, and stored work gets older." },
+    { id: "two-thirds", text: "It settles at two thirds of offered load", feedback: "That is the share the server can process, but without shedding those processed requests are the oldest in the queue, not the ones still being waited for." }
+  ]}
+/>
+
+</Step>
+
+<Step id="collapse" title="How fast the cliff arrives">
+
+With a FIFO queue and a constant overload, the queue grows by the excess every second, and the wait for a new arrival is the queue length divided by the service rate. The wait passes the client timeout surprisingly fast. With 10% overload and a 1 s timeout, it takes about 10 seconds; with 50%, about 2.
+
+<VariantQuestion template="shedding.collapse-time" />
+
+</Step>
+
+<Step id="how-much" title="Shed the excess, cheaply and early">
+
+The cure is to refuse the excess so that what is accepted is served on time. A shed request should be rejected as early and cheaply as possible: before parsing the body, before taking locks, ideally at the front door. A rejection that costs half as much as serving the request barely helps.
+
+Rejecting with a clear signal, such as HTTP 503 or 429 with a Retry-After header, also tells well-behaved clients to back off.
+
+<VariantQuestion template="shedding.fraction" />
+
+</Step>
+
+<Step id="queue-bound" title="Bound the queue by the deadline">
+
+A queue is useful only while its items can still be served in time. Anything deeper than service rate × client deadline is work the server will finish after the client has left. So bound the queue by time, not by an arbitrary count, or check each request's deadline when it is dequeued and drop it if it has passed.
+
+<VariantQuestion template="shedding.queue-depth" />
+
+</Step>
+
+<Step id="what-to-shed" title="Choose what to drop">
+
+Not all requests are equal. Google's SRE book describes tagging requests with a **criticality**, such as critical versus sheddable, and shedding the least critical first. A checkout matters more than a prefetch; a user-facing read matters more than a batch job's.
+
+Queue discipline matters too. Facebook's "Fail at Scale" describes two techniques: **controlled delay**, inspired by CoDel (Nichols and Jacobson, 2012), which cuts the queue's timeout when it has not drained recently, and **adaptive LIFO**, which serves the newest requests first during overload because they are the ones whose clients are still waiting.
+
+<Choice
+  id="shed-policy"
+  objective="choose-shedding"
+  multiple
+  prompt="An API is at 130% of capacity. Which policies make the best use of the capacity it has? Select all that apply."
+  options={[
+    { id: "priority", text: "Shed background and prefetch traffic before user-facing requests", correct: true, feedback: "Right. Spend scarce capacity where it matters; prefetches can be retried later at no cost to users." },
+    { id: "lifo", text: "Under overload, serve the newest queued requests first", correct: true, feedback: "Right. That is adaptive LIFO: old requests have probably timed out, new ones can still succeed." },
+    { id: "deadline", text: "Drop requests whose deadline has already passed when they reach the front of the queue", correct: true, feedback: "Right. Serving an expired request is pure waste." },
+    { id: "accept-all", text: "Accept everything so that no user sees an error", feedback: "Accepting everything is how goodput collapses: most users then see a timeout instead of a quick error." }
+  ]}
+/>
+
+</Step>
+
+<Step id="client-side" title="Shed at the client, too">
+
+Rejecting a request still costs the server a connection, a TLS handshake and some parsing. When rejections become a large share of traffic, the cheapest place to shed is the client. The SRE book's **client-side adaptive throttling** has each client track its recent requests and accepts, and reject a share of new requests locally with probability max(0, (requests − K × accepts) ÷ (requests + 1)), with K around 2. Clients then send roughly what the backend is accepting, plus a little to detect recovery.
+
+<Choice
+  id="client-throttle"
+  objective="choose-shedding"
+  prompt="With adaptive throttling at K = 2, a client has recently sent 1,000 requests and had 300 accepted. Roughly what share of its new requests does it reject locally?"
+  options={[
+    { id: "forty", text: "About 40%", correct: true, feedback: "Right. (1,000 − 2 × 300) ÷ 1,001 ≈ 0.40. It still sends about 60% of its demand, about twice what the backend accepts, which leaves room to notice recovery." },
+    { id: "seventy", text: "About 70%, the share being rejected by the backend", feedback: "K = 2 deliberately lets through about twice the accepted rate, so the client rejects less than the backend does and can detect recovery." },
+    { id: "zero", text: "None: throttling only starts when every request is rejected", feedback: "It starts once requests exceed K times accepts, which is already true here." },
+    { id: "hundred", text: "All of them, until the backend recovers", feedback: "Rejecting everything would leave the client blind to recovery. The formula always lets some requests through." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then overload a service">
+
+Score at least 80% on fresh variants.
+
+<MasteryCheck templates={["shedding.collapse-time", "shedding.fraction", "shedding.queue-depth"]} count={5} />
+
+In the [sandbox](/sandbox), give a service a large queue and drive it above capacity with a traffic spike in the scenario. Watch latency climb past the workload deadline while throughput stays flat, then cap the queue and compare goodput.
+
+</Step>

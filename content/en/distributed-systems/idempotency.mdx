@@ -1,0 +1,150 @@
+{/*
+id: idempotency
+slug: idempotency
+track: distributed-systems
+title: "Idempotency"
+description: "Why a lost acknowledgement makes every retry a possible duplicate, and how idempotency keys, atomic recording and retention turn at-least-once into exactly-once effects."
+objectives:
+  - id: lost-ack
+    text: Explain why a timeout cannot reveal whether an operation happened, and estimate the duplicates a naive retry causes
+  - id: natural-idempotency
+    text: Distinguish naturally idempotent operations from ones that need deduplication
+  - id: key-design
+    text: Design an idempotency-key flow that records the key and the effect atomically, and size its retention and storage
+requires: [retries]
+activities: [C, Q, R]
+limitations:
+  - "Duplicate estimates assume each lost acknowledgement causes exactly one retry and that loss is independent of load."
+  - "Storage sizing ignores indexes, replication and allocator overhead."
+  - "Exactly-once here means exactly-once effects inside one service and its database; side effects in third-party systems need their own keys."
+sources:
+  - title: "Idempotent requests (Stripe API reference)"
+    authors: "Stripe"
+    url: "https://docs.stripe.com/api/idempotent_requests"
+  - title: "Implementing Stripe-like Idempotency Keys in Postgres"
+    authors: "B. Leach"
+    year: 2017
+    url: "https://brandur.org/idempotency-keys"
+  - title: "The Idempotency-Key HTTP Header Field (IETF draft)"
+    authors: "J. Jena, S. Dalal"
+    url: "https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"
+  - title: "Timeouts, retries, and backoff with jitter"
+    authors: "M. Brooker, Amazon Builders' Library"
+    url: "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="lost-ack" title="The lost acknowledgement">
+
+A client sends "charge $50". The payment service charges the card, commits, and sends the response. The response is lost: a load balancer drops the connection, or the client's own timeout fires a moment too early. From the client's side this looks exactly like a request that never arrived. If it retries, the customer pays twice.
+
+This is not an exotic failure. Any system that retries on timeout, which is every robust system, delivers some requests more than once. Networks give you **at-most-once** (never retry, sometimes lose) or **at-least-once** (retry, sometimes duplicate). Exactly-once *delivery* is not on offer; exactly-once *effects* are something you build.
+
+<VariantQuestion template="idempotency.duplicates" />
+
+</Step>
+
+<Step id="natural" title="Some operations are already safe to repeat">
+
+An operation is **idempotent** if doing it twice has the same effect as doing it once. "Set the shipping address to X", "delete order 42" and an HTTP PUT of a whole resource are naturally idempotent. "Add $50", "append a line", "send an email" and "increment a counter" are not; each repeat changes the world again.
+
+You can often redesign an operation to be idempotent: replace "increment by 1" with "record vote from user U on post P" under a unique constraint, or "add $50" with "apply transfer T-9123" where the transfer ID is unique. When that is not possible, the server must remember what it has already done.
+
+<Choice
+  id="is-idempotent"
+  objective="natural-idempotency"
+  multiple
+  prompt="Which operations are naturally idempotent, so a duplicate does no harm? Select all that apply."
+  options={[
+    { id: "set-email", text: "Set user 7's email address to a@example.com", correct: true, feedback: "Right. Setting a field to a fixed value twice leaves the same state." },
+    { id: "cancel", text: "Mark order 42 as cancelled", correct: true, feedback: "Right. A cancelled order cancelled again is still cancelled, provided the handler does not also, say, refund each time." },
+    { id: "increment", text: "Increment the stock count of item 9 by one", feedback: "Each duplicate adds one more. Use a unique operation ID or recast it as setting a computed value." },
+    { id: "email", text: "Send the order confirmation email", feedback: "Each duplicate sends another email. Record that the email for this order was sent, and check before sending." }
+  ]}
+/>
+
+</Step>
+
+<Step id="keys" title="Idempotency keys">
+
+For operations that are not naturally idempotent, the client generates a unique **idempotency key**, typically a random UUID, once per logical operation, and sends the same key on every retry. Stripe's API popularised this with an `Idempotency-Key` header, and the IETF is standardising the header.
+
+On the server, the first request with a key does the work and stores the result under the key. Any later request with the same key gets the stored result back without doing the work again. Stripe also stores a fingerprint of the request parameters and rejects a reuse of the key with different parameters, which catches client bugs.
+
+<Ordering
+  id="key-flow"
+  objective="key-design"
+  prompt="Put the server's handling of a request carrying an idempotency key in order."
+  items={[
+    { id: "lookup", text: "Look up the key; if a completed result is stored, return it and stop" },
+    { id: "begin", text: "Begin a database transaction" },
+    { id: "insert", text: "Insert the key as in progress, relying on a unique constraint to stop a concurrent duplicate" },
+    { id: "effect", text: "Apply the business effect, such as the ledger entry" },
+    { id: "save", text: "Store the response under the key and commit the transaction" },
+    { id: "respond", text: "Return the response" }
+  ]}
+  explanation="The key and the effect commit in the same transaction, so a crash leaves either both or neither. The unique constraint resolves the race when two retries arrive at once; a lookup alone would let both proceed."
+/>
+
+</Step>
+
+<Step id="atomic" title="The race that breaks naive dedup">
+
+The tempting implementation is: check whether the key exists; if not, do the work; then store the key. Two retries that arrive close together both pass the check before either stores the key, and both do the work. A crash between "do the work" and "store the key" has the same effect on the next retry.
+
+The check and the record must be one atomic step, and the record must commit together with the effect. Inside one database, a transaction with a unique constraint on the key does this. When the effect lives elsewhere, such as a call to a card network, store the key with a "started" state first, pass your own key to that external system, and design a recovery path for requests that crashed midway, as Brandur Leach's Postgres design does with recovery points.
+
+<Choice
+  id="naive-dedup"
+  objective="key-design"
+  prompt="A handler does: if key not in table, charge the card, then insert the key. Two copies of a request arrive 5 ms apart. What can happen?"
+  options={[
+    { id: "double", text: "Both see no key, both charge the card, then one key insert succeeds and one fails", correct: true, feedback: "Right. Check-then-act is a race. The unique insert must come first, inside the same transaction as the effect, so the second copy blocks or fails before it charges." },
+    { id: "safe", text: "Only one charges, because the second sees the first's key", feedback: "The first copy only inserts its key after charging. In the 5 ms gap the second copy still sees no key." },
+    { id: "both-fail", text: "Both fail, because the database detects the duplicate", feedback: "The database only sees the duplicate key insert, which happens after both charges went through." },
+    { id: "locks", text: "The table lock on the key prevents the race automatically", feedback: "Reading a missing row takes no lock on it in most databases. Use a unique constraint or an explicit lock." }
+  ]}
+/>
+
+</Step>
+
+<Step id="retention" title="How long to remember a key">
+
+A key must be kept at least as long as a client might retry with it, including retries after the client itself crashes and resumes. Too short, and a late retry is treated as new. Stripe keeps keys for at least 24 hours. The storage cost is rate × retention × entry size, and the stored response often dominates the entry size.
+
+Expiry is a correctness boundary, not a tuning knob: document it as part of the API contract, and reject retries older than the window if you can detect them.
+
+<VariantQuestion template="idempotency.key-storage" />
+
+</Step>
+
+<Step id="consumers" title="Consumers deduplicate too">
+
+The same reasoning applies to message queues. Most brokers deliver at least once: a consumer processes a message, crashes before acknowledging it, and the broker redelivers. A consumer that applies effects must be idempotent, usually by recording the message ID in the same transaction as the effect. Kafka's "exactly-once semantics" is this idea applied inside Kafka: transactional writes and offsets commit together, but effects outside Kafka still need their own deduplication.
+
+<Choice
+  id="consumer-dedup"
+  objective="natural-idempotency"
+  prompt="A consumer adds each payment message's amount to a balance, then acknowledges the message. It crashes after updating the balance but before acknowledging. What prevents a double credit on redelivery?"
+  options={[
+    { id: "record-id", text: "Record the message ID in the same database transaction as the balance update, and skip messages already recorded", correct: true, feedback: "Right. The effect and the dedup record commit together, so a redelivery finds the ID and does nothing." },
+    { id: "ack-first", text: "Acknowledge the message before updating the balance", feedback: "That swaps duplicates for losses: a crash after the acknowledgement loses the credit entirely." },
+    { id: "exactly-once", text: "Enable the broker's exactly-once delivery setting", feedback: "Broker guarantees stop at the broker's boundary. Your database update is outside it." },
+    { id: "faster", text: "Process messages faster so crashes are less likely to fall in the gap", feedback: "A smaller window still fails sometimes, and at scale 'sometimes' happens daily." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then lose an acknowledgement">
+
+Score at least 80% on fresh variants.
+
+<MasteryCheck templates={["idempotency.duplicates", "idempotency.key-storage"]} count={4} />
+
+Then prove it in the [sandbox](/sandbox). Build client → API service → payment service → database, where the payment service's route increments a ledger. Give the API's call to the payment service a short timeout and a retry on timeout. In the scenario, add a brief one-way partition from the payment service back to the API: responses are lost while requests still arrive, which is exactly a lost acknowledgement. Run it and look for duplicate-effect violations. Then add a dedup store with **Atomic check-and-record** and **Survives a restart** switched on, start the payment route with a dedup step and branch on "if the idempotency key was seen", and run the same seed again.
+
+</Step>

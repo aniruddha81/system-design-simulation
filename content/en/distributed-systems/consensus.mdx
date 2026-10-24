@@ -1,0 +1,162 @@
+{/*
+id: consensus
+slug: consensus
+track: distributed-systems
+title: "Consensus with Raft"
+description: "How Raft elects one leader per term, replicates a log, decides when an entry is committed, and what a leader stranded in a minority can and cannot do."
+objectives:
+  - id: majority-math
+    text: Compute majority sizes and the number of failures a Raft cluster tolerates
+  - id: election
+    text: Explain how terms, single votes and randomised timeouts elect at most one leader per term
+  - id: commit-rule
+    text: Decide which log index is committed from the followers' match indexes, including the current-term rule
+  - id: partition-behaviour
+    text: Predict what a leader cut off in a minority partition can and cannot do
+requires: [replication, consistency-models]
+activities: [C, Q]
+limitations:
+  - "No membership changes: joint consensus and single-server changes are out of scope."
+  - "Log compaction, snapshots and InstallSnapshot are not covered."
+  - "Election timing ignores vote RPC latency and split votes; the operational simulator models leader loss as a fixed election delay."
+sources:
+  - title: "In Search of an Understandable Consensus Algorithm"
+    authors: "D. Ongaro, J. Ousterhout"
+    year: 2014
+    url: "https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro"
+  - title: "Impossibility of Distributed Consensus with One Faulty Process"
+    authors: "M. Fischer, N. Lynch, M. Paterson"
+    year: 1985
+    url: "https://doi.org/10.1145/3149.214121"
+  - title: "The Raft Consensus Algorithm"
+    url: "https://raft.github.io/"
+  - title: "Paxos Made Simple"
+    authors: "L. Lamport"
+    year: 2001
+    url: "https://lamport.azurewebsites.net/pubs/paxos-simple.pdf"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 35
+*/}
+
+<Step id="why-consensus" title="Why replicas need consensus">
+
+A replicated state machine runs the same deterministic commands, in the same order, on every replica, so every replica reaches the same state. The hard part is the order: replicas must agree on which command occupies log slot 42, even when servers crash and messages are delayed or lost.
+
+That agreement is **consensus**. Fischer, Lynch and Paterson proved in 1985 that no deterministic algorithm can guarantee it will always terminate in a fully asynchronous system with even one crash. Practical algorithms like Paxos and Raft therefore keep **safety** unconditionally (never two different commands in one committed slot) and get **liveness** only when the network is calm enough for timeouts to work.
+
+<Choice
+  id="why-not-timestamps"
+  objective="partition-behaviour"
+  prompt="Why not skip consensus and have each replica apply writes in order of their wall-clock timestamps?"
+  options={[
+    { id: "clocks", text: "Clocks disagree, and a replica cannot know whether an earlier-stamped write is still in flight, so replicas can apply different orders or apply a write and later learn of an earlier one", correct: true, feedback: "Right. Agreement needs a decision that later messages cannot overturn. A majority vote recorded in a log gives that; timestamps alone do not." },
+    { id: "slow", text: "Timestamps are slower to compute than votes", feedback: "Reading a clock is fast. The problem is correctness, not speed." },
+    { id: "fine", text: "It would work if every server ran NTP", feedback: "NTP narrows clock offset but never removes it, and it does nothing about a delayed message carrying an older timestamp." },
+    { id: "size", text: "Timestamps take too much space in the log", feedback: "An 8-byte timestamp is cheap. The issue is that it does not produce agreement." }
+  ]}
+/>
+
+</Step>
+
+<Step id="majority" title="Majorities, and why clusters are odd">
+
+Raft makes every decision with a **majority**: floor(N ÷ 2) + 1 servers. Any two majorities share at least one server, and that shared server is what carries a committed entry or a vote from one decision to the next.
+
+A cluster of N tolerates floor((N − 1) ÷ 2) simultaneous failures. Three servers tolerate one, five tolerate two. A fourth server adds cost and one more machine that can fail, without tolerating any more failures than three; that is why production clusters use 3 or 5, and rarely 7 since every write must reach a majority.
+
+<VariantQuestion template="raft.fault-tolerance" />
+
+</Step>
+
+<Step id="terms" title="Terms are Raft's logical clock">
+
+Raft divides time into numbered **terms**. Each term begins with an election and has at most one leader. Every message carries the sender's term. If a server sees a higher term than its own, it adopts that term and becomes a follower at once; a message from a lower term is rejected.
+
+A server votes for at most one candidate per term and records that vote durably before replying, so a reboot cannot make it vote twice. Because a leader needs a majority of votes and any two majorities intersect, two leaders in one term would need one server to vote twice.
+
+<Choice
+  id="higher-term"
+  objective="election"
+  prompt="A leader in term 4 sends AppendEntries to a follower and gets a reply carrying term 6. What does the leader do?"
+  options={[
+    { id: "step-down", text: "Adopt term 6 and step down to follower", correct: true, feedback: "Right. A higher term means an election happened that this leader missed. Its authority has ended, whatever it believes." },
+    { id: "retry", text: "Retry the AppendEntries until the follower accepts it", feedback: "The follower will keep rejecting term-4 messages. Retrying wastes time while a newer leader may already exist." },
+    { id: "force", text: "Overwrite the follower's log to restore its authority", feedback: "A stale leader overwriting logs is exactly how committed data would be lost. Terms exist to stop it." },
+    { id: "ignore", text: "Ignore the reply and continue as leader of term 4", feedback: "Ignoring higher terms would allow two leaders acting at once, which Raft's safety argument forbids." }
+  ]}
+/>
+
+</Step>
+
+<Step id="election" title="Elections and randomised timeouts">
+
+Followers expect regular heartbeats (empty AppendEntries). If a follower hears nothing for its **election timeout**, it increments its term, votes for itself and asks the others for votes. If several followers time out at once, they split the vote and nobody wins; everyone waits and tries again in a later term.
+
+Raft makes split votes rare by randomising each timeout, for example uniformly between 150 and 300 ms as in the paper. The first follower to time out usually wins before anyone else wakes. Raft also adds the **election restriction**: a server only votes for a candidate whose log is at least as up to date as its own, comparing the last entry's term and then its index. So a winner always holds every committed entry.
+
+<VariantQuestion template="raft.election-time" />
+
+</Step>
+
+<Step id="replication" title="Replicating the log">
+
+The leader appends each client command to its log and sends it in AppendEntries. Each request carries the index and term of the entry just before the new ones; a follower whose log does not match at that point rejects it, and the leader backs up and resends. This check enforces the **log matching property**: if two logs have an entry with the same index and term, they are identical up to that entry.
+
+<Ordering
+  id="write-path"
+  objective="commit-rule"
+  prompt="Put the steps of a successful client write in order."
+  items={[
+    { id: "send", text: "The client sends the command to the leader" },
+    { id: "append", text: "The leader appends it to its own log" },
+    { id: "replicate", text: "The leader sends AppendEntries to the followers" },
+    { id: "ack", text: "A majority, counting the leader, has stored the entry" },
+    { id: "commit", text: "The leader advances its commit index and applies the command" },
+    { id: "reply", text: "The leader replies to the client" }
+  ]}
+  explanation="The leader may reply only after a majority stores the entry and it is applied. Followers learn the new commit index on the next AppendEntries or heartbeat and apply it then."
+/>
+
+</Step>
+
+<Step id="commit" title="When is an entry committed?">
+
+The leader tracks a **matchIndex** per follower: the highest index known to be on that follower. The highest index stored on a majority is committable, with one subtle rule: a leader only commits entries from **its own current term** by counting replicas. Earlier-term entries become committed indirectly, when a current-term entry after them commits.
+
+Without that rule, the Raft paper's Figure 8 shows a disaster: an old-term entry reaches a majority, the leader counts it as committed, then a different server with a newer conflicting entry wins an election and overwrites it.
+
+<VariantQuestion template="raft.commit-index" />
+
+</Step>
+
+<Step id="partition" title="A leader stranded in a minority">
+
+Partition a five-server cluster into two and three. If the old leader is on the two-server side, it keeps believing it is leader until it hears a higher term. It still accepts client commands and appends them to its log, but it can never reach three servers, so those entries never commit. Meanwhile the three-server side elects a new leader in a higher term and carries on.
+
+When the partition heals, the old leader sees the higher term, steps down, and its uncommitted entries are overwritten. Clients that wrote to it got timeouts, never success. Reads are the trap: if the old leader answers reads from its own state, it serves stale data. Raft prevents this by confirming leadership with a majority round of heartbeats before serving a read (ReadIndex) or by relying on a leader lease, which assumes bounded clock drift.
+
+<Choice
+  id="minority-leader"
+  objective="partition-behaviour"
+  prompt="During the 2–3 partition, a client sends a write to the old leader on the two-server side. What happens?"
+  options={[
+    { id: "timeout", text: "The leader appends it but cannot commit it; the client gets no success and the entry is discarded after the partition heals", correct: true, feedback: "Right. Safety holds because commitment needs a majority. The cost is unavailability for clients on the minority side." },
+    { id: "commit-later", text: "The write commits once the partition heals, because the leader kept it in its log", feedback: "The new leader's log wins. The old leader's uncommitted entries conflict with it and are overwritten." },
+    { id: "split-brain", text: "Both leaders commit writes, and Raft merges them afterwards", feedback: "Raft never merges. Only the side with a majority can commit, so there is never anything to merge." },
+    { id: "success", text: "The client gets success because the leader stored it durably", feedback: "A leader's own durable copy is one of five. Acknowledging it would lose the write when the old leader's log is overwritten." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. For the commit index, include the leader's own last index among the five, sort, and take the third highest.
+
+<MasteryCheck templates={["raft.fault-tolerance", "raft.election-time", "raft.commit-index"]} count={5} />
+
+In the operational [sandbox](/sandbox), a database's automatic failover models the outcome of an election (detection time plus election time) rather than the protocol itself. Configure heartbeats and missed-heartbeat detection on a replicated database, kill the leader, and compare the write outage with the timeout ranges from this lesson.
+
+</Step>

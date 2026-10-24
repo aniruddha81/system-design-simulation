@@ -1,0 +1,134 @@
+{/*
+id: timeouts
+slug: timeouts
+track: distributed-systems
+title: "Timeouts and deadlines"
+description: "Set timeouts from latency data, fit retries inside a caller's deadline, and propagate the remaining budget down the call chain so no one works for a client that left."
+objectives:
+  - id: set-timeout
+    text: Set a per-try timeout from the dependency's latency distribution and fit all attempts inside the caller's deadline
+  - id: deadline-propagation
+    text: Propagate a deadline down a call chain and compute the budget left for each hop
+  - id: timeout-cost
+    text: Explain what an overlong timeout holds hostage and what a too-short timeout wastes
+requires: [percentiles]
+activities: [C, Q]
+limitations:
+  - "Hop costs are fixed numbers; real hops vary, so production systems add margin or measure per-hop latency."
+  - "Deadline propagation assumes the clocks of caller and callee agree closely, or that a relative timeout is passed and adjusted for transit."
+  - "Thread-holding estimates use Little's law in steady state and ignore queueing before the call starts."
+sources:
+  - title: "Timeouts, retries, and backoff with jitter"
+    authors: "M. Brooker, Amazon Builders' Library"
+    url: "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/"
+  - title: "Deadlines (gRPC guide)"
+    authors: "gRPC Authors"
+    url: "https://grpc.io/docs/guides/deadlines/"
+  - title: "The Tail at Scale"
+    authors: "J. Dean, L. Barroso"
+    year: 2013
+    url: "https://doi.org/10.1145/2408776.2408794"
+  - title: "Addressing Cascading Failures, Site Reliability Engineering"
+    authors: "M. Ulrich (B. Beyer et al., eds.)"
+    year: 2016
+    url: "https://sre.google/sre-book/addressing-cascading-failures/"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="why-timeouts" title="Every remote call needs a timeout">
+
+A remote call can fail in a way that never returns: the server is alive but stuck, the connection is half-open after a network change, a response packet was lost and the TCP retransmission timer backs off into minutes. Without a timeout, the caller waits forever, holding a thread, a connection and memory.
+
+A timeout turns "unknown" into a decision. It does not tell you what happened on the other side; a timed-out request may have completed. That matters as soon as you retry, which is why the [idempotency lesson](/learn/distributed-systems/idempotency) follows this one.
+
+<Choice
+  id="timeout-meaning"
+  objective="timeout-cost"
+  prompt="A call to a payment service times out after 2 seconds. What do you know?"
+  options={[
+    { id: "unknown", text: "Only that no response arrived in time; the payment may or may not have happened", correct: true, feedback: "Right. The request may never have arrived, may still be running, or may have succeeded with the response lost. Treat the outcome as unknown." },
+    { id: "failed", text: "The payment failed, so it is safe to charge again", feedback: "This is the assumption behind most double charges. A timeout is silence, not a failure report." },
+    { id: "down", text: "The payment service is down", feedback: "It may simply be slow for this one request, or the network may have lost one packet. One timeout proves very little." },
+    { id: "succeeded", text: "The payment succeeded, because failures return errors quickly", feedback: "Many failures are slow, not fast. Silence carries no information about success." }
+  ]}
+/>
+
+</Step>
+
+<Step id="from-data" title="Set the timeout from the latency distribution">
+
+A timeout is a bet on the latency distribution. Amazon's Builders' Library describes the usual starting point: pick an acceptable rate of false timeouts, say 0.1%, and set the timeout at that percentile of the dependency's healthy latency, here p99.9, plus a little padding. Then check it fits inside what your own caller will wait.
+
+Both errors hurt. Too short, and healthy slow requests fail and get retried, adding load exactly when latency is rising. Too long, and a dead dependency ties up resources for the whole wait.
+
+<Choice
+  id="pick-timeout"
+  objective="set-timeout"
+  prompt="A dependency's healthy latency is p50 = 20 ms, p99 = 120 ms and p99.9 = 300 ms. You can accept about 0.1% false timeouts. Which timeout is the reasonable starting point?"
+  options={[
+    { id: "p999", text: "About 300 ms, a little above p99.9", correct: true, feedback: "Right. At p99.9, about one healthy call in a thousand times out, matching the accepted rate. Then confirm the caller's deadline can absorb it." },
+    { id: "p50", text: "About 40 ms, twice the median", feedback: "40 ms lies between p50 and p99, so somewhere between 1% and 50% of healthy calls are slower than this. You would time out and retry a large share of good requests." },
+    { id: "p99", text: "120 ms, the p99", feedback: "That times out about 1% of healthy calls, ten times the rate you accepted." },
+    { id: "huge", text: "30 seconds, to be safe", feedback: "Safe for false timeouts, but a hung dependency now holds each caller's thread for 30 seconds. Those threads run out long before then." }
+  ]}
+/>
+
+</Step>
+
+<Step id="too-long" title="What an overlong timeout holds hostage">
+
+When a dependency hangs, every in-flight call to it sits waiting until the timeout. By Little's law, the number stuck equals the call rate times the time each call is held. A generous timeout on a busy path can exhaust a whole thread pool in seconds, and then the service fails every request, including ones that never touch the broken dependency. That is how one slow dependency cascades into a full outage.
+
+<VariantQuestion template="timeouts.threads" />
+
+</Step>
+
+<Step id="attempts" title="Retries must fit inside the deadline">
+
+The caller has its own deadline. Every attempt, and every sleep between attempts, comes out of the same budget. A per-try timeout of 1 s with three attempts behind an API that the user abandons after 2 s means the third attempt is wasted work. Budget backwards: user deadline, then attempts × per-try timeout plus sleeps.
+
+<VariantQuestion template="timeouts.retry-window" />
+
+</Step>
+
+<Step id="deadline" title="Propagate the deadline, not a fixed timeout">
+
+In a chain of calls, fixed per-hop timeouts do not compose. If the gateway gives up after 1 s but service A gives B a fresh 1 s timeout, B can keep working long after the user is gone. Worse, each hop's retries multiply under the same wasted budget.
+
+The fix is **deadline propagation**: pass the absolute deadline, or the remaining time, with the request. gRPC does this natively; each server sees how much time is left and passes that on, minus what it has already spent and what it needs to respond. A server that receives a request whose deadline has already passed should reject it immediately instead of doing the work.
+
+<VariantQuestion template="timeouts.remaining" />
+
+</Step>
+
+<Step id="expired-work" title="Stop work nobody is waiting for">
+
+Google's SRE book singles out work for timed-out requests as a key ingredient of cascading failure. Under overload, queues grow, so requests spend longer waiting; more of them expire while queued; the server keeps executing them anyway and produces responses no one reads. Goodput falls while utilisation stays at 100%.
+
+<Choice
+  id="deadline-checks"
+  objective="deadline-propagation"
+  multiple
+  prompt="A service receives requests carrying a deadline. Which behaviours help under overload? Select all that apply."
+  options={[
+    { id: "reject-expired", text: "Reject a request immediately if its deadline has already passed when it is dequeued", correct: true, feedback: "Right. Spending capacity on a request whose caller has gone only delays the requests that can still succeed." },
+    { id: "pass-remaining", text: "Pass the remaining deadline, minus local margin, to every downstream call", correct: true, feedback: "Right. Downstream services then stop at the same moment the user does." },
+    { id: "reset", text: "Give every downstream call a fresh fixed timeout so slow dependencies get a fair chance", feedback: "Fresh timeouts let downstream work continue after the caller has given up. That is wasted capacity during the exact moments capacity is short." },
+    { id: "finish", text: "Always finish started work, so no effort is wasted", feedback: "The effort is already wasted once the caller is gone. Finishing it only steals capacity from live requests." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. Convert milliseconds to seconds before Little's law, and remember the last attempt has no sleep after it.
+
+<MasteryCheck templates={["timeouts.threads", "timeouts.retry-window", "timeouts.remaining"]} count={5} />
+
+In the [sandbox](/sandbox), every call step in a route has its own timeout and retry policy. Give a call to a slow service a long timeout, drive traffic, and watch queueing and latency climb in the caller; then shorten it and compare.
+
+</Step>

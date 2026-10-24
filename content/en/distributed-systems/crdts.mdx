@@ -1,0 +1,154 @@
+{/*
+id: crdts
+slug: crdts
+track: distributed-systems
+title: "CRDTs and operational transformation"
+description: "How replicas that accept writes independently still converge: merge rules that commute, counters and sets as CRDTs, and how OT and sequence CRDTs handle collaborative text."
+objectives:
+  - id: convergence
+    text: Explain strong eventual consistency and the merge properties that guarantee it
+  - id: gcounter
+    text: Merge G-Counter and PN-Counter states and compute their values
+  - id: orset
+    text: Predict the outcome of concurrent add and remove under an OR-Set versus last-writer-wins
+  - id: ot-vs-crdt
+    text: Transform concurrent text edits with OT and contrast OT with sequence CRDTs
+requires: [consistency-models, clocks]
+activities: [C, Q]
+limitations:
+  - "Examples use state-based counters and sets with a few replicas; delta-state and operation-based variants are described, not simulated."
+  - "OT is shown for single-character and run inserts against one server-ordered history; full transformation functions for deletes and multi-site OT are not covered."
+  - "Metadata growth and tombstone garbage collection are described qualitatively."
+sources:
+  - title: "Conflict-free Replicated Data Types"
+    authors: "M. Shapiro, N. Preguiça, C. Baquero, M. Zawirski"
+    year: 2011
+    url: "https://doi.org/10.1007/978-3-642-24550-3_29"
+  - title: "A comprehensive study of Convergent and Commutative Replicated Data Types"
+    authors: "M. Shapiro, N. Preguiça, C. Baquero, M. Zawirski"
+    year: 2011
+    url: "https://inria.hal.science/inria-00555588"
+  - title: "Concurrency control in groupware systems"
+    authors: "C. Ellis, S. Gibbs"
+    year: 1989
+    url: "https://doi.org/10.1145/67544.66963"
+  - title: "Local-first software: You own your data, in spite of the cloud"
+    authors: "M. Kleppmann, A. Wiggins, P. van Hardenberg, M. McGranaghan"
+    year: 2019
+    url: "https://www.inkandswitch.com/local-first/"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="convergence" title="Merge rules that cannot disagree">
+
+An available store lets replicas accept writes during a partition, so they diverge. The question is how they converge again without asking a human. Last-writer-wins throws data away. Keeping siblings, as Dynamo did, pushes the merge to application code. **Conflict-free replicated data types** (Shapiro et al., 2011) build the merge into the data type itself, so that any two replicas that have received the same updates are in the same state. That property is called **strong eventual consistency**.
+
+For state-based CRDTs, the merge function must be **commutative** (merge(a, b) = merge(b, a)), **associative** (grouping does not matter) and **idempotent** (merge(a, a) = a). Then replicas can exchange state in any order, any number of times, over any gossip path, and still end up identical.
+
+<Choice
+  id="merge-properties"
+  objective="convergence"
+  prompt="Why must a state-based CRDT's merge be idempotent?"
+  options={[
+    { id: "duplicates", text: "Replicas may receive the same state more than once, and a repeated merge must not change the result", correct: true, feedback: "Right. Gossip and retries redeliver freely. Idempotence makes redelivery harmless, so no exactly-once delivery is needed." },
+    { id: "speed", text: "Idempotent merges are faster to compute", feedback: "Speed is not the reason. Idempotence is about tolerating duplicate delivery." },
+    { id: "order", text: "So that merges can happen in any order", feedback: "That is commutativity and associativity. Idempotence handles the same state arriving twice." },
+    { id: "single-writer", text: "So that only one replica can write at a time", feedback: "CRDTs exist precisely so that every replica can write at any time." }
+  ]}
+/>
+
+</Step>
+
+<Step id="counter" title="Counters: G-Counter and PN-Counter">
+
+A shared counter is the simplest CRDT and shows the core trick. A **G-Counter** (grow-only) keeps one entry per replica. Each replica increments only its own entry. Merge takes the **maximum** of each entry, and the counter's value is the **sum** of the entries. Taking the max is commutative, associative and idempotent, so no increment is ever lost or double-counted.
+
+A **PN-Counter** supports decrements by pairing two G-Counters, one for increments and one for decrements, with value = sum(P) − sum(N).
+
+<VariantQuestion template="crdt.gcounter" />
+
+</Step>
+
+<Step id="naive-counter" title="Why not just send increments?">
+
+<Choice
+  id="naive-merge"
+  objective="gcounter"
+  prompt="Two replicas each hold a single number for a like counter. On sync, each sets its value to the sum of both. What goes wrong?"
+  options={[
+    { id: "double", text: "Repeated syncs keep adding the same likes again, so the count grows without new likes", correct: true, feedback: "Right. Addition is not idempotent. Syncing twice double-counts, which is why the G-Counter keeps per-replica entries and takes a maximum." },
+    { id: "lost", text: "Concurrent likes are lost", feedback: "Summing does not lose likes; it overcounts them on every repeated sync." },
+    { id: "nothing", text: "Nothing, addition is commutative", feedback: "Commutativity is not enough. Merge must also be idempotent, and addition is not." },
+    { id: "max", text: "It is the same as taking the maximum", feedback: "Taking the maximum of two totals loses the other replica's concurrent likes; summing them double-counts on repeated syncs. The fix is per-replica entries." }
+  ]}
+/>
+
+Operation-based CRDTs can send increments instead of states, but then the delivery layer must deliver each operation exactly once, usually by tagging operations with unique IDs and deduplicating.
+
+</Step>
+
+<Step id="sets" title="Sets: add, remove and who wins">
+
+Sets are where merge semantics become a product decision. Alice removes "milk" from a shared list while Bob, offline, adds "milk" again. What should the merged list show?
+
+- **Last-writer-wins set**: compare timestamps; whichever is later wins. Clock skew decides, and one user's intent silently vanishes.
+- **OR-Set** (observed-remove): each add creates a unique tag; a remove deletes only the tags it has *observed*. Bob's concurrent add has a tag Alice never saw, so it survives. This is **add-wins**.
+
+Dynamo's cart, which merged by union, could resurrect deleted items. The OR-Set gets the semantics right because it can tell "removed after I saw it" from "added concurrently".
+
+<Choice
+  id="orset-outcome"
+  objective="orset"
+  prompt="With an OR-Set, Alice removes 'milk' after seeing Bob's earlier add. Concurrently, Carol adds 'milk' on a disconnected replica. After all replicas merge, is 'milk' in the set?"
+  options={[
+    { id: "present", text: "Yes: Carol's add has a fresh tag that Alice's remove never observed", correct: true, feedback: "Right. The remove deletes only the tags it saw, Bob's. Carol's tag survives, so the item is present: add wins." },
+    { id: "absent", text: "No: a remove always wins in a set", feedback: "That is a remove-wins design, a different CRDT. In an OR-Set a remove cannot affect an add it did not observe." },
+    { id: "clock", text: "It depends on whose clock shows the later time", feedback: "That is the LWW set. The OR-Set uses causality through tags, not timestamps." },
+    { id: "conflict", text: "The merge fails and asks the user to resolve it", feedback: "CRDT merges never fail. Convergence is automatic; the type's semantics decide the outcome." }
+  ]}
+/>
+
+</Step>
+
+<Step id="ot" title="Collaborative text: operational transformation">
+
+Text editing is harder because positions shift. If Alice inserts at index 3 and Bob, concurrently, inserts at index 10, applying Bob's operation unchanged after Alice's lands it in the wrong place. **Operational transformation**, introduced by Ellis and Gibbs in 1989, rewrites each incoming operation against the concurrent operations already applied: Bob's index 10 becomes 10 plus the length of Alice's insert.
+
+Correct transformation functions for every pair of operations are notoriously hard to get right without a central order. Production OT systems, including Google Docs and its predecessors, rely on a server that puts all operations into one sequence, which makes transformation tractable.
+
+<VariantQuestion template="ot.transform" />
+
+</Step>
+
+<Step id="sequence-crdt" title="Sequence CRDTs: give every character an identity">
+
+Sequence CRDTs such as RGA, Logoot and the structures inside Yjs and Automerge avoid index arithmetic altogether. Every character gets a unique, permanent identifier, and an insert says "after character X" rather than "at index 10". Deletion leaves a **tombstone** so later inserts can still refer to the deleted character. Concurrent inserts at the same spot are ordered by a deterministic tie-break on their identifiers.
+
+This works peer to peer with no central server, which is why the local-first movement favours it. The cost is metadata: identifiers and tombstones can make the document's internal state much larger than its visible text, and garbage collecting tombstones requires knowing that every replica has seen the deletion.
+
+<Choice
+  id="ot-or-crdt"
+  objective="ot-vs-crdt"
+  prompt="A note-taking app must let users edit offline on several devices for days, then sync peer to peer with no central server. Which approach fits better?"
+  options={[
+    { id: "crdt", text: "A sequence CRDT, accepting extra metadata and tombstones", correct: true, feedback: "Right. Stable identifiers let any replica merge any history in any order, with no server to impose a sequence." },
+    { id: "ot", text: "Operational transformation", feedback: "Practical OT depends on a central server to order operations. Days of offline divergence with peer-to-peer sync is exactly where it struggles." },
+    { id: "lww", text: "Last-writer-wins on the whole document", feedback: "Whoever saved last would erase days of the other devices' edits." },
+    { id: "lock", text: "A lock that only one device may hold at a time", feedback: "A lock needs connectivity to acquire. Offline devices could not edit at all." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants.
+
+<MasteryCheck templates={["crdt.gcounter", "ot.transform"]} count={4} />
+
+The case study on collaborative documents builds on this lesson; [gossip](/learn/distributed-systems/gossip) explains how replicas exchange CRDT state in the first place.
+
+</Step>

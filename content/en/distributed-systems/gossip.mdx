@@ -1,0 +1,146 @@
+{/*
+id: gossip
+slug: gossip
+track: distributed-systems
+title: "Gossip and failure detectors"
+description: "How epidemic gossip spreads state in logarithmic rounds, why no failure detector can be perfect, and how phi accrual and SWIM trade detection speed for false suspicion."
+objectives:
+  - id: gossip-rounds
+    text: Estimate how many rounds epidemic gossip needs to reach a cluster, and why it scales
+  - id: fd-properties
+    text: Explain completeness and accuracy of failure detectors and why timeouts cannot distinguish slow from dead
+  - id: phi
+    text: Compute phi accrual suspicion levels and choose a threshold for a detection-speed trade-off
+requires: [replication]
+activities: [C, Q]
+limitations:
+  - "Gossip round estimates assume push gossip with fanout 1, uniform peer choice and no message loss."
+  - "Phi is computed with the exponential approximation Cassandra uses; Hayashibara et al.'s original detector fits a normal distribution to recent heartbeat gaps."
+  - "SWIM's suspicion sub-protocol and incarnation numbers are summarised, not simulated."
+sources:
+  - title: "Epidemic algorithms for replicated database maintenance"
+    authors: "A. Demers et al."
+    year: 1987
+    url: "https://doi.org/10.1145/41840.41841"
+  - title: "On spreading a rumor"
+    authors: "B. Pittel"
+    year: 1987
+    url: "https://doi.org/10.1137/0147013"
+  - title: "The φ accrual failure detector"
+    authors: "N. Hayashibara, X. Défago, R. Yared, T. Katayama"
+    year: 2004
+    url: "https://doi.org/10.1109/RELDIS.2004.1353004"
+  - title: "SWIM: Scalable Weakly-consistent Infection-style Process Group Membership Protocol"
+    authors: "A. Das, I. Gupta, A. Motivala"
+    year: 2002
+    url: "https://doi.org/10.1109/DSN.2002.1028914"
+  - title: "Unreliable failure detectors for reliable distributed systems"
+    authors: "T. Chandra, S. Toueg"
+    year: 1996
+    url: "https://doi.org/10.1145/226643.226647"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="why-gossip" title="Spreading state without a centre">
+
+A cluster of thousands of nodes needs everyone to learn things: who is a member, who looks dead, which schema version is current, CRDT state for a shared counter. Broadcasting from one node does not scale, and that node is a single point of failure. Demers et al. at Xerox PARC (1987) borrowed from epidemiology instead: every node periodically picks a random peer and exchanges what it knows. Information spreads like a rumour.
+
+Gossip is robust because no path is special: a lost message or a crashed node simply means the information arrives by another route a round later. It is also gentle on the network: each node sends a constant number of messages per round, whatever the cluster size.
+
+<Choice
+  id="gossip-property"
+  objective="gossip-rounds"
+  prompt="Why do large clusters such as Cassandra and Consul use gossip for membership rather than having every node heartbeat every other node?"
+  options={[
+    { id: "constant", text: "Each node sends a constant number of messages per round, while all-to-all heartbeats grow with the square of the cluster size", correct: true, feedback: "Right. 1,000 nodes heartbeating each other send about a million messages per interval; with gossip, each sends a handful." },
+    { id: "consistent", text: "Gossip gives every node a linearizable view of membership", feedback: "Gossip is eventually consistent. Different nodes can briefly disagree about who is alive." },
+    { id: "instant", text: "Gossip delivers updates to every node in one round", feedback: "It takes a logarithmic number of rounds, which is fast but not instant." },
+    { id: "ordered", text: "Gossip delivers updates in the same order everywhere", feedback: "Gossip gives no ordering guarantee; that is why it carries versioned state or CRDTs that merge in any order." }
+  ]}
+/>
+
+</Step>
+
+<Step id="epidemic" title="Logarithmic spread">
+
+In push gossip with fanout 1, each informed node tells one random peer per round. At first the informed set roughly doubles each round, which takes about log₂ N rounds to reach half the cluster. Then it slows: most pushes hit nodes that already know, and the last few holdouts are found only by chance. Pittel (1987) showed the total is about **log₂ N + ln N** rounds. For a million nodes that is roughly 34 rounds; with a one-second round, the cluster learns in well under a minute.
+
+Push-pull gossip, where the contacted peer also sends back what it knows, finishes the tail much faster, because uninformed nodes now pull from informed ones as well as being pushed.
+
+<VariantQuestion template="gossip.rounds" />
+
+</Step>
+
+<Step id="fd-properties" title="No failure detector is perfect">
+
+To decide a node is dead, you wait for a heartbeat that does not come. But a missed heartbeat cannot distinguish a crashed node from a slow node, a paused process or a dropped packet. Chandra and Toueg (1996) framed failure detectors by two properties:
+
+- **Completeness**: every crashed node is eventually suspected.
+- **Accuracy**: live nodes are not suspected, or at least not forever.
+
+In an asynchronous network, no detector can be both complete and perfectly accurate. Every real detector picks a point on the trade-off: suspect fast and sometimes wrongly, or suspect slowly and seldom wrongly.
+
+<Choice
+  id="fd-tradeoff"
+  objective="fd-properties"
+  prompt="A team lowers its failure-detection timeout from 10 s to 500 ms to fail over faster. What new risk do they take on?"
+  options={[
+    { id: "false-positive", text: "More false suspicions: GC pauses, brief network hiccups and load spikes now look like crashes and trigger needless failovers", correct: true, feedback: "Right. Each false failover has its own cost, and a flapping detector can cause more outages than it prevents." },
+    { id: "missed", text: "Crashed nodes will no longer be detected", feedback: "A shorter timeout detects crashes sooner, not less often. The cost is on accuracy, not completeness." },
+    { id: "none", text: "None; faster detection is strictly better", feedback: "Detection speed and accuracy pull against each other. A 500 ms timeout is shorter than many routine pauses." },
+    { id: "network", text: "Heartbeat traffic will overload the network", feedback: "The heartbeat interval sets traffic, not the timeout. The real risk is suspecting healthy nodes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="phi" title="Phi accrual: a suspicion level, not a verdict">
+
+A fixed timeout is a yes/no answer that ignores how regular a node's heartbeats usually are. The **φ accrual failure detector** (Hayashibara et al., 2004) instead outputs a continuous suspicion level. It keeps a window of recent inter-arrival gaps and asks: given that distribution, how unlikely is the current silence? φ = −log₁₀ of that probability. φ = 1 means about a 10% chance the heartbeat is merely late; φ = 3 means 0.1%.
+
+Cassandra approximates the gap distribution as exponential, which gives a simple formula: φ = silence ÷ (mean gap × ln 10). Its default conviction threshold is 8.
+
+<VariantQuestion template="gossip.phi" />
+
+</Step>
+
+<Step id="threshold" title="Choosing the threshold">
+
+The application chooses a threshold on φ. A low threshold suspects quickly and makes mistakes more often; a high threshold suspects slowly and rarely errs. The useful property is that the same threshold adapts: on a jittery network, the mean gap rises and so does the silence needed to reach the same φ.
+
+<VariantQuestion template="gossip.phi-silence" />
+
+</Step>
+
+<Step id="swim" title="SWIM: ask someone else before you accuse">
+
+SWIM (Das, Gupta and Motivala, 2002) reduces false positives in a different way. Each round, a node pings one random member. If there is no reply, it does not declare failure; it asks k other members to ping the target **indirectly**. Only if none of them get a reply is the target marked *suspect*, and the suspicion is gossiped. A suspected node that is actually alive can refute it by gossiping a higher **incarnation number**. Membership changes themselves spread by piggybacking on the pings, infection style.
+
+HashiCorp's memberlist, used by Consul and Serf, is based on SWIM with extensions.
+
+<Choice
+  id="indirect-probe"
+  objective="fd-properties"
+  prompt="Node A pings node C and gets no reply, but the link between A and C is the only thing broken. What does SWIM's indirect probe do here?"
+  options={[
+    { id: "saves", text: "A asks B and D to ping C; they reach it, so C is not suspected", correct: true, feedback: "Right. The indirect probes route around the bad link, so one flaky path does not get a healthy node evicted." },
+    { id: "evicts", text: "A immediately marks C dead and gossips the eviction", feedback: "That is what a plain timeout would do. SWIM's indirect probe exists to avoid exactly this false positive." },
+    { id: "retries", text: "A retries the same direct ping until it succeeds", feedback: "Retrying over a broken link keeps failing. Asking other members tests C over different paths." },
+    { id: "partition", text: "The whole cluster stops until the link is repaired", feedback: "SWIM keeps running. Detection is per member, and other paths keep C reachable." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. Keep log base 10 and natural log straight for phi.
+
+<MasteryCheck templates={["gossip.rounds", "gossip.phi", "gossip.phi-silence"]} count={5} />
+
+Failure detection feeds the elections in the [consensus lesson](/learn/distributed-systems/consensus): every false suspicion there is a needless election.
+
+</Step>

@@ -1,0 +1,158 @@
+{/*
+id: circuit-breakers
+slug: circuit-breakers
+track: distributed-systems
+title: "Circuit breakers and bulkheads"
+description: "Stop calling a dependency that is failing, and stop one slow dependency from taking every thread: breaker states, trip thresholds and bulkhead sizing."
+objectives:
+  - id: breaker-states
+    text: Trace a circuit breaker through closed, open and half-open, and say what each state protects
+  - id: breaker-threshold
+    text: Calculate when a failure-rate breaker trips and choose its window, minimum calls and scope
+  - id: bulkhead-sizing
+    text: Size a bulkhead with Little's law and predict the throughput it admits when the dependency hangs
+requires: [retries, timeouts]
+activities: [C, Q, R]
+limitations:
+  - "Trip calculations use a count-based window and assume every call fails after the outage starts; the sandbox breaker uses a time-based window with a minimum call count."
+  - "Bulkhead sizing uses steady-state Little's law and ignores bursts; real pools need extra headroom."
+  - "Fallback quality, such as how stale a cached fallback may be, is a product decision and is not modelled."
+sources:
+  - title: "Release It! Design and Deploy Production-Ready Software, 2nd edition"
+    authors: "M. Nygard"
+    year: 2018
+    url: "https://pragprog.com/titles/mnee2/release-it-second-edition/"
+  - title: "CircuitBreaker"
+    authors: "M. Fowler"
+    year: 2014
+    url: "https://martinfowler.com/bliki/CircuitBreaker.html"
+  - title: "CircuitBreaker (Resilience4j documentation)"
+    authors: "Resilience4j"
+    url: "https://resilience4j.readme.io/docs/circuitbreaker"
+  - title: "Bulkhead pattern (Azure Architecture Center)"
+    authors: "Microsoft"
+    url: "https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="fail-fast" title="Failing fast beats failing slowly">
+
+When a dependency is down, each call to it costs a full timeout before failing. Callers pile up waiting, their threads run out, and the caller fails too, even for requests that never needed the dependency. Michael Nygard's *Release It!* names the remedy after the electrical device: a **circuit breaker** watches calls to a dependency, and when too many fail, it stops sending them for a while and fails them immediately instead.
+
+Failing fast does two jobs at once. It frees the caller's resources and gives the dependency time to recover without a flood of doomed requests.
+
+<Choice
+  id="breaker-purpose"
+  objective="breaker-states"
+  prompt="A recommendations service is timing out on every call after 2 s. A breaker in front of it opens. What changes for the product page that calls it?"
+  options={[
+    { id: "fast-fallback", text: "Calls fail in microseconds, so the page renders without recommendations or with a cached fallback instead of hanging for 2 s", correct: true, feedback: "Right. The page loses one feature but stays fast and available; its threads are no longer held by a dead dependency." },
+    { id: "fixed", text: "The recommendations start working again", feedback: "The breaker does not repair anything. It changes how failure is experienced: fast and contained instead of slow and spreading." },
+    { id: "queue", text: "Calls are queued until the dependency recovers, then sent", feedback: "Queuing would hold resources just like a timeout does, then release a flood on recovery. An open breaker rejects calls." },
+    { id: "retry-more", text: "The client retries more aggressively to get through", feedback: "An open breaker rejects retries too. That is the point: no more load on a failing dependency." }
+  ]}
+/>
+
+</Step>
+
+<Step id="states" title="Closed, open, half-open">
+
+A breaker has three states:
+
+- **Closed**: calls flow normally, and the breaker records successes and failures.
+- **Open**: the failure rate crossed its threshold. Calls fail immediately for a cool-down period.
+- **Half-open**: the cool-down ended. A few trial calls are allowed through. If they succeed, the breaker closes; if any fail, it opens again for another cool-down.
+
+Without the half-open state, a breaker would either never close or close all at once and let full traffic hit a dependency that may still be fragile.
+
+<Ordering
+  id="breaker-cycle"
+  objective="breaker-states"
+  prompt="A dependency fails for a minute, then recovers. Put the breaker's behaviour in order."
+  items={[
+    { id: "closed", text: "Closed: calls pass and failures start to accumulate" },
+    { id: "trip", text: "The failure rate crosses the threshold and the breaker opens" },
+    { id: "open", text: "Open: calls are rejected immediately during the cool-down" },
+    { id: "half", text: "Half-open: a few probe calls are let through" },
+    { id: "close", text: "The probes succeed and the breaker closes again" }
+  ]}
+  explanation="The breaker opens on evidence, waits out a cool-down without sending traffic, then tests recovery with a small number of probes before restoring full traffic."
+/>
+
+</Step>
+
+<Step id="threshold" title="When does it trip?">
+
+Most breakers trip on a **failure rate** over a sliding window, either the last N calls or the last T seconds, rather than on a raw count. Two more settings matter in practice. A **minimum number of calls** stops a breaker from opening because 2 out of 3 calls failed at three in the morning. And slow calls can count as failures: Resilience4j, for example, can open on a rate of calls slower than a threshold, which catches a dependency that is degrading before it fails outright.
+
+<VariantQuestion template="breaker.trip" />
+
+</Step>
+
+<Step id="scope" title="Scope: one breaker for what?">
+
+A breaker's scope decides what one failure takes down. A single breaker for a whole service with twenty hosts opens when one bad host fails a third of calls, cutting off nineteen healthy hosts. Breakers per host, or per endpoint, isolate the failure better but see fewer calls each, so they need a smaller minimum call count and take longer to gather evidence.
+
+<Choice
+  id="breaker-scope"
+  objective="breaker-threshold"
+  prompt="A dependency has ten replicas behind client-side load balancing. One replica starts failing every request, which is 10% of calls overall. Your breaker opens at a 50% failure rate. What is the best setup?"
+  options={[
+    { id: "per-host", text: "A breaker per replica, plus load balancing that routes around open ones", correct: true, feedback: "Right. The bad replica's breaker opens at 100% failures while the nine healthy replicas keep serving." },
+    { id: "global-lower", text: "One breaker for the whole dependency, with the threshold lowered to 5%", feedback: "Now one bad replica cuts off all ten. A global breaker cannot tell a bad host from a bad service." },
+    { id: "global-same", text: "One breaker for the whole dependency at 50%", feedback: "It never opens, since only 10% of calls fail, so the bad replica keeps failing one request in ten." },
+    { id: "none", text: "No breaker; retries will route to a healthy replica", feedback: "Retries help here, but each one costs a failed attempt first. A per-replica breaker removes the bad replica from rotation entirely." }
+  ]}
+/>
+
+</Step>
+
+<Step id="bulkhead" title="Bulkheads: compartments for failure">
+
+A ship's hull is divided into watertight compartments so one breach floods one compartment, not the ship. A **bulkhead** in software gives each dependency its own bounded pool of threads, connections or concurrent calls. When the pool is full, further calls are rejected at once rather than waiting.
+
+Size a bulkhead from the dependency's healthy behaviour. By Little's law, concurrency equals call rate times latency, so a dependency called 500 times per second at 40 ms has about 20 calls in flight. Give it headroom for bursts and some slowdown, but not so much that a hang can absorb every thread.
+
+<VariantQuestion template="bulkhead.size" />
+
+</Step>
+
+<Step id="contain" title="What the bulkhead buys you when things hang">
+
+Now let that dependency hang until the timeout. Without a bulkhead, its calls absorb threads until the shared pool is gone and the whole service stops. With one, at most the bulkhead's slots are stuck, the excess calls fail fast, and every other endpoint keeps its threads. The trade-off: the bulkhead caps the dependency's throughput at slots divided by latency, so when latency rises, admitted throughput falls.
+
+<VariantQuestion template="bulkhead.throughput" />
+
+</Step>
+
+<Step id="combine" title="Breakers, bulkheads, timeouts and retries together">
+
+These mechanisms cover different failure shapes. The timeout bounds a single call, the bulkhead bounds concurrent calls, the breaker stops calls after evidence of failure, and retries recover from transient errors. They interact: retries count as calls against the breaker and the bulkhead, and a breaker should see the final outcome as well as each attempt, or retries will hide failures from it.
+
+<Choice
+  id="which-mechanism"
+  objective="bulkhead-sizing"
+  multiple
+  prompt="A checkout service calls payments, inventory and recommendations from one shared thread pool. Recommendations starts hanging. Which changes keep checkout working? Select all that apply."
+  options={[
+    { id: "bulkhead", text: "Give each dependency its own bounded pool or concurrency limit", correct: true, feedback: "Right. Recommendations can fill only its own slots; payments and inventory keep theirs." },
+    { id: "breaker", text: "Add a breaker on recommendations with a fallback of no recommendations", correct: true, feedback: "Right. Once open, calls fail instantly and the page renders without that panel." },
+    { id: "timeout", text: "Set a short timeout on recommendations, based on its healthy latency", correct: true, feedback: "Right. Each stuck call releases its slot sooner, so fewer slots are held at any moment." },
+    { id: "bigger-pool", text: "Double the shared thread pool", feedback: "A hang absorbs any finite pool; doubling it only doubles how long it takes to run out." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then trip a breaker">
+
+Score at least 80% on fresh variants.
+
+<MasteryCheck templates={["breaker.trip", "bulkhead.size", "bulkhead.throughput"]} count={5} />
+
+In the [sandbox](/sandbox), build client → service → circuit breaker → downstream, and make the downstream return 503. Set the breaker's failure rate, window, minimum requests and cool-down, and watch it open: calls start failing fast and the downstream's load drops. Then give the breaker a **Bulkhead** limit and slow the downstream instead, and compare the rejected calls with the slot ÷ latency estimate from this lesson.
+
+</Step>

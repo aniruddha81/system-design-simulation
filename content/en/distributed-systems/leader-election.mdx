@@ -1,0 +1,140 @@
+{/*
+id: leader-election
+slug: leader-election
+track: distributed-systems
+title: "Leader election, leases and fencing tokens"
+description: "Why a timeout cannot prove a leader is dead, how leases bound authority in time, and why only a fencing token checked by the resource stops a zombie leader."
+objectives:
+  - id: split-brain
+    text: Explain split brain and why only intersecting quorums prevent two leaders in one term
+  - id: lease-safety
+    text: Size a lease's safety margin for clock drift and state what a lease assumes
+  - id: fencing
+    text: Explain how a paused or partitioned holder corrupts data, and how fencing tokens checked by the resource prevent it
+requires: [consensus, clocks]
+activities: [C, Q, R]
+limitations:
+  - "Lease arithmetic covers clock drift only; network delay is assumed to shorten the holder's view, and process pauses are treated separately."
+  - "Fencing is taught for a single storage resource that can compare tokens; resources without conditional writes need other protection."
+  - "The sandbox models failover and fencing as a database setting, not as a separate lock service."
+sources:
+  - title: "Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency"
+    authors: "C. Gray, D. Cheriton"
+    year: 1989
+    url: "https://doi.org/10.1145/74850.74870"
+  - title: "The Chubby lock service for loosely-coupled distributed systems"
+    authors: "M. Burrows"
+    year: 2006
+    url: "https://www.usenix.org/legacy/event/osdi06/tech/burrows.html"
+  - title: "How to do distributed locking"
+    authors: "M. Kleppmann"
+    year: 2016
+    url: "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+  - title: "In Search of an Understandable Consensus Algorithm"
+    authors: "D. Ongaro, J. Ousterhout"
+    year: 2014
+    url: "https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="split-brain" title="Split brain: two leaders at once">
+
+Many systems need exactly one actor: one primary database, one scheduler, one writer per shard. The usual design is "if the leader stops sending heartbeats, elect a new one". The flaw is that silence does not prove death. The old leader may be partitioned, overloaded or paused, and still running. When it comes back, two nodes both believe they lead. That is **split brain**, and it ends with conflicting writes that no one can automatically reconcile.
+
+The first defence is arithmetic. If a leader needs q votes and each node votes once per term, two leaders in one term need 2q votes. Requiring 2q > N makes that impossible, because two quorums must then share a voter. Two-node active/passive pairs that each promote themselves on a missed heartbeat have no such quorum, which is why they split-brain so often.
+
+<VariantQuestion template="election.min-quorum" />
+
+</Step>
+
+<Step id="lease" title="Leases: authority with an expiry date">
+
+A quorum stops two leaders from being *elected* in the same term. It does not stop an old leader from *acting* after a new one is elected, because the old one may not know yet. A **lease** (Gray and Cheriton, 1989) bounds that: authority is granted for a fixed duration, and the holder promises to stop acting before it expires unless it renews. The grantor promises not to grant it to anyone else until it has certainly expired.
+
+A lease is only as safe as its timing assumptions: clocks must drift within a known bound, and the holder must actually check the lease before every action. The holder starts its timer *before* sending the request, so network delay only makes its view more conservative. Drift remains, and must be subtracted.
+
+<VariantQuestion template="lease.drift-margin" />
+
+</Step>
+
+<Step id="pause" title="The pause that breaks every lease">
+
+Kleppmann's 2016 analysis of distributed locks tells the classic story. Client 1 acquires a lease, checks that it is still valid, and starts a write. Then its process stops: a long stop-the-world garbage collection, a virtual machine migration, a page fault on a swapped-out page, a `SIGSTOP`. The lease expires, the lock service grants it to client 2, and client 2 writes. Then client 1 wakes up and finishes its write, with no idea that any time passed.
+
+No amount of checking inside the client fixes this, because the pause can fall between the check and the write. HBase hit exactly this failure mode: a region server paused by GC, lost its ZooKeeper session, and on waking still believed it owned its regions.
+
+<VariantQuestion template="lease.pause-overrun" />
+
+</Step>
+
+<Step id="fencing" title="Fencing tokens: let the resource say no">
+
+The fix moves the check to the place the damage would happen. Every time the lock service grants the lock, it hands out a **fencing token**: a number that increases with every grant. The holder sends the token with every write. The storage service remembers the highest token it has accepted and rejects any write carrying a lower one.
+
+Raft's term number and ZooKeeper's zxid can serve as fencing tokens; Chubby calls them sequencers. In the story above, client 1 holds token 33 and client 2 holds 34. Once storage has accepted 34, client 1's late write with 33 is rejected, however long it slept.
+
+<Choice
+  id="fence-outcome"
+  objective="fencing"
+  prompt="Storage has accepted a write with fencing token 34. Client 1 wakes from a pause and sends a write with token 33. Then client 2 sends a write with token 34. What does storage do?"
+  options={[
+    { id: "reject-accept", text: "Reject token 33 and accept token 34", correct: true, feedback: "Right. 33 is below the highest token seen, so its holder's authority has been superseded. 34 is the current holder, so its writes go through." },
+    { id: "accept-both", text: "Accept both, because both clients once held the lock", feedback: "Accepting 33 is the zombie write fencing exists to stop. Holding the lock in the past grants nothing now." },
+    { id: "reject-both", text: "Reject both, because a conflict was detected", feedback: "Token 34 is the current holder and must be able to write; rejecting it makes the system unavailable for no reason." },
+    { id: "last-wins", text: "Accept whichever arrives last", feedback: "Arrival order is the very thing a pause or network delay scrambles. The token order is what reflects grant order." }
+  ]}
+/>
+
+</Step>
+
+<Step id="where-to-check" title="Where fencing must live">
+
+Fencing only works if the **resource itself** enforces it. A client that checks its own token protects nothing, for the same reason the client's own lease check failed. The resource needs some form of conditional write: a compare-and-set, a version check, a row with a token column and a `WHERE token <= ?` guard.
+
+Some resources cannot check anything, such as a third-party API or a plain file share. There, use operations that are safe to repeat (see [idempotency](/learn/distributed-systems/idempotency)), or a physical form of fencing such as revoking the old node's credentials or cutting its power, which high-availability clusters call STONITH: shoot the other node in the head.
+
+<Choice
+  id="fence-placement"
+  objective="fencing"
+  multiple
+  prompt="Which designs actually prevent a paused former leader from corrupting a table? Select all that apply."
+  options={[
+    { id: "db-check", text: "Each write carries the leader's term, and the database rejects writes whose term is below the highest it has seen", correct: true, feedback: "Right. The resource enforces the order, so a stale leader is stopped however long it slept." },
+    { id: "revoke", text: "Failover revokes the old leader's database credentials before promoting the new leader", correct: true, feedback: "Right. This is a form of fencing: the old leader physically cannot write any more." },
+    { id: "client-check", text: "The leader checks that its lease is valid immediately before each write", feedback: "The pause can fall between the check and the write. A check inside the client is never enough." },
+    { id: "longer-lease", text: "Make the lease longer than any GC pause ever observed", feedback: "Pauses are unbounded in practice, and longer leases mean longer outages when a leader really does die." }
+  ]}
+/>
+
+</Step>
+
+<Step id="leader-reads" title="Leases for reads, and what they assume">
+
+Leases also speed up reads. A Raft leader must normally confirm it is still leader with a round of heartbeats before serving a read, or it might be a stale leader in a minority partition. With a **leader lease**, followers promise not to elect anyone else until the lease expires, so the leader can answer reads locally during the lease. This trades a network round trip for a dependence on bounded clock drift.
+
+<Choice
+  id="lease-read-risk"
+  objective="lease-safety"
+  prompt="A Raft leader serves reads locally under a leader lease. What can make it serve a stale read?"
+  options={[
+    { id: "drift", text: "Its clock runs slow relative to the followers' beyond the assumed drift bound, so it believes the lease is still valid after a new leader was elected", correct: true, feedback: "Right. Lease-based reads are safe only while the drift assumption holds. ReadIndex avoids clocks at the cost of a heartbeat round." },
+    { id: "follower-down", text: "One follower crashes during the lease", feedback: "The remaining majority still honours the lease. One crashed follower cannot elect a new leader." },
+    { id: "heavy-load", text: "The leader receives many reads at once", feedback: "Load affects latency, not correctness; reads under a valid lease see committed state." },
+    { id: "writes", text: "A client writes while the lease is active", feedback: "Writes still go through the log on the same leader, so reads under the lease see them once applied." }
+  ]}
+/>
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then fence a failover">
+
+Score at least 80% on fresh variants: quorum size, lease drift margin and pause overrun.
+
+<MasteryCheck templates={["election.min-quorum", "lease.drift-margin", "lease.pause-overrun"]} count={5} />
+
+Now break it in the [sandbox](/sandbox). Add a database with replicas and turn on **Automatic failover** with **Fence the old leader** switched off. Drive writes and kill the leader node, then let it recover: the run reports a split-brain write when the old leader accepts writes in an overlapping term. Switch fencing on and run the same seed again; the violation disappears.
+
+</Step>

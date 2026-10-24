@@ -1,0 +1,165 @@
+{/*
+id: clocks
+slug: clocks
+track: distributed-systems
+title: "Clocks: physical, Lamport, vector and hybrid"
+description: "Why wall clocks cannot order events across machines, and how Lamport, vector and hybrid logical clocks, and TrueTime's uncertainty intervals, fix it."
+objectives:
+  - id: bound-skew
+    text: Bound the offset between two clocks from drift rate and sync interval, and explain why wall-clock order is unsafe
+  - id: lamport-rules
+    text: Apply the Lamport clock rules and state what a Lamport timestamp does and does not tell you
+  - id: detect-concurrency
+    text: Use vector clocks to tell a happens-before relation from concurrency
+  - id: choose-clock
+    text: Choose between physical, Lamport, vector, hybrid logical and TrueTime-style clocks for a requirement
+requires: [consistency-models]
+activities: [C, Q]
+limitations:
+  - "Drift is modelled as a constant worst-case rate between syncs; real oscillators drift with temperature and age, and synchronisation itself has an error that is not included."
+  - "Clock steps, leap-second smearing and virtual-machine pauses are described but not simulated."
+  - "The commit-wait calculation assumes a constant uncertainty bound; Spanner's bound grows between synchronisations."
+sources:
+  - title: "Time, Clocks, and the Ordering of Events in a Distributed System"
+    authors: "L. Lamport"
+    year: 1978
+    url: "https://doi.org/10.1145/359545.359563"
+  - title: "Logical Physical Clocks"
+    authors: "S. Kulkarni, M. Demirbas, D. Madappa, B. Avva, M. Leone"
+    year: 2014
+    url: "https://doi.org/10.1007/978-3-319-14472-6_2"
+  - title: "Spanner: Google's Globally-Distributed Database"
+    authors: "J. Corbett et al."
+    year: 2012
+    url: "https://www.usenix.org/conference/osdi12/technical-sessions/presentation/corbett"
+  - title: "Dynamo: Amazon's Highly Available Key-value Store"
+    authors: "G. DeCandia et al."
+    year: 2007
+    url: "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+reviewedBy: "T2 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 30
+*/}
+
+<Step id="drift" title="Every clock is wrong, differently">
+
+A server's clock is a quartz oscillator counted by the kernel. Oscillators run slightly fast or slow, specified in **parts per million**: 1 ppm is one microsecond of error per second, or about 86 ms per day. NTP corrects clocks periodically, usually by slewing (running slightly faster or slower) and sometimes by stepping, which can move the clock **backwards**.
+
+Between corrections, two clocks drift apart. If each can drift ρ ppm in either direction, after T seconds they can disagree by 2ρT microseconds, before even counting the error of the synchronisation itself. Measure durations with a monotonic clock, never the wall clock.
+
+<VariantQuestion template="clocks.drift" />
+
+</Step>
+
+<Step id="lww" title="Last-writer-wins silently loses writes">
+
+Many stores resolve conflicting writes with **last-writer-wins** (LWW): keep the value with the larger timestamp. With wall-clock timestamps this discards data whenever clocks disagree by more than the gap between two writes. Node A's clock runs 100 ms fast. A writes "first" at its time 1,100. Node B, whose clock is accurate, reads that value and then writes "later" at its time 1,050. B's write happened after A's, but it carries a smaller timestamp, so LWW keeps "first" and drops B's update, without any error.
+
+<Choice
+  id="lww-loss"
+  objective="bound-skew"
+  prompt="In the example above, what is the root cause of the lost update?"
+  options={[
+    { id: "skew", text: "Wall-clock timestamps from different machines do not respect causality, so a causally later write can carry a smaller timestamp", correct: true, feedback: "Right. Real-time order between machines is unknowable to within the clock offset. Use a clock that captures causality, or keep both versions and merge." },
+    { id: "network", text: "The network delivered B's write too slowly", feedback: "Delivery speed does not matter. LWW compares timestamps, and B's timestamp was smaller even though B wrote later." },
+    { id: "ntp-off", text: "NTP was not running", feedback: "NTP narrows the offset but never removes it. Any write pair closer together than the remaining offset can still be misordered." },
+    { id: "lww-fine", text: "Nothing: LWW kept the most recent value", feedback: "It kept the value with the largest timestamp, which here was the older write. That is the whole problem." }
+  ]}
+/>
+
+</Step>
+
+<Step id="lamport" title="Lamport clocks capture happens-before">
+
+Lamport (1978) replaced physical time with the **happens-before** relation: a happens before b if they are on the same process in that order, if a sends a message that b receives, or by transitivity. Events with neither order are **concurrent**.
+
+A Lamport clock is a counter per process with three rules:
+
+1. Before each local event, increment the counter.
+2. Stamp every message with the counter.
+3. On receive, set the counter to max(local, message stamp) and then increment.
+
+This guarantees that if a happens before b, then L(a) is less than L(b).
+
+<VariantQuestion template="clocks.lamport" />
+
+</Step>
+
+<Step id="lamport-limits" title="What a Lamport timestamp cannot tell you">
+
+The guarantee runs one way only. A smaller Lamport timestamp does not mean the event happened first; two concurrent events can have any timestamps. Ties are broken by process ID to give a **total order** consistent with causality, which is enough for things like Lamport's mutual exclusion algorithm, or ordering a replicated log. It is not enough to detect conflicts.
+
+<Choice
+  id="lamport-implication"
+  objective="lamport-rules"
+  prompt="Event a has Lamport timestamp 7 and event b, on another node, has 12. What can you conclude?"
+  options={[
+    { id: "not-after", text: "b did not happen before a", correct: true, feedback: "Right. If b happened before a, b's timestamp would have to be smaller. Beyond that, a may have happened before b, or they may be concurrent." },
+    { id: "before", text: "a happened before b", feedback: "Not necessarily. Concurrent events can have any timestamps, so 7 versus 12 cannot prove causality." },
+    { id: "concurrent", text: "a and b are concurrent", feedback: "They might be, or a might have happened before b. Lamport clocks cannot distinguish the two cases; vector clocks can." },
+    { id: "real-time", text: "a happened at an earlier wall-clock time than b", feedback: "Lamport clocks carry no physical time at all; a node that is idle keeps a small counter for hours." }
+  ]}
+/>
+
+</Step>
+
+<Step id="vector" title="Vector clocks detect concurrency">
+
+A **vector clock** keeps one counter per process. A process increments its own entry on each event, sends the whole vector, and on receive takes the element-wise maximum and then increments its own entry. Now the comparison is exact: V(a) ≤ V(b) in every entry, and different in at least one, if and only if a happened before b. If each vector is larger in some entry, the events are concurrent.
+
+Dynamo used vector clocks to keep concurrent versions of an object as siblings for the application to merge, instead of silently dropping one. The cost is size: one entry per writer, so systems truncate or use dotted version vectors bounded by replicas rather than clients.
+
+<Choice
+  id="vector-compare"
+  objective="detect-concurrency"
+  prompt="Three nodes A, B and C. Version X has vector [A: 2, B: 1, C: 0] and version Y has [A: 1, B: 2, C: 0]. How are they related?"
+  options={[
+    { id: "concurrent", text: "Concurrent: neither happened before the other, so both must be kept or merged", correct: true, feedback: "Right. X is ahead in A's entry and Y is ahead in B's. Each saw an update the other did not." },
+    { id: "x-first", text: "X happened before Y, because its first entry is larger", feedback: "One larger entry is not enough. For X to precede Y, every entry of X must be less than or equal to Y's." },
+    { id: "y-first", text: "Y happened before X, because it has more updates from B", feedback: "Y is ahead only in B's entry while behind in A's, so neither dominates." },
+    { id: "equal", text: "They are the same version, because the entries sum to the same total", feedback: "Sums say nothing. Compare entry by entry." }
+  ]}
+/>
+
+</Step>
+
+<Step id="hlc" title="Hybrid logical clocks">
+
+Logical clocks capture causality but say nothing about real time, so you cannot ask "what was the state at 10:00?". Physical clocks give real time but break causality. A **hybrid logical clock** (Kulkarni et al., 2014) combines them: the timestamp is a pair (l, c), where l is the largest physical time the node has heard of and c is a small counter for events that share the same l.
+
+On each event or receive, l becomes the maximum of the local physical clock, its previous l, and any incoming l; c increments if l did not change and resets to zero if it did; on a receive that adopts the sender's l, c continues from the sender's counter. The result respects happens-before like a Lamport clock, fits in a 64-bit timestamp, and never strays from physical time by more than the clock offset. CockroachDB uses HLC timestamps for its transactions.
+
+<Choice
+  id="pick-clock"
+  objective="choose-clock"
+  prompt="A geo-distributed database needs timestamps that respect causality, can be compared to approximate wall-clock time for 'read as of 10:00' queries, and fit in a fixed-size field. No special time hardware is available. Which clock fits?"
+  options={[
+    { id: "hlc", text: "A hybrid logical clock", correct: true, feedback: "Right. HLC respects happens-before, stays within the clock offset of physical time, and has a fixed size." },
+    { id: "wall", text: "Each node's NTP-synchronised wall clock", feedback: "Wall-clock order can contradict causality whenever the offset exceeds the gap between related events, as in the LWW example." },
+    { id: "vector", text: "Vector clocks", feedback: "Vectors detect concurrency but grow with the number of writers and carry no physical time, so 'as of 10:00' has no meaning." },
+    { id: "lamport", text: "Plain Lamport clocks", feedback: "Lamport clocks respect causality but drift arbitrarily far from real time on idle nodes." }
+  ]}
+/>
+
+</Step>
+
+<Step id="truetime" title="TrueTime: admit the uncertainty, then wait it out">
+
+Google's Spanner took a different approach: instead of pretending to know the time, its TrueTime API returns an interval, TT.now() = [earliest, latest], guaranteed to contain true time. GPS receivers and atomic clocks in every data centre keep the half-width ε small; the paper reports ε moving between about 1 and 7 ms between synchronisations.
+
+To make commit order match real time across the planet, a transaction picks its commit timestamp s = TT.now().latest and then performs **commit wait**: it does not make its writes visible until TT.now().earliest has passed s. That wait is about 2ε. Spanner pays a few milliseconds per write to get externally consistent transactions, which is why it invests so much in shrinking ε.
+
+<VariantQuestion template="clocks.commit-wait" />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh variants. Convert ppm × seconds to microseconds carefully, and remember that the receive event itself ticks the Lamport clock.
+
+<MasteryCheck templates={["clocks.drift", "clocks.lamport", "clocks.commit-wait"]} count={5} />
+
+Leases and fencing in the [leader election lesson](/learn/distributed-systems/leader-election) depend directly on the drift bounds from this lesson.
+
+</Step>
