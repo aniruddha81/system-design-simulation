@@ -8,7 +8,7 @@ The lead (Claude) plans, verifies and commits. Codex executes the queued work in
    powershell -NoProfile -ExecutionPolicy Bypass -File E:\system-design-simulation\ops\codex-queue\run.ps1
    ```
 
-2. **Lift the gate** if `opsdex-queueHOLD` exists (Claude lifted it on 2026-10-24; it only reappears if Claude adds it again):
+2. **Lift the gate** if `ops/codex-queue/HOLD` exists (Claude lifted it on 2026-10-24; it only reappears if Claude adds it again):
 
    ```powershell
    Remove-Item E:\system-design-simulation\ops\codex-queue\HOLD
