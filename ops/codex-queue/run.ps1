@@ -56,6 +56,7 @@ try {
       $jobs.Remove($name)
     }
 
+    if (Test-Path (Join-Path $root "HOLD")) { Start-Sleep -Seconds 30; continue } # lead is still merging the previous wave
     $queue = @(Get-ChildItem $pending -Filter *.md | Sort-Object Name)
     if ($queue.Count -eq 0 -and $jobs.Count -eq 0) { break }
 

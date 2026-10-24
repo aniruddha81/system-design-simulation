@@ -47,3 +47,4 @@ __pycache__/
 ops/codex-queue/logs/
 ops/codex-queue/running/
 ops/codex-queue/runner.lock
+ops/codex-queue/HOLD
