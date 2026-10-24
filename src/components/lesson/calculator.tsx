@@ -41,7 +41,7 @@ export function HitRateCalculator() {
   const sensitivity = hit < 1 ? (1 - lower) / (1 - hit) - 1 : 0;
 
   return (
-    <div role="group" aria-label="Hit rate calculator" className="panel my-6 grid gap-6 p-5 sm:grid-cols-[1fr_1.1fr] sm:p-6">
+    <div role="group" aria-label="Hit rate calculator" className="my-6 grid gap-6 border-y-2 border-rule bg-surface p-5 sm:grid-cols-[1fr_1.1fr] sm:p-6">
       <div className="grid content-start gap-5">
         <Slider label="Read requests" value={rps} min={1000} max={100000} step={1000} onChange={touch(setRps)} display={formatRps(rps)} />
         <Slider label="Cache hit rate" value={Math.round(hit * 100)} min={0} max={99} step={1} onChange={touch((v: number) => setHit(v / 100))} display={formatPercent(hit, 0)} />

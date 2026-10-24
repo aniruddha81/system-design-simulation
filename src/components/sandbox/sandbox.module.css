@@ -69,3 +69,98 @@
 @keyframes pulse {
   50% { opacity: 0.55; }
 }
+
+/* ---------- P2 board polish ---------- */
+.nodeBody {
+  filter: drop-shadow(0 3px 0 color-mix(in oklab, var(--text) 10%, transparent));
+  transition: filter 160ms ease;
+}
+.node[data-selected] .nodeBody {
+  filter: drop-shadow(0 2px 2px color-mix(in oklab, var(--text) 14%, transparent));
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .node {
+    transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .board :global(.react-flow__node:hover) .node {
+    transform: translateY(-1.5px);
+  }
+  .board :global(.react-flow__node.dragging) .node {
+    transform: scale(1.03) rotate(-0.6deg);
+  }
+  .board :global(.react-flow__node.dragging) .nodeBody {
+    filter: drop-shadow(0 14px 18px color-mix(in oklab, var(--text) 22%, transparent));
+  }
+}
+
+/* Ports: rings that grow on hover; possible targets light up while a connection is being dragged. */
+.board :global(.react-flow__handle) {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  background: var(--surface);
+  border-color: color-mix(in oklab, var(--kind, var(--text-muted)) 80%, var(--text-muted));
+  transition: transform 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+.board :global(.react-flow__handle-left:hover),
+.board :global(.react-flow__handle-right:hover) {
+  transform: translate(var(--hx, 0), -50%) scale(1.35);
+}
+.board :global(.react-flow__handle-left) { --hx: -50%; }
+.board :global(.react-flow__handle-right) { --hx: 50%; }
+.board[data-connecting] :global(.react-flow__handle-left.connectionindicator) {
+  background: color-mix(in oklab, var(--accent) 35%, var(--surface));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 22%, transparent);
+}
+.board[data-connecting] :global(.react-flow__handle-left.connectingto.valid) {
+  background: var(--success);
+  border-color: var(--success);
+  box-shadow: 0 0 0 6px color-mix(in oklab, var(--success) 25%, transparent);
+}
+.board :global(.react-flow__connection-path) {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+
+/* Library drag ghost over the board */
+.ghost {
+  border: 1.5px dashed var(--accent);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border-radius: 12px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pop {
+    animation: pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+  }
+  .drawIn {
+    stroke-dasharray: 1;
+    animation: drawIn 520ms cubic-bezier(0.6, 0, 0.2, 1) both;
+  }
+  .flow {
+    stroke-dasharray: 2 10;
+    opacity: 0.55;
+    animation: flow 900ms linear infinite;
+  }
+  .board[data-connecting] :global(.react-flow__handle-left.connectionindicator) {
+    animation: portPulse 1.1s ease-in-out infinite;
+  }
+  .board :global(.react-flow__connection-path) {
+    animation: flow 700ms linear infinite;
+  }
+}
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.9) translateY(6px); }
+}
+@keyframes drawIn {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes flow {
+  to { stroke-dashoffset: -12; }
+}
+@keyframes portPulse {
+  50% { box-shadow: 0 0 0 7px color-mix(in oklab, var(--accent) 10%, transparent); }
+}

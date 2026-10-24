@@ -72,13 +72,13 @@ export default async function LessonPage({ params }: PageProps<"/learn/[track]/[
       </nav>
 
       <header className="mb-10">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-[2.75rem] sm:leading-[1.1]">{lesson.title}</h1>
-        <p className="mt-4 max-w-[60ch] text-lg leading-relaxed text-muted">{lesson.description}</p>
+        <h1 className="font-display text-4xl tracking-tight sm:text-5xl sm:leading-[1.1]">{lesson.title}</h1>
+        <p className="mt-4 max-w-[60ch] text-lg leading-relaxed text-ink-2">{lesson.description}</p>
         <p className="mt-4 text-sm text-muted">
           About <span className="num text-fg">{lesson.estimatedMinutes}</span> minutes, {lesson.stepIds.length} steps
         </p>
-        <details className="panel mt-6 p-4 [&[open]>summary]:mb-3" open>
-          <summary className="cursor-pointer font-medium">By the end you can</summary>
+        <details className="mt-6 border-y border-rule py-5 [&[open]>summary]:mb-3" open>
+          <summary className="min-h-6 cursor-pointer font-medium">By the end you can</summary>
           <ul className="grid gap-2 text-[0.9375rem] text-muted">
             {lesson.objectives.map((o) => (
               <li key={o.id} className="flex gap-2.5">
@@ -98,7 +98,7 @@ export default async function LessonPage({ params }: PageProps<"/learn/[track]/[
 
       <footer className="mt-16 grid gap-10 border-t border-border pt-10 text-[0.9375rem]">
         <section aria-labelledby="limitations">
-          <h2 id="limitations" className="mb-3 text-lg font-semibold">
+          <h2 id="limitations" className="mb-3 font-display text-2xl">
             What this lesson simplifies
           </h2>
           <ul className="grid gap-2 text-muted">
@@ -113,7 +113,7 @@ export default async function LessonPage({ params }: PageProps<"/learn/[track]/[
           </ul>
         </section>
         <section aria-labelledby="sources">
-          <h2 id="sources" className="mb-3 text-lg font-semibold">
+          <h2 id="sources" className="mb-3 font-display text-2xl">
             Sources
           </h2>
           <ol className="grid list-decimal gap-2 pl-5 text-muted marker:text-muted">

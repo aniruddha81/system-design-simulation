@@ -4,11 +4,22 @@ import type { ComponentProps, ComponentType } from "react";
 import { HitRateCalculator } from "@/components/lesson/calculator";
 import { Choice, MasteryCheck, Ordering, VariantQuestion } from "@/components/lesson/questions";
 import { Step } from "@/components/lesson/stepper";
+import { HashRingPlayer, IsolationPlayer, ModelQuestion } from "@/components/models";
 import { widgetSchemas, type WidgetName } from "@/lib/content/schema";
 
 // Widget registry → implementations. Props are validated against the registry's zod
 // schema while lessons prerender, so invalid props fail the build.
-const implementations = { Step, Choice, Ordering, VariantQuestion, HitRateCalculator, MasteryCheck } satisfies Record<WidgetName, unknown>;
+const implementations = {
+  Step,
+  Choice,
+  Ordering,
+  VariantQuestion,
+  HitRateCalculator,
+  MasteryCheck,
+  HashRingPlayer,
+  IsolationPlayer,
+  ModelQuestion,
+} satisfies Record<WidgetName, unknown>;
 
 const widgets = Object.fromEntries(
   (Object.keys(implementations) as WidgetName[]).map((name) => {

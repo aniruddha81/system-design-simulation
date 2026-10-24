@@ -23,7 +23,7 @@ export default function ProgressPage() {
   }));
   return (
     <div className="mx-auto max-w-4xl px-4 pb-20 pt-12">
-      <h1 className="text-4xl font-semibold tracking-tight">Progress</h1>
+      <h1 className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">Progress</h1>
       <p className="mt-3 text-muted">Stored in this browser only. Export a backup from Settings to move it.</p>
       <ProgressView lessons={lessons} challenges={challenges.map((c) => ({ id: c.id, title: c.title }))} />
     </div>

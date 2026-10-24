@@ -1,68 +1,156 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------
-   Tokens. Dark-first; light via [data-theme="light"].
-   Contract (W3 depends on these names): --bg --surface --surface-2 --border
+   Identity: the engineer's field notebook. See docs/DESIGN.md.
+   Paper (light) is the default; Slate (dark chalkboard) via [data-theme="dark"].
+   Contract (other streams depend on these names): --bg --surface --surface-2 --border
    --text --text-muted --accent --accent-2 --danger --warning --success
-   --radius-sm --radius --radius-lg --font-sans --font-mono
+   --radius-sm --radius --radius-lg --font-sans --font-mono, plus --highlight --ink-2
+   --font-display --paper-grid --kind-* --heat-0..4.
+   Every value was contrast-checked (WCAG 2.2 AA) against --bg, --surface and --surface-2.
    ------------------------------------------------------------------ */
-:root {
-  color-scheme: dark;
-  --bg: #0b1120;
-  --surface: #111a2e;
-  --surface-2: #17223b;
-  --border: #25324f;
-  --text: #e6ebf5;
-  --text-muted: #97a3bd;
-  --accent: #8b9bff;
-  --accent-2: #3fd0c2;
-  --accent-ink: #0b1120;
-  --danger: #ff7a7a;
-  --warning: #f2b84b;
-  --success: #4fdd9a;
-
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 16px;
-
-  /* Elevation: one light source above; deeper = larger, softer, bluer. */
-  --elev-1: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 1px 2px rgb(2 6 23 / 0.5);
-  --elev-2: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 8px 24px -8px rgb(2 6 23 / 0.7);
-  --elev-3: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 24px 48px -16px rgb(2 6 23 / 0.8);
-
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
-
-  /* The one brand gradient: a slow-turning signal sweep. */
-  --brand: linear-gradient(var(--brand-angle), #8b9bff 0%, #3fd0c2 45%, #f2b84b 100%);
-  --grid-line: rgb(139 155 255 / 0.07);
-}
-
+:root,
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f6fb;
-  --surface: #ffffff;
-  --surface-2: #eaeef7;
-  --border: #d3dae9;
-  --text: #0d1526;
-  --text-muted: #4a5672;
-  --accent: #4152d9;
-  --accent-2: #0b8278;
-  --accent-ink: #ffffff;
-  --danger: #c93636;
-  --warning: #9a5b00;
-  --success: #147a48;
-  --elev-1: 0 1px 2px rgb(13 21 38 / 0.08);
-  --elev-2: 0 8px 24px -10px rgb(13 21 38 / 0.18);
-  --elev-3: 0 24px 48px -18px rgb(13 21 38 / 0.25);
-  --brand: linear-gradient(var(--brand-angle), #4152d9 0%, #0b8278 50%, #b86e00 100%);
-  --grid-line: rgb(65 82 217 / 0.07);
+  /* Paper */
+  --bg: #f2efe6;
+  --surface: #faf8f2;
+  --surface-2: #eae5da;
+  --border: #c4bdae; /* decorative edges */
+  --rule: #777568; /* control boundaries and ruled dividers, 4:1 on paper */
+  --text: #19201c; /* graphite ink, 14.4:1 */
+  --ink-2: #383f3b; /* secondary ink: sub-heads, diagram lines, 9.4:1 */
+  --text-muted: #5a5c53; /* pencil notes, 5.9:1 */
+  --accent: #c12b09; /* red-pencil vermilion, 4.6:1 even on surface-2 */
+  --accent-hover: #a81c03;
+  --accent-ink: #fcfaf4; /* text on vermilion, 5.6:1 */
+  --accent-2: #156864; /* teal ink, 5.7:1 */
+  --highlight: #f9d047; /* sodium marker; ink on it 11:1 */
+  --highlight-mark: #f9d047; /* the marker band behind text */
+  --focus: var(--accent-2);
+  --danger: #a72530; /* carmine, 6.2:1 */
+  --warning: #8d5901; /* ochre, 5.1:1 */
+  --success: #446a2c; /* moss, 5.5:1 */
+
+  --grid-ink: rgb(70 150 160 / 0.13);
+  --grid-ink-major: rgb(70 150 160 / 0.22);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .32 0 0 0 0 .26 0 0 0 0 .16 .22 0 0 0 -.07'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  --elev-1: 0 1px 0 rgb(60 50 30 / 0.05), 0 1px 3px rgb(60 50 30 / 0.07);
+  --elev-2: 0 1px 0 rgb(60 50 30 / 0.05), 0 6px 18px -8px rgb(60 50 30 / 0.22);
+  --elev-3: 0 2px 0 rgb(60 50 30 / 0.04), 0 22px 44px -18px rgb(60 50 30 / 0.32);
+
+  /* Coloured pencils, one per simulator component kind. Two lightness tiers interleave
+     so neighbours in hue differ in value; every pencil is >= 3.4:1 on paper.
+     Colour is never the only cue: the board also draws a shape and a label per kind. */
+  --kind-client: #4c5058;
+  --kind-loadBalancer: #005e5c;
+  --kind-service: #3b904d;
+  --kind-cache: #9c7600;
+  --kind-database: #0d567b;
+  --kind-rateLimiter: #c15647;
+  --kind-dns: #3984b0;
+  --kind-cdn: #008e8e;
+  --kind-apiGateway: #80432b;
+  --kind-kvStore: #1c5f31;
+  --kind-queue: #b76219;
+  --kind-worker: #5b5100;
+  --kind-objectStore: #6b462a;
+  --kind-searchIndex: #866200;
+  --kind-dedupStore: #675044;
+  --kind-autoscaler: #6f871d;
+  --kind-circuitBreaker: #901e1c;
+
+  /* Utilisation, cool to hot: verdigris, moss, sodium ochre, burnt orange, vermilion. >= 3.7:1. */
+  --heat-0: #3b8185;
+  --heat-1: #4c8141;
+  --heat-2: #9d7200;
+  --heat-3: #b64e00;
+  --heat-4: #b71a18;
 }
 
-@property --brand-angle {
-  syntax: "<angle>";
-  inherits: true;
-  initial-value: 115deg;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* Slate: a green-black chalkboard */
+  --bg: #111916;
+  --surface: #19231e;
+  --surface-2: #232e29;
+  --border: #3a4741;
+  --rule: #6a7871;
+  --text: #eceae1; /* chalk, 14.8:1 */
+  --ink-2: #d3d1c8;
+  --text-muted: #a9aca3; /* 7.8:1 */
+  --accent: #f8875a; /* chalk vermilion, 7.3:1 */
+  --accent-hover: #ffa275;
+  --accent-ink: #111916;
+  --accent-2: #7dd9ba; /* mint chalk */
+  --highlight: #f4cd4b;
+  --highlight-mark: color-mix(in oklab, #f4cd4b 38%, #111916); /* chalk text on it ~6:1 */
+  --danger: #f47a81;
+  --warning: #e9b860;
+  --success: #90d281;
+
+  --grid-ink: rgb(220 235 225 / 0.045);
+  --grid-ink-major: rgb(220 235 225 / 0.08);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .9 0 0 0 0 .93 0 0 0 0 .9 .14 0 0 0 -.05'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  --elev-1: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 1px 2px rgb(0 0 0 / 0.4);
+  --elev-2: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 8px 22px -10px rgb(0 0 0 / 0.6);
+  --elev-3: 0 1px 0 rgb(255 255 255 / 0.05) inset, 0 24px 48px -18px rgb(0 0 0 / 0.75);
+
+  /* Chalk pencils: same hues, lifted. >= 6.4:1 on slate. */
+  --kind-client: #a3a6ad;
+  --kind-loadBalancer: #6aaca9;
+  --kind-service: #a5e8ae;
+  --kind-cache: #f1d182;
+  --kind-database: #73a5c6;
+  --kind-rateLimiter: #ffb8a8;
+  --kind-dns: #a3ddff;
+  --kind-cdn: #93e5e4;
+  --kind-apiGateway: #d2a38a;
+  --kind-kvStore: #7aad84;
+  --kind-queue: #ffc18f;
+  --kind-worker: #c2b26b;
+  --kind-objectStore: #b8977f;
+  --kind-searchIndex: #dec37b;
+  --kind-dedupStore: #b9a58d;
+  --kind-autoscaler: #c9e092;
+  --kind-circuitBreaker: #df8075;
+
+  --heat-0: #7ab7ba;
+  --heat-1: #9cce91;
+  --heat-2: #f1c86f;
+  --heat-3: #ff9b5a;
+  --heat-4: #f66d60;
+}
+
+:root {
+  --radius-sm: 2px;
+  --radius: 4px;
+  --radius-lg: 6px;
+
+  --font-sans: var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Legacy consumers retain their token names, with the notebook's flat palette. */
+  --brand: var(--accent);
+  --brand-angle: 115deg;
+  --grid-line: var(--grid-ink);
+  --paper-grid: var(--grid-ink);
+
+  /* Engineering pad: a 24px minor grid with a major line every fifth square. */
+  --paper-grid-image:
+    linear-gradient(var(--grid-ink-major) 1px, transparent 1px), linear-gradient(90deg, var(--grid-ink-major) 1px, transparent 1px),
+    linear-gradient(var(--grid-ink) 1px, transparent 1px), linear-gradient(90deg, var(--grid-ink) 1px, transparent 1px);
+  --paper-grid-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Registers the font-display utility; the value above (unlayered :root) wins. */
+@theme {
+  --font-display: ui-serif, Georgia, serif;
 }
 
 @theme inline {
@@ -70,12 +158,15 @@
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-border: var(--border);
+  --color-rule: var(--rule);
   --color-fg: var(--text);
   --color-text: var(--text);
+  --color-ink-2: var(--ink-2);
   --color-muted: var(--text-muted);
   --color-accent: var(--accent);
   --color-accent-2: var(--accent-2);
   --color-accent-ink: var(--accent-ink);
+  --color-highlight: var(--highlight);
   --color-danger: var(--danger);
   --color-warning: var(--warning);
   --color-success: var(--success);
@@ -90,21 +181,26 @@
 
 @layer base {
   html {
-    background: var(--bg);
+    background: var(--grain), var(--bg);
     color: var(--text);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    caret-color: var(--accent);
+    scrollbar-color: var(--rule) transparent;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
   }
   body {
     min-height: 100dvh;
-    font-feature-settings: "ss01", "cv11";
+    font-feature-settings: "kern";
   }
   ::selection {
-    background: color-mix(in oklab, var(--accent) 35%, transparent);
+    background: var(--highlight-mark);
+    color: var(--text);
   }
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
     border-radius: var(--radius-sm);
   }
@@ -112,7 +208,6 @@
   h2,
   h3 {
     text-wrap: balance;
-    letter-spacing: -0.02em;
   }
   p {
     text-wrap: pretty;
@@ -121,6 +216,18 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.01em;
+  }
+  /* Display serif: Fraunces at large optical size, slightly soft. */
+  .font-display {
+    font-optical-sizing: auto;
+    font-variation-settings: "SOFT" 30, "WONK" 0;
+    letter-spacing: -0.015em;
+  }
+  .font-display em,
+  em.font-display,
+  .flourish {
+    font-style: italic;
+    font-variation-settings: "SOFT" 100, "WONK" 1;
   }
 }
 
@@ -132,19 +239,21 @@
     gap: 0.5rem;
     min-height: 2.5rem;
     padding: 0 1rem;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--rule);
+    background: var(--surface);
     color: var(--text);
     font-weight: 500;
     font-size: 0.9375rem;
     transition:
       background-color 150ms,
       border-color 150ms,
-      transform 150ms;
+      color 150ms,
+      transform 150ms var(--ease-out);
   }
   .btn:hover {
-    border-color: color-mix(in oklab, var(--accent) 50%, var(--border));
+    background: color-mix(in oklab, var(--highlight-mark) 40%, var(--surface));
+    border-color: var(--text);
   }
   .btn:active {
     transform: translateY(1px);
@@ -152,14 +261,25 @@
   .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    background: var(--surface);
+    border-color: var(--rule);
+  }
+  .btn[aria-pressed="true"] {
+    background: var(--highlight-mark);
+    border-color: var(--text);
   }
   .btn-primary {
     background: var(--accent);
-    border-color: transparent;
+    border-color: var(--accent);
     color: var(--accent-ink);
   }
   .btn-primary:hover {
-    background: color-mix(in oklab, var(--accent) 88%, white);
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+  .btn-primary:disabled {
+    background: var(--accent);
+    border-color: var(--accent);
   }
   .btn-ghost {
     background: transparent;
@@ -167,8 +287,14 @@
   }
   .btn-ghost:hover {
     background: var(--surface-2);
+    border-color: transparent;
+  }
+  .btn-ghost:disabled {
+    background: transparent;
+    border-color: transparent;
   }
 
+  /* A sheet laid on the desk. */
   .panel {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -179,16 +305,16 @@
   .field {
     min-height: 2.5rem;
     padding: 0 0.75rem;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--bg);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--rule);
+    background: var(--surface);
     color: var(--text);
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
   .field:focus-visible {
     outline-offset: 0;
-    border-color: var(--accent);
+    border-color: var(--focus);
   }
 
   input[type="range"] {
@@ -196,23 +322,154 @@
     min-height: 24px;
   }
 
-  .brand-text {
-    background: var(--brand);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    animation: brand-turn 14s linear infinite;
+  /* ---- The details vocabulary (docs/DESIGN.md) ---- */
+
+  /* Engineering-pad grid. */
+  .paper-grid {
+    background-image: var(--paper-grid-image);
+    background-size: var(--paper-grid-size);
+    background-position: -1px -1px;
   }
-  .brand-rule {
-    height: 2px;
-    background: var(--brand);
-    animation: brand-turn 14s linear infinite;
+
+  /* Highlighter swipe behind the lower part of a word. */
+  .marker {
+    position: relative;
+    isolation: isolate;
+    white-space: nowrap;
+    box-decoration-break: clone;
   }
-  .blueprint {
-    background-image:
-      linear-gradient(var(--grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-    background-size: 32px 32px;
+  .marker::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0.42em -0.12em 0.04em -0.16em;
+    background: var(--highlight-mark);
+    border-radius: 0.4em 0.18em 0.5em 0.22em / 0.3em 0.5em 0.25em 0.45em;
+    transform: rotate(-0.8deg) skewX(-8deg);
+    transform-origin: left center;
+  }
+  .marker-draw::before {
+    animation: marker-in 700ms 450ms var(--ease-out) both;
+  }
+  .prose-lesson strong.marker,
+  .marker-soft {
+    white-space: normal;
+  }
+
+  /* Manual-style section number: §2.1 */
+  .sec {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 0.72em;
+    letter-spacing: 0;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    vertical-align: 0.18em;
+    margin-right: 0.5em;
+    white-space: nowrap;
+  }
+
+  /* Figure caption: "Fig. 3 — cache-aside read path" */
+  .figcap {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    color: var(--ink-2);
+    font-variation-settings: "SOFT" 100;
+  }
+  .figcap > b:first-child {
+    font-family: var(--font-mono);
+    font-style: normal;
+    font-weight: 500;
+    font-size: 0.78rem;
+    color: var(--accent);
+    margin-right: 0.4em;
+  }
+
+  /* Margin note: a second pen in the margin. */
+  .margin-note {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-variation-settings: "SOFT" 100, "WONK" 1;
+    font-size: 1rem;
+    line-height: 1.35;
+    color: var(--accent-2);
+  }
+
+  /* Running-head rule: heavy line over a hairline. */
+  .rule-manual {
+    height: 5px;
+    border-top: 2px solid var(--text);
+    border-bottom: 1px solid var(--text);
+  }
+  .rule-pencil {
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Lined notebook paper behind a list. */
+  .ruled {
+    background-image: linear-gradient(transparent calc(100% - 1px), var(--border) calc(100% - 1px));
+    background-size: 100% 2rem;
+    line-height: 2rem;
+  }
+
+  /* Contents-page leader dots between a title and its page. */
+  .leader {
+    flex: 1 1 2rem;
+    min-width: 1.5rem;
+    align-self: end;
+    margin: 0 0.5rem 0.4em;
+    border-bottom: 2px dotted var(--rule);
+    opacity: 0.7;
+  }
+
+  /* Inspection stamp: double ring, worn ink. Colour comes from `color` (text-success etc.). */
+  .stamp {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    padding: 0.28em 0.6em 0.22em;
+    border: 2px solid currentColor;
+    outline: 1px solid currentColor;
+    outline-offset: 2px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transform: rotate(-3deg);
+    mask-image: var(--grain-mask);
+    -webkit-mask-image: var(--grain-mask);
+    mask-size: 140px;
+  }
+  .stamp-sm {
+    font-size: 0.66rem;
+    outline: none;
+    border-width: 1.5px;
+    transform: rotate(-2deg);
+  }
+  .stamp-in {
+    animation: stamp-in 380ms var(--ease-out) both;
+  }
+
+  /* Hand-drawn strokes that draw themselves on (paths need pathLength="1"). */
+  .draw-on {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw 1.4s var(--ease-out) both;
+  }
+
+  /* Only rendered when motion is allowed (system, Full). */
+  .motion-only {
+    animation: travel var(--dur, 2s) linear var(--delay, 0s) infinite both;
+  }
+  [data-paused="true"] .motion-only {
+    animation-play-state: paused;
   }
 
   /* Lesson prose rendered from MDX. */
@@ -227,35 +484,94 @@
   .prose-lesson strong {
     font-weight: 600;
     color: var(--text);
+    background: linear-gradient(transparent 58%, var(--highlight-mark) 58%, var(--highlight-mark) 92%, transparent 92%);
+    padding-inline: 0.08em;
+    box-decoration-break: clone;
   }
   .prose-lesson a {
     color: var(--accent);
     text-decoration: underline;
+    text-decoration-thickness: 1px;
     text-underline-offset: 3px;
   }
+  .prose-lesson a:hover {
+    text-decoration-thickness: 2px;
+  }
+  .prose-lesson h3 {
+    font-family: var(--font-display);
+    font-size: 1.375rem;
+    line-height: 1.25;
+    margin-top: 2rem;
+  }
   .prose-lesson > ul {
-    list-style: disc;
+    list-style: none;
     padding-left: 1.25rem;
+  }
+  .prose-lesson > ul > li {
+    position: relative;
+  }
+  .prose-lesson > ul > li::before {
+    content: "–";
+    position: absolute;
+    left: -1.1rem;
+    color: var(--accent);
+    font-weight: 600;
   }
   .prose-lesson > ol {
     list-style: decimal;
-    padding-left: 1.25rem;
+    padding-left: 1.5rem;
+  }
+  .prose-lesson > ol > li::marker {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    font-size: 0.9em;
+  }
+  .prose-lesson blockquote {
+    border-left: 2px solid var(--accent-2);
+    padding-left: 1rem;
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--ink-2);
   }
   .prose-lesson code {
     font-family: var(--font-mono);
-    font-size: 0.9em;
+    font-size: 0.88em;
     padding: 0.1em 0.35em;
     border-radius: var(--radius-sm);
     background: var(--surface-2);
+    border: 1px solid var(--border);
   }
 }
 
-@keyframes brand-turn {
+:root {
+  /* A worn-ink mask for stamps (alpha noise; black = keep). */
+  --grain-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.6 2.35'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes draw {
   to {
-    --brand-angle: 475deg;
+    stroke-dashoffset: 0;
   }
 }
-
+@keyframes marker-in {
+  from {
+    transform: rotate(-0.8deg) skewX(-8deg) scaleX(0);
+  }
+}
+@keyframes stamp-in {
+  from {
+    opacity: 0;
+    transform: rotate(-9deg) scale(1.35);
+  }
+}
+@keyframes travel {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
 @keyframes flow {
   to {
     stroke-dashoffset: -24;
@@ -269,7 +585,12 @@
   :root:not([data-motion="full"]) *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  :root:not([data-motion="full"]) .motion-only,
+  :root:not([data-motion="full"]) .motion-control {
+    display: none;
   }
 }
 :root[data-motion="reduced"] *,
@@ -277,6 +598,7 @@
 :root[data-motion="reduced"] *::after {
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
 :root[data-motion="off"] *,
@@ -285,6 +607,16 @@
   animation: none !important;
   transition: none !important;
   scroll-behavior: auto !important;
+}
+:root[data-motion="reduced"] .motion-only,
+:root[data-motion="off"] .motion-only,
+:root[data-motion="reduced"] .motion-control,
+:root[data-motion="off"] .motion-control {
+  display: none;
+}
+/* With animation off, drawn-on strokes must still be visible. */
+:root[data-motion="off"] .draw-on {
+  stroke-dashoffset: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"])::view-transition-group(*) {

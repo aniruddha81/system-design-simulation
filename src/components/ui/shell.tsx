@@ -14,16 +14,17 @@ type Key = "theme" | "motion";
 const memory: Partial<Record<Key, string>> = {};
 function read(key: Key): string {
   try {
-    return localStorage.getItem(key) ?? memory[key] ?? "system";
+    return localStorage.getItem(key) ?? memory[key] ?? (key === "theme" ? "light" : "system");
   } catch {
-    return memory[key] ?? "system"; // storage blocked
+    return memory[key] ?? (key === "theme" ? "light" : "system"); // storage blocked
   }
 }
 
 function applyPrefs() {
   const d = document.documentElement;
   const t = read("theme");
-  d.setAttribute("data-theme", t === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : t);
+  // Paper is the default; an explicit System preference follows the OS.
+  d.setAttribute("data-theme", t === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : t);
   const m = read("motion");
   if (m === "system") d.removeAttribute("data-motion");
   else d.setAttribute("data-motion", m);
@@ -35,7 +36,7 @@ function subscribe(cb: () => void) {
   return () => mo.disconnect();
 }
 
-/** The stored preference ("system" when unset); null during server render. */
+/** The stored preference (Paper for theme, System for motion when unset); null during server render. */
 export function usePref<K extends Key>(key: K): (K extends "theme" ? Theme : Motion) | null {
   return useSyncExternalStore(subscribe, () => read(key) as K extends "theme" ? Theme : Motion, () => null);
 }
@@ -81,16 +82,17 @@ const NAV = [
 
 /** Static list (Suspense fallback while the pathname is unknown during prerender). */
 export function NavList({ pathname = "" }: { pathname?: string }) {
+  // Notebook divider tabs: the current tab is cut from the page itself and joins it.
   return (
-    <ul className="flex items-center gap-1 overflow-x-auto text-sm [scrollbar-width:none]">
+    <ul className="flex flex-wrap items-end gap-0.5 text-[0.9375rem] scrollbar-none">
       {NAV.map(({ href, label }) => {
         const active = pathname === href || pathname.startsWith(`${href}/`);
         return (
-          <li key={href}>
+          <li key={href} className="flex">
             <Link
               href={href}
               aria-current={active ? "page" : undefined}
-              className="relative flex min-h-9 items-center whitespace-nowrap rounded-md px-3 text-muted transition-colors hover:text-fg aria-[current=page]:text-fg aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-0.5 aria-[current=page]:after:rounded-full aria-[current=page]:after:bg-accent"
+              className="relative -mb-px flex min-h-10 items-center whitespace-nowrap rounded-t-md border border-b-0 border-transparent px-3.5 pt-0.5 text-ink-2 transition-colors hover:bg-[color-mix(in_oklab,var(--highlight-mark)_45%,transparent)] hover:text-fg aria-[current=page]:border-rule aria-[current=page]:bg-bg aria-[current=page]:font-medium aria-[current=page]:text-fg aria-[current=page]:before:absolute aria-[current=page]:before:-inset-x-px aria-[current=page]:before:-top-px aria-[current=page]:before:h-0.75 aria-[current=page]:before:rounded-t-md aria-[current=page]:before:bg-accent aria-[current=page]:hover:bg-bg"
             >
               {label}
             </Link>
@@ -119,27 +121,32 @@ export function ThemeToggle() {
   const resolvedLight = useSyncExternalStore(
     subscribe,
     () => document.documentElement.dataset.theme === "light",
-    () => false,
+    () => true,
   );
   const next = resolvedLight ? "dark" : "light";
+  const nextName = THEME_NAME[next];
+  // A two-position slide switch: Paper | Slate. The knob sits under the current theme.
   return (
     <button
       type="button"
-      className="btn btn-ghost size-9 min-h-9 p-0"
+      className="group relative grid h-8 shrink-0 grid-cols-2 items-center rounded-[var(--radius)] border border-rule bg-surface p-0.5 text-[0.8125rem] font-medium"
       onClick={() => setPref("theme", next)}
-      aria-label={`Switch to ${next} theme`}
-      title={theme === "system" ? `Following system theme. Switch to ${next}` : `Switch to ${next} theme`}
+      aria-label={`Switch to ${nextName} theme`}
+      title={theme === "system" ? `Following your system theme. Switch to ${nextName}` : `Switch to ${nextName} theme`}
     >
-      <svg aria-hidden viewBox="0 0 24 24" className="size-[18px]" fill="none" stroke="currentColor" strokeWidth="1.75">
-        {resolvedLight ? (
-          <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" strokeLinejoin="round" />
-        ) : (
-          <>
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" strokeLinecap="round" />
-          </>
-        )}
-      </svg>
+      <span
+        aria-hidden
+        className={`absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[var(--radius-sm)] bg-fg transition-transform duration-300 ease-[var(--ease-out)] ${resolvedLight ? "" : "translate-x-full"}`}
+      />
+      <span aria-hidden className={`relative px-2.5 transition-colors ${resolvedLight ? "text-bg" : "text-muted group-hover:text-fg"}`}>
+        Paper
+      </span>
+      <span aria-hidden className={`relative px-2.5 transition-colors ${resolvedLight ? "text-muted group-hover:text-fg" : "text-bg"}`}>
+        Slate
+      </span>
     </button>
   );
 }
+
+/** Display names for the stored theme values (kept as light/dark for saved preferences). */
+export const THEME_NAME = { light: "Paper", dark: "Slate" } as const;

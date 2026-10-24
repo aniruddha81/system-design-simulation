@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cacheAsideDesign, noCacheDesign } from "@/engine/fixtures";
 import type { Design } from "@/engine/types";
-import { newId, openStore, type DesignRecord } from "@/lib/persistence";
+import { importDesign, newId, openStore, type DesignRecord } from "@/lib/persistence";
 
 const TEMPLATES: { id: string; title: string; blurb: string; make: () => Design }[] = [
   {
@@ -72,6 +72,25 @@ export function TemplatePicker() {
             </li>
           ))}
         </ul>
+        <label className="mt-3 inline-flex h-9 cursor-pointer items-center rounded-(--radius-sm) border border-(--border) px-3 text-sm text-(--text) hover:bg-(--surface-2) focus-within:outline-2 focus-within:outline-(--accent)">
+          Import a design file (.sds.json)
+          <input
+            type="file"
+            accept=".json,.sds.json,application/json"
+            className="sr-only"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (!f) return;
+              setError(null);
+              try {
+                router.push(`/sandbox/${(await importDesign(f)).id}`);
+              } catch (err) {
+                setError(`Couldn't import that file: ${err instanceof Error ? err.message : err}`);
+              }
+            }}
+          />
+        </label>
         {error && <p role="alert" className="mt-3 text-sm text-(--danger)">✕ {error}</p>}
       </section>
       <section aria-labelledby="drafts-h">

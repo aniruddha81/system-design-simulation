@@ -17,9 +17,9 @@ export default function LearnPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 pb-20 pt-12">
-      <header className="mb-12 max-w-2xl">
-        <h1 className="text-4xl font-semibold tracking-tight">Curriculum</h1>
-        <p className="mt-4 text-lg leading-relaxed text-muted">
+      <header className="mb-12 max-w-2xl border-b-2 border-fg pb-8">
+        <h1 className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">Curriculum</h1>
+        <p className="mt-4 text-lg leading-relaxed text-ink-2">
           Lessons are ordered by what they build on. Nothing is locked: if you skip ahead, the lesson tells you what you may be missing.
         </p>
         <p className="mt-3 text-sm text-muted">
@@ -27,7 +27,7 @@ export default function LearnPage() {
         </p>
       </header>
 
-      <ol className="grid gap-12">
+      <ol className="grid gap-14">
         {TRACKS.map((track) => {
           const inTrack = lessons
             .filter((l) => l.track === track.id)
@@ -35,21 +35,21 @@ export default function LearnPage() {
           return (
             <li key={track.id} aria-labelledby={`track-${track.id}`} className="grid gap-4 md:grid-cols-[12rem_1fr] md:gap-8">
               <div>
-                <p className="num text-sm text-muted">Track {track.n}</p>
-                <h2 id={`track-${track.id}`} className="text-xl font-semibold tracking-tight">
+                <p className="mb-2 font-mono text-sm text-accent">Track {track.n}</p>
+                <h2 id={`track-${track.id}`} className="font-display text-2xl leading-tight tracking-tight">
                   {track.title}
                 </h2>
               </div>
-              <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <ul className="grid gap-x-6 sm:grid-cols-2">
                 {inTrack.map((l) => {
                   const body = (
                     <>
                       <div className="flex items-start justify-between gap-3">
                         <h3 className="font-medium leading-snug">{l.title}</h3>
                         {l.status === "live" ? (
-                          <span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">Live</span>
+                          <span className="shrink-0 text-xs font-medium text-accent-2">Live</span>
                         ) : (
-                          <span className="shrink-0 rounded-full border border-dashed border-border px-2 py-0.5 text-xs text-muted">Planned</span>
+                          <span className="shrink-0 text-xs text-muted">Planned</span>
                         )}
                       </div>
                       {l.requires.length > 0 && (
@@ -70,12 +70,12 @@ export default function LearnPage() {
                       {l.status === "live" ? (
                         <Link
                           href={`/learn/${l.track}/${l.slug}`}
-                          className="panel block h-full p-4 shadow-e2 transition-colors hover:border-accent"
+                          className="block h-full border-t border-rule py-5 transition-colors hover:bg-surface"
                         >
                           {body}
                         </Link>
                       ) : (
-                        <div className="h-full rounded-[var(--radius-lg)] border border-dashed border-border p-4 opacity-75">{body}</div>
+                        <div className="h-full border-t border-border py-5">{body}</div>
                       )}
                     </li>
                   );

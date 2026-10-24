@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Design, NodeStats, RunMetrics, SeriesPoint } from "@/engine/types";
+import type { Design, InvariantKind, NodeStats, RunMetrics, SeriesPoint, Violation } from "@/engine/types";
 import { openStore, type RunRecord } from "@/lib/persistence";
 import { useRun } from "@/lib/run-manager";
 import { elementName } from "./design-ops";
@@ -49,7 +49,7 @@ function LineChart({ title, points, series, format }: {
         {series.length > 1 && series.map((s) => (
           <span key={s.name} className="flex items-center gap-1 text-(--text-muted)"><span className="h-0.5 w-3 rounded" style={{ background: s.color }} />{s.name}</span>
         ))}
-        <button type="button" onClick={() => setTable(!table)} aria-pressed={table} className="ml-auto whitespace-nowrap rounded-(--radius-sm) px-1.5 py-0.5 text-(--text-muted) underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-(--accent)">
+        <button type="button" onClick={() => setTable(!table)} aria-pressed={table} className="ml-auto min-h-6 whitespace-nowrap rounded-(--radius-sm) px-1.5 py-0.5 text-(--text-muted) underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-(--accent)">
           {table ? "Show chart" : "Show table"}
         </button>
       </figcaption>
@@ -95,6 +95,69 @@ function LineChart({ title, points, series, format }: {
         </div>
       )}
     </figure>
+  );
+}
+
+const INVARIANT: Record<InvariantKind, { title: string; means: string }> = {
+  ackedWriteLost: { title: "Acknowledged write lost", means: "A write was confirmed to the client, then disappeared (unshipped async replication at failover, or a non-durable WAL)." },
+  duplicateEffect: { title: "Duplicate effect", means: "A retried non-idempotent write was applied twice. An idempotency key with a dedup store prevents it." },
+  staleRead: { title: "Stale read", means: "A read returned an older version than one already acknowledged (replica lag, cache, or index lag)." },
+  oversell: { title: "Oversell", means: "More units were sold than existed. Use decrementIfPositive or a conditional write on one store." },
+  uniquenessViolated: { title: "Uniqueness violated", means: "Two records share a value that a unique index should forbid." },
+  splitBrainWrite: { title: "Split-brain write", means: "Two leaders accepted writes at once. Enable fencing on failover." },
+  orderingViolated: { title: "Ordering violated", means: "Messages for one key were processed out of order. Publish ordered by key." },
+};
+
+function Invariants({ violations }: { violations: Violation[] }) {
+  if (violations.length === 0) return <p className="text-sm text-(--success)">✓ No invariant violations.</p>;
+  const kinds = [...new Set(violations.map((v) => v.kind))];
+  return (
+    <ul className="flex flex-col gap-2">
+      {kinds.map((k) => {
+        const list = violations.filter((v) => v.kind === k);
+        return (
+          <li key={k} className="rounded-(--radius-sm) border border-(--danger) p-2.5 text-sm">
+            <p className="font-medium text-(--danger)">✕ {INVARIANT[k]?.title ?? k} <span className="font-normal text-(--text-muted)">× {list.length}</span></p>
+            <p className="mt-0.5 text-xs text-(--text-muted)">{INVARIANT[k]?.means}</p>
+            <ol className="mt-1.5 flex flex-col gap-1 text-xs">
+              {list.slice(0, 5).map((v, i) => (
+                <li key={i}>
+                  <span className="tabular-nums">t = {fmtMs(v.timeUs)}</span>: {v.detail}
+                  {v.requestIds.length > 0 && <span className="block font-mono text-[11px] text-(--text-muted)">requests {v.requestIds.slice(0, 6).join(", ")}{v.requestIds.length > 6 ? ` +${v.requestIds.length - 6}` : ""}</span>}
+                </li>
+              ))}
+              {list.length > 5 && <li className="text-(--text-muted)">…and {list.length - 5} more</li>}
+            </ol>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** P2 per-kind stats: replication lag, queue depth / DLQ, breaker opens, autoscaling, failovers. */
+function ComponentDetails({ nodes, name }: { nodes: NodeStats[]; name: (id: string) => string }) {
+  const rows = nodes.flatMap((n) => {
+    const out: string[] = [];
+    if (n.replicationLagUs) out.push(`replication lag mean ${fmtMs(n.replicationLagUs.mean)}, max ${fmtMs(n.replicationLagUs.max)}`);
+    if (n.queue) out.push(`queue depth max ${fmtNum(n.queue.depthMax)}, ${fmtNum(n.queue.redelivered)} redelivered, ${fmtNum(n.queue.deadLettered)} dead-lettered, consumer lag max ${fmtMs(n.queue.consumerLagMax)}`);
+    if (n.breaker) out.push(`breaker opened ${fmtNum(n.breaker.opens)}×, ${fmtNum(n.breaker.shortCircuited)} calls failed fast`);
+    if (n.autoscale) out.push(`scaled ${n.autoscale.minConcurrency}–${n.autoscale.maxConcurrency} workers in ${fmtNum(n.autoscale.scaleEvents)} steps`);
+    if (n.failovers) out.push(`${fmtNum(n.failovers)} failover${n.failovers === 1 ? "" : "s"}`);
+    if (n.wastedWork) out.push(`${fmtNum(n.wastedWork)} requests of wasted work (caller had timed out)`);
+    if (n.meanQueueWaitUs != null) out.push(`mean queue wait ${fmtMs(n.meanQueueWaitUs)}`);
+    if (n.inFlight != null) out.push(`${fmtNum(n.inFlight)} in flight`);
+    if (n.dropsOnEdit != null) out.push(`${fmtNum(n.dropsOnEdit)} dropped by live edits`);
+    return out.length ? [{ id: n.nodeId, out }] : [];
+  });
+  if (!rows.length) return null;
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-(--text-muted)">Component details</h3>
+      <ul className="flex flex-col gap-1.5 text-xs">
+        {rows.map((r) => <li key={r.id}><span className="font-medium text-(--text)">{name(r.id)}</span>: {r.out.join("; ")}.</li>)}
+      </ul>
+    </section>
   );
 }
 
@@ -158,7 +221,7 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
   return (
     <div className="flex flex-col gap-5">
       <p className="sr-only" aria-live="polite">{announce}</p>
-      {run.status === "stale" && <p className="rounded-(--radius-sm) border border-(--warning) p-2 text-xs text-(--warning)">⚠ Stale: the design changed after this run.</p>}
+      {run.status === "stale" && <p role="status" className="rounded-(--radius-sm) border border-(--warning) p-2 text-xs text-(--warning)">⚠ Stale: design changed. These results are from the earlier design.</p>}
       {result?.outcome === "inconclusive" && <p className="rounded-(--radius-sm) border border-(--warning) p-2 text-xs text-(--warning)">⚠ Inconclusive: {result.inconclusiveReason}</p>}
       <div className="grid grid-cols-2 gap-2">
         <Tile label="Goodput" value={fmtPct(metrics.goodput, 2)} sub={`${fmtNum(metrics.succeeded)} ok · ${fmtNum(metrics.failed)} failed`} />
@@ -181,15 +244,21 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
       {result && (
         <section>
           <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-(--text-muted)">Invariants</h3>
-          {result.violations.length === 0 ? (
-            <p className="text-sm text-(--success)">✓ No invariant violations.</p>
-          ) : (
-            <ul className="flex flex-col gap-1 text-sm">
-              {result.violations.map((v, i) => (
-                <li key={i} className="text-(--danger)">✕ {v.kind} at {fmtMs(v.timeUs)}: <span className="text-(--text)">{v.detail}</span></li>
-              ))}
-            </ul>
-          )}
+          <Invariants violations={result.violations} />
+        </section>
+      )}
+
+      {metrics.costBreakdown && (
+        <section>
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-(--text-muted)">Cost per month · {fmtMoney(metrics.costPerMonth)}</h3>
+          <dl className="grid grid-cols-4 gap-2 text-xs">
+            {(["compute", "egress", "requests", "storage"] as const).map((k) => (
+              <div key={k} className="rounded-(--radius-sm) bg-(--bg) p-2">
+                <dt className="capitalize text-(--text-muted)">{k}</dt>
+                <dd className="tabular-nums text-(--text)">{fmtMoney(metrics.costBreakdown![k])}</dd>
+              </div>
+            ))}
+          </dl>
         </section>
       )}
 
@@ -236,6 +305,7 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
           </table>
         </section>
       )}
+      <ComponentDetails nodes={nodes} name={name} />
       <RunHistory designId={runKey} rev={run.historyRev} />
     </div>
   );

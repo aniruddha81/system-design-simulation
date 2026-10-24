@@ -26,9 +26,9 @@ export function PacketOverlay({ runKey, reducedMotion }: { runKey: string; reduc
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     const css = getComputedStyle(canvas);
-    const okColor = css.getPropertyValue("--accent").trim() || "#7c9cff";
-    const badColor = css.getPropertyValue("--danger").trim() || "#ff5c5c";
-    const textColor = css.getPropertyValue("--text").trim() || "#ddd";
+    const okColor = css.getPropertyValue("--accent").trim() || "Highlight";
+    const badColor = css.getPropertyValue("--danger").trim() || "Mark";
+    const textColor = css.getPropertyValue("--text").trim() || "CanvasText";
     const dpr = window.devicePixelRatio || 1;
     const resize = () => {
       canvas.width = canvas.clientWidth * dpr;

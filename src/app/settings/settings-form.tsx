@@ -20,14 +20,14 @@ function Radios<T extends string>({
 }) {
   const name = useId();
   return (
-    <fieldset className="panel p-5">
-      <legend className="float-left w-full text-lg font-semibold">{legend}</legend>
+    <fieldset className="border-t border-rule py-6">
+      <legend className="float-left w-full font-display text-2xl">{legend}</legend>
       <p className="clear-left mb-4 pt-1 text-sm text-muted">{hint}</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {options.map((o) => (
           <label
             key={o.value}
-            className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border p-3 has-[:checked]:border-accent has-[:checked]:bg-accent/10 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent"
+            className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-rule p-3 has-[:checked]:border-fg has-[:checked]:bg-surface-2 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent"
           >
             <input type="radio" name={name} value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="mt-1 size-4 accent-[var(--accent)] focus-visible:outline-none" />
             <span>
@@ -43,8 +43,8 @@ function Radios<T extends string>({
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="panel p-5" aria-label={title}>
-      <h2 className="text-lg font-semibold">{title}</h2>
+    <section className="border-t border-rule py-6" aria-label={title}>
+      <h2 className="font-display text-2xl">{title}</h2>
       {children}
     </section>
   );
@@ -90,13 +90,13 @@ export function SettingsForm() {
       />
       <Radios
         legend="Theme"
-        hint="Dark is designed first; light has the same contrast targets."
+        hint="Paper is the default: warm paper and graphite ink. Slate is a green-black chalkboard. Both use the same contrast targets."
         value={theme}
         onChange={(v) => setPref("theme", v)}
         options={[
           { value: "system", label: "System", detail: "Match your OS" },
-          { value: "dark", label: "Dark", detail: "Default" },
-          { value: "light", label: "Light", detail: "For bright rooms and print" },
+          { value: "light", label: "Paper", detail: "Warm paper, graphite and vermilion. Default." },
+          { value: "dark", label: "Slate", detail: "Green-black board with chalk ink" },
         ]}
       />
 
@@ -167,7 +167,7 @@ export function SettingsForm() {
             value={resetText}
             onChange={(e) => setResetText(e.target.value)}
             autoComplete="off"
-            className="min-h-11 rounded-(--radius-sm) border border-border bg-surface-2 px-3 font-mono text-sm"
+            className="field min-w-0 max-w-full bg-surface-2 text-sm"
           />
           <button
             type="button"

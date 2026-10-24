@@ -92,27 +92,29 @@ export function LessonStepper({
 
   return (
     <Lesson value={{ lessonId, revision, stepIds, current, focusKey, done, markDone }}>
-      <nav aria-label="Lesson steps" className="mb-6">
+      <nav aria-label="Lesson steps" className="mb-8 border-t-2 border-fg pt-5">
         <p className="mb-3 text-sm text-muted">
           Step <span className="num text-fg">{current + 1}</span> of <span className="num">{stepIds.length}</span>
-          {finished && <span className="ml-3 rounded-full border border-success/40 px-2 py-0.5 text-xs text-success">✓ Lesson complete</span>}
+          {finished && <span className="ml-3 font-medium text-success">✓ Lesson complete</span>}
         </p>
-        <ol className="flex gap-1.5">
+        <ol className="flex flex-wrap gap-2">
           {stepIds.map((s, i) => (
-            <li key={s} className="flex-1">
+            <li key={s} className="min-w-8 flex-1">
               <button
                 type="button"
                 onClick={() => goTo(i)}
                 disabled={i > reachable}
                 aria-current={i === current ? "step" : undefined}
                 aria-label={`Step ${i + 1}: ${stepTitles[i]}${done.has(s) ? " (done)" : i > reachable ? " (locked)" : ""}`}
-                className="group flex h-6 w-full items-center disabled:cursor-not-allowed"
+                className="group flex h-8 w-full items-center justify-center border border-rule font-mono text-xs disabled:cursor-not-allowed aria-[current=step]:border-2 aria-[current=step]:border-fg aria-[current=step]:bg-surface-2"
               >
                 <span
-                  className={`h-1.5 w-full rounded-full transition-colors ${
-                    i === current ? "bg-accent" : done.has(s) ? "bg-accent-2" : "bg-border group-enabled:group-hover:bg-muted"
+                  className={`transition-colors ${
+                    i === current ? "font-semibold text-accent" : done.has(s) ? "text-accent-2" : "text-muted group-enabled:group-hover:text-fg"
                   }`}
-                />
+                >
+                  <span aria-hidden>{done.has(s) ? "✓" : i + 1}</span>
+                </span>
               </button>
             </li>
           ))}
@@ -121,7 +123,7 @@ export function LessonStepper({
 
       {children}
 
-      <div className="mt-8 flex items-center justify-between gap-3 border-t border-border pt-5">
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5">
         <button type="button" className="btn btn-ghost" onClick={() => goTo(current - 1)} disabled={current === 0}>
           Back
         </button>
@@ -156,7 +158,7 @@ export function Step({ id, title, children }: { id: string; title: string; child
   return (
     <section id={`step-${id}`} hidden={!isCurrent} aria-labelledby={`step-${id}-title`} className="scroll-mt-24">
       <StepId value={id}>
-        <h2 id={`step-${id}-title`} ref={heading} tabIndex={-1} className="mb-5 text-2xl font-semibold tracking-tight outline-none sm:text-3xl">
+        <h2 id={`step-${id}-title`} ref={heading} tabIndex={-1} className="mb-5 font-display text-3xl tracking-tight outline-none sm:text-4xl">
           {title}
           {done.has(id) && <span className="sr-only"> (done)</span>}
         </h2>

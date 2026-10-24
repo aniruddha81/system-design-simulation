@@ -14,17 +14,17 @@ export default function NotFound() {
   ];
   return (
     <div className="mx-auto max-w-3xl px-4 py-20">
-      <p className="num text-sm text-muted">404</p>
-      <h1 className="mt-2 text-4xl font-semibold tracking-tight">This route has no handler.</h1>
+      <p className="font-mono text-sm text-accent">404</p>
+      <h1 className="mt-2 font-display text-4xl leading-tight tracking-tight sm:text-5xl">A page missing from the notebook.</h1>
       <p className="mt-4 text-lg text-muted">
         The page may have moved, or the link has a typo. Lessons keep stable IDs, so a renamed lesson redirects; this one did not match anything.
       </p>
 
-      <h2 className="mt-12 text-sm font-medium text-muted">Lessons</h2>
+      <h2 className="mt-12 font-display text-2xl">Lessons</h2>
       <ul className="mt-3 grid gap-2">
         {live.map((l) => (
           <li key={l.id}>
-            <Link href={`/learn/${l.track}/${l.slug}`} className="panel block p-4 hover:border-accent">
+            <Link href={`/learn/${l.track}/${l.slug}`} className="block border-t border-rule py-4 hover:text-accent">
               <span className="font-medium">{l.title}</span>
               {l.description && <span className="mt-1 block text-sm text-muted">{l.description}</span>}
             </Link>
@@ -32,11 +32,11 @@ export default function NotFound() {
         ))}
       </ul>
 
-      <h2 className="mt-10 text-sm font-medium text-muted">Elsewhere</h2>
+      <h2 className="mt-10 font-display text-2xl">Elsewhere</h2>
       <ul className="mt-3 grid gap-2 sm:grid-cols-2">
         {places.map((p) => (
           <li key={p.href}>
-            <Link href={p.href} className="panel block h-full p-4 hover:border-accent">
+            <Link href={p.href} className="block h-full border-t border-rule py-4 hover:text-accent">
               <span className="font-medium">{p.title}</span>
               <span className="mt-1 block text-sm text-muted">{p.body}</span>
             </Link>

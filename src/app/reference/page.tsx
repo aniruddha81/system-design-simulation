@@ -31,10 +31,10 @@ const MAX = Math.log10(LATENCIES.at(-1)![1] / LATENCIES[0][1]);
 
 function Block({ id, title, kind, children, intro }: { id: string; title: string; kind: string; intro: string; children: ReactNode }) {
   return (
-    <section aria-labelledby={id} className="panel p-5 sm:p-7">
+    <section aria-labelledby={id} className="border-t-2 border-fg pt-6">
       <div className="mb-6 max-w-2xl">
         <p className="text-sm text-muted">{kind}</p>
-        <h2 id={id} className="text-2xl font-semibold tracking-tight">
+        <h2 id={id} className="font-display text-3xl tracking-tight">
           {title}
         </h2>
         <p className="mt-2 text-muted">{intro}</p>
@@ -48,13 +48,13 @@ export default function ReferencePage() {
   return (
     <div className="mx-auto max-w-5xl px-4 pb-20 pt-12">
       <header className="mb-10 max-w-2xl">
-        <h1 className="text-4xl font-semibold tracking-tight">Reference</h1>
-        <p className="mt-4 text-lg leading-relaxed text-muted">
+        <h1 className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">Reference</h1>
+        <p className="mt-4 text-lg leading-relaxed text-ink-2">
           The numbers you estimate with. Estimates use SI units: 1 KB is 1,000 bytes, and bandwidth is in bits per second.
         </p>
       </header>
 
-      <div className="grid gap-8">
+      <div className="grid gap-14">
         <Block
           id="latency"
           title="Latency numbers"
@@ -62,7 +62,7 @@ export default function ReferencePage() {
           intro="Rounded orders of magnitude for current server hardware. Each bar is on a log scale, so every step right is ten times slower."
         >
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[32rem] text-left text-[0.9375rem]">
+            <table className="w-full text-left text-[0.9375rem]">
               <caption className="sr-only">Typical latencies, fastest first</caption>
               <thead className="text-sm text-muted">
                 <tr className="border-b border-border">
@@ -72,7 +72,7 @@ export default function ReferencePage() {
                   <th scope="col" className="py-2 pr-4 text-right font-normal">
                     Typical
                   </th>
-                  <th scope="col" className="w-2/5 py-2 font-normal">
+                  <th scope="col" className="hidden w-2/5 py-2 font-normal sm:table-cell">
                     <span className="sr-only">Relative scale</span>
                   </th>
                 </tr>
@@ -84,8 +84,8 @@ export default function ReferencePage() {
                       {op}
                     </th>
                     <td className="num whitespace-nowrap py-2.5 pr-4 text-right">{formatDuration(us)}</td>
-                    <td aria-hidden className="py-2.5">
-                      <div className="h-1.5 rounded-full bg-accent/70" style={{ width: `${Math.max(2, (Math.log10(us / LATENCIES[0][1]) / MAX) * 100)}%` }} />
+                    <td aria-hidden className="hidden py-2.5 sm:table-cell">
+                      <div className="h-1.5 bg-accent-2" style={{ width: `${Math.max(2, (Math.log10(us / LATENCIES[0][1]) / MAX) * 100)}%` }} />
                     </td>
                   </tr>
                 ))}

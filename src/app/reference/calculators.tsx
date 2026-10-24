@@ -10,7 +10,7 @@ function NumberField({ label, value, onChange, unit, step = "any", min = 0 }: { 
       <label htmlFor={id} className="text-sm text-muted">
         {label}
       </label>
-      <div className="flex items-center rounded-md border border-border bg-bg focus-within:border-accent">
+      <div className="flex items-center rounded-md border border-rule bg-surface focus-within:outline-2 focus-within:outline-accent">
         <input
           id={id}
           type="number"
@@ -55,7 +55,7 @@ export function NinesCalculator() {
           ))}
         </div>
       </div>
-      <dl aria-live="polite" className="rounded-md bg-surface-2 px-4 py-2">
+      <dl aria-live="polite" className="border-l-2 border-accent-2 bg-surface-2 px-4 py-2">
         {valid ? (
           <>
             <Result label="Downtime per year" value={formatDuration(down)} />
@@ -99,7 +99,7 @@ export function EstimationCalculator() {
         <NumberField label="Retention" value={retention} onChange={setRetention} unit="days" step="1" />
         <NumberField label="Replication factor" value={replicas} onChange={setReplicas} unit="copies" step="1" min={1} />
       </div>
-      <dl aria-live="polite" className="content-start rounded-md bg-surface-2 px-4 py-2">
+      <dl aria-live="polite" className="content-start border-l-2 border-accent-2 bg-surface-2 px-4 py-2">
         {ok ? (
           <>
             <Result label="Requests per day" value={formatNumber(perDay, 0)} />

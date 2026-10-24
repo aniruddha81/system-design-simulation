@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { anomalyNames, isolationLevels } from "@/models";
 import { templateIds, templates } from "./variants";
 
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
@@ -93,12 +94,15 @@ export const widgetSchemas = {
   VariantQuestion: z.strictObject({ template: z.enum(templateIds) }),
   HitRateCalculator: z.strictObject({}),
   MasteryCheck: z.strictObject({ templates: z.array(z.enum(templateIds)).min(1), count: z.number().int().min(3).max(10) }),
+  HashRingPlayer: z.strictObject({ seed: z.number().int().optional() }),
+  IsolationPlayer: z.strictObject({ anomaly: z.enum(anomalyNames).optional(), level: z.enum(isolationLevels).optional(), seed: z.number().int().optional() }),
+  ModelQuestion: z.strictObject({ id: stableId, objective, model: z.enum(["hashRing", "isolation"]), seed: z.number().int().optional() }),
 } as const;
 export type WidgetName = keyof typeof widgetSchemas;
 
 /** The objective a widget instance assesses, if any. */
 export function assessedObjectives(name: WidgetName, props: Record<string, unknown>): string[] {
-  if (name === "Choice" || name === "Ordering") return [props.objective as string];
+  if (name === "Choice" || name === "Ordering" || name === "ModelQuestion") return [props.objective as string];
   if (name === "VariantQuestion") return [templates[props.template as string].objective];
   if (name === "MasteryCheck") return (props.templates as string[]).map((t) => templates[t].objective);
   return [];

@@ -11,7 +11,7 @@ import { useLesson, useStepDone } from "./stepper";
 
 function Card({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <div role="group" aria-label={label} className="panel my-6 p-5 sm:p-6">
+    <div role="group" aria-label={label} className="my-6 border-y-2 border-rule bg-surface p-5 sm:p-6">
       {children}
     </div>
   );
@@ -94,7 +94,7 @@ export function Choice({ id, prompt, multiple = false, options }: { id: string; 
                 <label
                   key={o.id}
                   className={`flex min-h-11 cursor-pointer items-start gap-3 rounded-md border px-3.5 py-2.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent ${
-                    checked ? "border-accent bg-accent/10" : "border-border hover:border-muted"
+                    checked ? "border-fg bg-surface-2" : "border-rule hover:border-fg"
                   }`}
                 >
                   <input
@@ -274,7 +274,7 @@ function NumericForm({
         <label htmlFor={inputId} className="sr-only">
           Your answer in {t.unit}
         </label>
-        <div className="flex items-center rounded-md border border-border bg-bg focus-within:border-accent">
+        <div className="flex items-center rounded-md border border-rule bg-surface focus-within:outline-2 focus-within:outline-accent">
           <input
             id={inputId}
             inputMode="decimal"
@@ -405,7 +405,7 @@ export function MasteryCheck({ templates: templateIds, count }: { templates: str
   if (!items) {
     return (
       <Card label="Mastery check">
-        <p className="mb-1 font-semibold">Mastery check</p>
+        <p className="mb-2 font-display text-2xl">Mastery check</p>
         <p className="mb-4 text-muted">
           {count} questions on fresh variants. One attempt each, no time limit. Score {formatPercent(PASS, 0)} or more to master the lesson.
         </p>

@@ -39,29 +39,29 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
 
   return (
     <div className="mt-10 grid gap-12">
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-6 border-y border-rule py-6 sm:grid-cols-4">
         {stats.map((s) => (
-          <div key={s.label} className="panel p-4">
+          <div key={s.label} className="min-w-0">
             <dt className="flex items-center gap-2 text-sm text-muted">
               <span aria-hidden>{s.icon}</span>
               {s.label}
             </dt>
-            <dd className="num mt-1 text-3xl font-semibold">{s.value}</dd>
+            <dd className="num mt-2 text-3xl">{s.value}</dd>
             {s.note && <dd className="mt-1 text-xs text-muted">{s.note}</dd>}
           </div>
         ))}
       </dl>
 
       <section aria-labelledby="review">
-        <h2 id="review" className="mb-4 text-xl font-semibold">
+        <h2 id="review" className="mb-4 font-display text-2xl">
           Review queue
         </h2>
         {due.length === 0 ? (
           <p className="text-muted">Nothing due. Objectives you miss in a mastery check land here.</p>
         ) : (
-          <ul className="grid gap-2">
+          <ul className="grid">
             {due.map(({ lesson, objective, rec }) => (
-              <li key={`${lesson.id}/${objective.id}`} className="panel flex flex-wrap items-center justify-between gap-3 p-4">
+              <li key={`${lesson.id}/${objective.id}`} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
                 <div>
                   <p className="font-medium">{objective.text}</p>
                   <p className="text-sm text-muted">
@@ -78,12 +78,12 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
       </section>
 
       <section aria-labelledby="lessons">
-        <h2 id="lessons" className="mb-4 text-xl font-semibold">
+        <h2 id="lessons" className="mb-4 font-display text-2xl">
           Lessons
         </h2>
-        <ul className="grid gap-2">
+        <ul className="grid">
           {rows.map((r) => (
-            <li key={r.id} className="panel flex flex-wrap items-center justify-between gap-3 p-4">
+            <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
               <div>
                 <Link href={r.href} className="font-medium underline-offset-4 hover:underline">
                   {r.title}
@@ -106,14 +106,14 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
       </section>
 
       <section aria-labelledby="challenges">
-        <h2 id="challenges" className="mb-4 text-xl font-semibold">
+        <h2 id="challenges" className="mb-4 font-display text-2xl">
           Challenges
         </h2>
-        <ul className="grid gap-2">
+        <ul className="grid">
           {challenges.map((c) => {
             const stars = progress.get(`challenge:${c.id}`)?.stars ?? 0;
             return (
-              <li key={c.id} className="panel flex flex-wrap items-center justify-between gap-3 p-4">
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
                 <Link href={`/challenges/${c.id}`} className="font-medium underline-offset-4 hover:underline">
                   {c.title}
                 </Link>

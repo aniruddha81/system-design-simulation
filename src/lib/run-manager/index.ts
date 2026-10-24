@@ -1,15 +1,22 @@
 // Module-level run manager (PLAN §5.10, §14): worker handles and run state live here, not in Effects.
 // Components only subscribe; their Effect cleanup calls pause() so hidden routes (Activity) stop.
 import { create } from "zustand";
+import { designHash } from "@/engine";
 import { newId, openStore } from "@/lib/persistence";
 import type {
-  Cursor, Design, FromWorker, LiveSnapshot, Packet, RunKey, RunResult, Scenario, Speed, ToWorker, ValidationIssue,
+  Cursor, Design, FromWorker, LiveEdit, LiveSnapshot, Packet, RunKey, RunResult, Scenario, Speed, ToWorker, ValidationIssue,
 } from "@/engine/types";
 
 export type RunStatus =
   | "idle" | "running" | "paused" | "finished" | "inconclusive" | "interrupted" | "stale" | "invalid";
 
 export type RunInput = { design: Design; scenario: Scenario; seed: number };
+
+/** One live edit (§5.7) and what the engine said about it. */
+export type LiveEditState = {
+  seq: number; nodeId: string; path: string; value: unknown;
+  state: "pending" | "acked" | "rejected"; atUs?: number; reason?: string;
+};
 
 export type RunState = {
   status: RunStatus;
@@ -23,10 +30,15 @@ export type RunState = {
   note: string | null;
   /** Bumped when a finished run lands in persisted history. */
   historyRev: number;
+  /** designHash of the design this run reflects, including live edits sent so far ("rejected:…" once one is refused). */
+  designHash: string | null;
+  edits: LiveEditState[];
+  editLog: LiveEdit[];
 };
 
 const IDLE: RunState = {
   status: "idle", speed: 1, input: null, runKey: null, snapshot: null, result: null, issues: [], note: null, historyRev: 0,
+  designHash: null, edits: [], editLog: [],
 };
 
 export const useRuns = create<Record<string, RunState>>(() => ({}));
@@ -92,6 +104,19 @@ function onMessage(key: string, msg: FromWorker) {
       return patch(key, { status: msg.result.outcome, result: msg.result, runKey: msg.result.runKey, note: msg.result.inconclusiveReason ?? null });
     case "error":
       return interrupt(key, msg.message);
+    case "editAck": {
+      const edits = [...get(key).edits];
+      const i = edits.findIndex((e) => e.state === "pending" && e.nodeId === msg.edit.nodeId && e.path === msg.edit.path);
+      if (i >= 0) edits[i] = { ...edits[i], state: "acked", atUs: msg.edit.cursor.timeUs };
+      return patch(key, { edits, editLog: [...get(key).editLog, msg.edit] });
+    }
+    case "editRejected": {
+      const edits = [...get(key).edits];
+      const i = edits.findIndex((e) => e.state === "pending" && e.nodeId === msg.nodeId && e.path === msg.path);
+      if (i >= 0) edits[i] = { ...edits[i], state: "rejected", reason: msg.reason };
+      // The run no longer matches the design: its results will read as stale once it stops.
+      return patch(key, { edits, designHash: `rejected:${msg.nodeId}.${msg.path}` });
+    }
   }
 }
 
@@ -129,18 +154,19 @@ function spawn(key: string): Worker {
 
 // ---------- public API ----------
 
-export function start(key: string, input: RunInput, opts: { replayTo?: Cursor } = {}) {
+export function start(key: string, input: RunInput, opts: { replayTo?: Cursor; liveEditLog?: LiveEdit[] } = {}) {
   const { speed } = get(key);
+  const hash = opts.liveEditLog?.length ? get(key).designHash : designHash(input.design);
   spawn(key);
   // A replay keeps the last snapshot on screen until the fresh worker catches up.
   patch(key, {
     status: opts.replayTo ? "paused" : "running", input, issues: [], note: null, result: null, runKey: null,
-    snapshot: opts.replayTo ? get(key).snapshot : null,
+    snapshot: opts.replayTo ? get(key).snapshot : null, designHash: hash, edits: [], editLog: opts.liveEditLog ?? [],
   });
-  post(key, { type: "start", ...input, settings: { traceSampleRate: 0.05 }, speed: opts.replayTo ? "max" : speed });
+  post(key, { type: "start", ...input, settings: { traceSampleRate: 0.05 }, speed: opts.replayTo ? "max" : speed, liveEditLog: opts.liveEditLog });
   if (opts.replayTo) {
     post(key, { type: "replayTo", cursor: opts.replayTo });
-    post(key, { type: "pause" });
+    // replayTo already pauses; a following pause would cancel its scheduled replay slices.
     post(key, { type: "setSpeed", speed });
   }
 }
@@ -169,24 +195,41 @@ export function setSpeed(key: string, speed: Speed) {
 }
 
 export function restart(key: string) {
-  const { input } = get(key);
-  if (input) start(key, input);
+  const { input, editLog } = get(key);
+  if (input) start(key, input, { liveEditLog: editLog });
 }
 
 /** Deterministic replay in a fresh worker up to `cursor` (default: last acknowledged snapshot). */
 export function replayTo(key: string, cursor?: Cursor) {
-  const { input, snapshot } = get(key);
+  const { input, snapshot, editLog } = get(key);
   const to = cursor ?? snapshot?.cursor;
-  if (input && to) start(key, input, { replayTo: to });
+  if (input && to) start(key, input, { replayTo: to, liveEditLog: editLog });
   else restart(key);
 }
+
+let editSeq = 0;
+const MAX_EDITS_SHOWN = 30;
+
+/** Parameter edits during a run (§5.7): applied at the next event boundary, then acked or rejected. */
+export function liveEdit(key: string, edits: { nodeId: string; path: string; value: unknown }[], hash: string) {
+  const s = get(key);
+  if ((s.status !== "running" && s.status !== "paused") || !live.has(key) || edits.length === 0) return;
+  for (const e of edits) post(key, { type: "liveEdit", ...e });
+  const added = edits.map((e): LiveEditState => ({ ...e, seq: ++editSeq, state: "pending" }));
+  patch(key, { edits: [...s.edits, ...added].slice(-MAX_EDITS_SHOWN), designHash: s.designHash?.startsWith("rejected:") ? s.designHash : hash });
+}
+
+export const isLive = (key: string) => {
+  const s = get(key).status;
+  return (s === "running" || s === "paused") && live.has(key);
+};
 
 /** Structural edit: stop any live run and mark results stale (§5.7). */
 export function markStale(key: string) {
   const s = get(key);
   if (s.status === "idle" || s.status === "stale" || s.status === "invalid") return;
   kill(key);
-  patch(key, { status: "stale", note: "Design changed — results are from the previous design." });
+  patch(key, { status: "stale", note: "Stale: design changed. These results are from the previous design." });
 }
 
 export function close(key: string) {

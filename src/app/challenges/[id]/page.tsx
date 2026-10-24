@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ChallengeEditor } from "@/components/sandbox/EditorLoader";
 import { EDITOR_FRAME } from "@/components/sandbox/EditorSkeleton";
 import { KIND_LABEL } from "@/components/sandbox/design-ops";
+import { describeArrival } from "@/components/sandbox/scenario-ops";
 import { fmtMoney, fmtMs } from "@/components/sandbox/units";
 import { challenges, getChallenge } from "@/content/challenges";
 
@@ -45,7 +46,7 @@ export default async function ChallengePage({ params }: PageProps<"/challenges/[
           </div>
           <div className="rounded-(--radius) border border-(--border) bg-(--surface) p-3">
             <dt className="text-xs uppercase tracking-wider text-(--text-muted)">Traffic</dt>
-            <dd className="mt-1 text-(--text)">{arrival.rps.toLocaleString("en")} req/s ({arrival.kind})</dd>
+            <dd className="mt-1 text-(--text)">{describeArrival(arrival)}</dd>
             <dd className="text-xs text-(--text-muted)">{Object.entries(s.workload.mix).map(([k, w]) => `${k} ${Math.round(w * 100)}%`).join(" · ")} · deadline {fmtMs(s.workload.deadlineUs)}</dd>
           </div>
           <div className="rounded-(--radius) border border-(--border) bg-(--surface) p-3">

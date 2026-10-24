@@ -1,0 +1,227 @@
+/* Field-notebook figures; drawing areas opt into the shared paper-grid class. */
+
+.figure {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-color: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+@media (min-width: 640px) {
+  .figure {
+    padding: 1.5rem;
+  }
+}
+
+.caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--border);
+}
+
+.figNo {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2, var(--text-muted));
+}
+
+.figTitle {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.figNote {
+  flex-basis: 100%;
+  font-size: 0.875rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* Highlighter stroke behind text: violations, the breaking point, the current rung. */
+.marker {
+  padding: 0 0.2em;
+  margin: 0 -0.1em;
+  border-radius: 0.2em 0.5em 0.3em 0.6em;
+  background: linear-gradient(
+    100deg,
+    transparent 0.2em,
+    var(--highlight-mark) 0.4em,
+    var(--highlight-mark) calc(100% - 0.4em),
+    transparent calc(100% - 0.1em)
+  );
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Rubber stamp for verdicts (verified remedy, steady/unstable). Shape + text, never colour alone. */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transform: rotate(-2.5deg);
+  opacity: 0.9;
+}
+
+/* Margin note: an annotation in the gutter, joined to its subject by a leader. */
+.note {
+  position: relative;
+  padding-left: 0.9rem;
+  font-size: 0.875rem;
+  font-style: italic;
+  color: var(--ink-2, var(--text-muted));
+}
+.note::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.65em;
+  width: 0.6rem;
+  border-top: 1px dashed currentColor;
+}
+
+/* The failure ladder: two rails, one rung per predicted failure. */
+.ladder {
+  position: relative;
+  display: grid;
+  gap: 0.75rem;
+  padding-left: 2.75rem;
+  counter-reset: rung;
+}
+.ladder::before,
+.ladder::after {
+  content: "";
+  position: absolute;
+  top: 0.25rem;
+  bottom: 0.25rem;
+  width: 2px;
+  background: var(--ink-2, var(--text-muted));
+  opacity: 0.5;
+  border-radius: 1px;
+}
+.ladder::before {
+  left: 0.6rem;
+}
+.ladder::after {
+  left: 2rem;
+}
+.rung {
+  position: relative;
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition:
+    border-color 200ms,
+    box-shadow 200ms;
+}
+/* The rung itself: a heat-coloured bar across both rails. */
+.rung::before {
+  content: "";
+  position: absolute;
+  left: -2.35rem;
+  top: 1.05rem;
+  width: 1.75rem;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--rung-heat, var(--warning));
+}
+.rungActive {
+  border-color: var(--rung-heat, var(--warning));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--rung-heat, var(--warning)) 25%, transparent);
+}
+
+/* Heat swatch with the bucket number printed on it (non-colour encoding). */
+.heat {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--rung-heat, var(--warning));
+}
+
+.pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pulse 1.4s ease-out 2;
+}
+@keyframes pulse {
+  0% {
+    transform: scale(0.4);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.stat {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border-left: 3px solid var(--ink-2, var(--border));
+  background: var(--surface-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.statValue {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Swimlane cells for the isolation schedule. */
+.lane {
+  border-left: 2px solid var(--ink-2, var(--border));
+}
+.op {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  box-shadow: 1px 1px 0 var(--border);
+}
+.opBlocked {
+  border-style: dashed;
+}
+.opAborted {
+  text-decoration: line-through;
+  text-decoration-color: var(--danger);
+}
