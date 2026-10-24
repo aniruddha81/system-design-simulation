@@ -21,6 +21,23 @@ function Log($msg) {
   try { [IO.File]::AppendAllText((Join-Path $logs "runner.log"), "$(Get-Date -Format s) $msg`r`n") } catch { Write-Host $msg } # a log line must never kill the runner
 }
 
+# Header lines in a task file: "<!-- title: ... -->" and "<!-- paths: a b c -->". Commits only those paths.
+function Commit-Task($file) {
+  $text = Get-Content $file -Raw
+  $title = [regex]::Match($text, "<!-- title: (.+?) -->").Groups[1].Value
+  $paths = [regex]::Match($text, "<!-- paths: (.+?) -->").Groups[1].Value -split "\s+" | Where-Object { $_ }
+  if (-not $title -or -not $paths) { Log "$($file) has no title/paths header; not committed"; return }
+  Push-Location $repo
+  try {
+    git add -A -- @paths 2>&1 | Out-Null
+    git diff --cached --quiet
+    if ($LASTEXITCODE -eq 0) { Log "nothing to commit for $title"; return }
+    git commit -q -m "$title (Codex queue)" 2>&1 | Out-Null
+    Log "committed: $title"
+    git remote | Select-Object -First 1 | ForEach-Object { git push -q 2>&1 | Out-Null; Log "pushed" }
+  } finally { Pop-Location }
+}
+
 try {
   Log "runner started (pid $PID)"
   # Only one runner exists (lock), so anything left in running/ was orphaned by a dead runner: re-queue it.
@@ -29,9 +46,13 @@ try {
     foreach ($name in @($jobs.Keys)) {
       $p = $jobs[$name]
       if (-not $p.HasExited) { continue }
-      $target = if ($p.ExitCode -eq 0) { $done } else { $failed }
+      $base = [IO.Path]::GetFileNameWithoutExtension($name)
+      $result = Join-Path $logs "$base.result.md"
+      $passed = $p.ExitCode -eq 0 -and (Test-Path $result) -and (Select-String -Path $result -Pattern "RESULT: PASS" -Quiet)
+      $target = if ($passed) { $done } else { $failed }
       Move-Item (Join-Path $running $name) (Join-Path $target $name) -Force
       Log "$name exited $($p.ExitCode) -> $(Split-Path -Leaf $target)"
+      if ($passed) { Commit-Task (Join-Path $done $name) }
       $jobs.Remove($name)
     }
 
