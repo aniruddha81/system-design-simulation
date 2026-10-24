@@ -29,37 +29,50 @@ function Commit-Task($file) {
   $paths = [regex]::Match($text, "<!-- paths: (.+?) -->").Groups[1].Value -split "\s+" | Where-Object { $_ }
   if (-not $title -or -not $paths) { Log "$($file) has no title/paths header; not committed"; return }
   Push-Location $repo
+  $ErrorActionPreference = "Continue" # git writes warnings (e.g. LF/CRLF) to stderr; under Stop, PS 5.1 makes them fatal
   try {
-    git add -A -- @paths 2>&1 | Out-Null
+    git add -A -- @paths 2>$null | Out-Null
     git diff --cached --quiet
     if ($LASTEXITCODE -eq 0) { Log "nothing to commit for $title"; return }
-    git commit -q -m "$title (Codex queue)" 2>&1 | Out-Null
+    git commit -q -m "$title (Codex queue)" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Log "commit FAILED for $title"; return }
     Log "committed: $title"
-    git remote | Select-Object -First 1 | ForEach-Object { git push -q 2>&1 | Out-Null; Log "pushed" }
-  } finally { Pop-Location }
+    if (git remote) { git push -q 2>$null | Out-Null; Log "push exit $LASTEXITCODE" }
+  } catch { Log "commit error for ${title}: $_" } finally { Pop-Location }
+}
+
+function Finish-Task($name, $exitOk) {
+  $base = [IO.Path]::GetFileNameWithoutExtension($name)
+  $result = Join-Path $logs "$base.result.md"
+  $passed = $exitOk -and (Test-Path $result) -and (Select-String -Path $result -Pattern "RESULT: PASS" -Quiet)
+  $target = if ($passed) { $done } else { $failed }
+  Move-Item (Join-Path $running $name) (Join-Path $target $name) -Force
+  Log "$name -> $(Split-Path -Leaf $target)"
+  if ($passed) { Commit-Task (Join-Path $done $name) }
 }
 
 try {
   Log "runner started (pid $PID)"
-  # Only one runner exists (lock), so anything left in running/ was orphaned by a dead runner: re-queue it.
-  Get-ChildItem $running -Filter *.md | ForEach-Object { Move-Item $_.FullName (Join-Path $pending $_.Name) -Force; Log "$($_.Name) re-queued (orphaned)" }
   while ($true) {
     foreach ($name in @($jobs.Keys)) {
       $p = $jobs[$name]
       if (-not $p.HasExited) { continue }
-      $base = [IO.Path]::GetFileNameWithoutExtension($name)
-      $result = Join-Path $logs "$base.result.md"
-      $passed = $p.ExitCode -eq 0 -and (Test-Path $result) -and (Select-String -Path $result -Pattern "RESULT: PASS" -Quiet)
-      $target = if ($passed) { $done } else { $failed }
-      Move-Item (Join-Path $running $name) (Join-Path $target $name) -Force
-      Log "$name exited $($p.ExitCode) -> $(Split-Path -Leaf $target)"
-      if ($passed) { Commit-Task (Join-Path $done $name) }
+      Log "$name exited $($p.ExitCode)"
+      Finish-Task $name ($p.ExitCode -eq 0)
       $jobs.Remove($name)
+    }
+    # Orphans (left by a dead runner): wait while their codex still holds the file, then finish or re-queue.
+    foreach ($f in @(Get-ChildItem $running -Filter *.md)) {
+      if ($jobs.ContainsKey($f.Name)) { continue }
+      try { ([IO.File]::Open($f.FullName, "Open", "Read", "None")).Close() } catch { continue } # orphaned codex still running
+      $result = Join-Path $logs "$([IO.Path]::GetFileNameWithoutExtension($f.Name)).result.md"
+      if ((Test-Path $result) -and (Select-String -Path $result -Pattern "RESULT:" -Quiet)) { Finish-Task $f.Name $true }
+      else { Move-Item $f.FullName (Join-Path $pending $f.Name) -Force; Log "$($f.Name) re-queued (orphaned)" }
     }
 
     if (Test-Path (Join-Path $root "HOLD")) { Start-Sleep -Seconds 30; continue } # lead is still merging the previous wave
     $queue = @(Get-ChildItem $pending -Filter *.md | Sort-Object Name)
-    if ($queue.Count -eq 0 -and $jobs.Count -eq 0) { break }
+    if ($queue.Count -eq 0 -and @(Get-ChildItem $running -Filter *.md).Count -eq 0) { break }
 
     $runningWaves = @(Get-ChildItem $running -Filter *.md | ForEach-Object { Wave $_ })
     $nextWave = if ($queue.Count) { Wave $queue[0] } else { $null }
