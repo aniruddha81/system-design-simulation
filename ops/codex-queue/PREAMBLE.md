@@ -16,5 +16,5 @@ You are a Codex worker in the build loop for this repo: a system-design learning
    - `npx tsc --noEmit`, reporting only errors in your paths;
    - `npx eslint <your paths>`;
    - tests via `npx vitest run <your paths> --configLoader native --pool threads --maxWorkers 1`.
-   For routes, also run `npm run build`. If the build collides with another build in `.next`, wait a minute and retry.
+   Do not run `npm run build`, `next dev`/`next start`, Playwright or a browser. Your sandbox blocks them (`spawn EPERM`, no localhost), and the lead runs them after you finish, so their absence is not a failure. Even if your task text asks for a build or screenshots, skip them, and list in your summary what the lead should check visually.
 7. **Finish** with a short summary of what you built, what is deferred, and the test results. The very last line must be exactly `RESULT: PASS` when every check above is green for your paths, otherwise `RESULT: FAIL` followed by the reason.
