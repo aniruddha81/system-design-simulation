@@ -42,3 +42,8 @@ next-env.d.ts
 
 # python (skill scripts)
 __pycache__/
+
+# codex queue runtime
+ops/codex-queue/logs/
+ops/codex-queue/running/
+ops/codex-queue/runner.lock
