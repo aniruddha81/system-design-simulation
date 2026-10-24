@@ -1,0 +1,135 @@
+{/*
+id: rate-limiting
+slug: rate-limiting
+track: building-blocks
+title: "Rate limiting algorithms"
+description: "Calculate token budgets and refill waits, compare fixed and sliding windows, and choose an atomic limiter policy under distributed failures."
+objectives:
+  - id: calculate-token-budget
+    text: Calculate available tokens and the wait for a request to become eligible
+  - id: choose-limiter
+    text: Compare token bucket, leaky bucket, fixed window and sliding window behavior
+  - id: design-distributed-limiter
+    text: Choose an atomic quota boundary and an explicit failure policy
+  - id: communicate-rate-limit
+    text: Choose a client retry response that avoids amplifying overload
+requires: [throughput]
+activities: [C, Q, R]
+limitations:
+  - "Token arithmetic assumes deterministic refill, a monotonic time source and atomic balance updates."
+  - "Centralized-store latency and multi-region coordination are discussed but not reproduced by the numerical questions."
+  - "A leaky bucket can mean a shaper or a meter; this lesson explicitly uses a bounded queue shaper."
+sources:
+  - title: "A Single Rate Three Color Marker (RFC 2697)"
+    authors: "J. Heinanen, R. Guerin"
+    year: 1999
+    url: "https://www.rfc-editor.org/rfc/rfc2697"
+  - title: "An Architecture for Differentiated Services (RFC 2475)"
+    authors: "S. Blake, D. Black, M. Carlson, E. Davies, Z. Wang, W. Weiss"
+    year: 1998
+    url: "https://www.rfc-editor.org/rfc/rfc2475"
+  - title: "Additional HTTP Status Codes (RFC 6585)"
+    authors: "M. Nottingham, R. Fielding"
+    year: 2012
+    url: "https://www.rfc-editor.org/rfc/rfc6585"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="contract" title="Limit the resource the request consumes">
+
+A rate limiter decides whether a request may start. A concurrency limiter bounds work already in flight. Both can protect a service, but a fixed requests/s budget does not prevent a slow dependency from accumulating many active requests. Use the boundary that matches the constrained resource.
+
+Define the subject and cost: per account, API key, IP, tenant or global service; one token per call or a weighted cost for expensive operations. IP-only policies can punish many users behind one NAT and can miss an attacker spread across many addresses. A user quota is also different from global overload protection.
+
+<Choice id="concurrency-vs-rate" objective="design-distributed-limiter" prompt="Requests stay at 100/s, but a dependency slows from 20 ms to ten seconds and active work explodes. What additional control directly bounds the active work?" options={[
+  { id: "concurrency", text: "A bounded concurrency or admission limit with an explicit rejection policy", correct: true, feedback: "Right. Active requests grow with time in the system; a concurrency cap directly bounds that resource." },
+  { id: "same", text: "Keep only the same 100/s rate limit and assume concurrency is fixed", feedback: "At the same rate, longer service time raises in-flight work. Rate alone does not fix concurrency." },
+  { id: "unlimited", text: "Queue every request without a bound", feedback: "That moves the growth into memory and waiting time rather than bounding the resource." }
+]} />
+
+</Step>
+
+<Step id="tokens" title="A token bucket separates burst from sustained rate">
+
+A token bucket has capacity B and refill rate r tokens/s. An idle bucket refills only up to B; requests consume their cost atomically. A full bucket can admit B one-token requests at once, while sustained traffic must fit the refill rate over the long run.
+
+If capacity is 20, the balance is 4, refill is 3/s and the bucket is idle for five seconds, the new balance is **min(20, 4 + 3 × 5) = 19**. Idle time does not accumulate infinite credit. The RFC marker uses byte-denominated buckets; API limiters often use request-denominated tokens with the same accounting idea.
+
+<VariantQuestion template="limiting.tokens" />
+
+</Step>
+
+<Step id="wait" title="Compute eligibility without promising a queue">
+
+If a request needs six tokens and an empty bucket refills two tokens/s, it becomes eligible in **three seconds**, assuming no competing requests and enough bucket capacity. A request costing more than capacity can never pass under that configuration.
+
+Eligibility does not mean the limiter queues the request automatically. Many API limiters reject immediately so the caller decides when to retry. A shaping limiter waits in a bounded queue instead. Long waits can make requests useless, so apply deadlines and bound queued work.
+
+<VariantQuestion template="limiting.wait" />
+
+</Step>
+
+<Step id="windows" title="Fixed windows have a boundary burst">
+
+A fixed window resets a counter at aligned intervals. A client allowed 100 requests per minute can send 100 just before a boundary and 100 immediately after: **200 requests in a very short interval**. The rule is still obeyed within each clock minute.
+
+A sliding log checks timestamps over a rolling interval and can enforce a strict rolling count, at memory and update cost. Sliding-window counters approximate the interval using buckets and weighting, so their error must be part of the contract. Use a monotonic elapsed-time basis where possible; wall-clock jumps should not create free quota.
+
+<VariantQuestion template="limiting.boundary" />
+
+</Step>
+
+<Step id="shaping" title="A leaky bucket smooths departure">
+
+In this lesson, a leaky bucket is a bounded queue drained at a controlled rate. It smooths departures but adds waiting. A token bucket instead allows bursts up to its capacity. Some networking texts use “leaky bucket” for an equivalent metering formulation; ask whether a proposed algorithm delays, marks or rejects.
+
+For a partner API that requires smooth delivery, a shaper may fit. For an interactive endpoint that permits a short burst but must respond quickly, a token bucket with immediate rejection may fit better. An algorithm name is less useful than its precise admission and delay behavior.
+
+<Choice id="limiter-shape" objective="choose-limiter" prompt="A partner accepts at most a smooth ten jobs/s, and jobs can wait up to two seconds. Which design is a useful fit?" options={[
+  { id: "leaky", text: "A bounded queue drained at ten jobs/s, with expiry for jobs exceeding the deadline", correct: true, feedback: "Right. A shaper regulates departure timing while the bound and expiry keep waiting controlled." },
+  { id: "burst", text: "A token bucket holding 10,000 tokens sent as an immediate burst", feedback: "That permits a large instantaneous arrival burst at the partner, which conflicts with smooth delivery." },
+  { id: "infinite", text: "An unbounded queue with no job deadline", feedback: "That can smooth departures but violates the bounded-wait requirement during sustained overload." }
+]} />
+
+</Step>
+
+<Step id="distributed" title="A distributed balance needs one atomic decision">
+
+Reading a balance, checking it and decrementing it in separate operations lets two callers spend the same token. Put refill, eligibility and consumption in one atomic update at the quota authority. Include the subject and policy in the key, and bound the lifetime and cardinality of idle keys.
+
+Local buckets avoid a network hop but multiply a per-process budget when traffic spreads across processes. A shared store coordinates more precisely but adds latency and a dependency. Regional quota leases can reduce coordination cost while permitting bounded overshoot. Choose that bound explicitly rather than calling every deployment globally exact.
+
+<Choice id="shared-token" objective="design-distributed-limiter" prompt="Two gateway instances read a shared balance of one token before either decrements it. Both accept. What is the root fix?" options={[
+  { id: "atomic", text: "Make refill, check and decrement one atomic operation at the quota authority", correct: true, feedback: "Right. Both decisions must serialize around the same token balance." },
+  { id: "faster", text: "Use a faster network while keeping separate read and decrement calls", feedback: "A shorter race window is still a race; speed does not establish atomicity." },
+  { id: "cache", text: "Cache the shared token balance independently in every gateway", feedback: "Independent cached balances can spend the same shared quota multiple times." }
+]} />
+
+</Step>
+
+<Step id="failure" title="Fail-open and fail-closed are product decisions">
+
+When a quota store fails, fail-open preserves access but can expose a scarce downstream resource. Fail-closed protects quota but may block legitimate users. A bounded local fallback can be appropriate when its aggregate overshoot is acceptable. Payments, login abuse and public content may need different policies.
+
+For a quota rejection, HTTP **429 Too Many Requests** communicates the condition; `Retry-After` can give retry guidance. Clients should respect it, use bounded backoff and jitter, and stop at their deadline. Retrying instantly from every client recreates the overload the limiter is trying to prevent.
+
+<Choice id="retry-limiter" objective="communicate-rate-limit" prompt="A client receives 429 with Retry-After: 5. What should its retry policy do?" options={[
+  { id: "respect", text: "Honor the delay, add suitable jitter, and keep attempts within its retry budget and deadline", correct: true, feedback: "Right. Bounded delayed retries reduce synchronized pressure while respecting the caller's useful time window." },
+  { id: "immediate", text: "Retry immediately until a request passes", feedback: "Immediate retry loops increase load and can synchronize many clients into another burst." },
+  { id: "new-key", text: "Rotate user identities to bypass the quota", feedback: "That defeats the policy and turns ordinary retry behavior into quota evasion." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then compare algorithms">
+
+Score at least 80% on fresh token, wait and window-boundary calculations. State the bucket's initial balance and whether rejected work waits or leaves.
+
+<MasteryCheck templates={["limiting.tokens", "limiting.wait", "limiting.boundary"]} count={5} />
+
+In the [sandbox](/sandbox), put a limiter before a service and apply a burst followed by sustained load. Compare token bucket and fixed window, watching admitted rate, rejection rate and downstream latency. Predict which burst passes before running; the numeric questions omit centralized-store latency.
+
+</Step>

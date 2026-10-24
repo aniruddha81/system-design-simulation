@@ -242,11 +242,11 @@ export type Condition =
 export type DataOp =
   | { kind: "get" }
   | { kind: "query"; index?: string; limit: number } // no index => full scan ∝ entity count
-  | { kind: "insert" } // unique conflict => 409
-  | { kind: "put" }
-  | { kind: "update"; field: string; op: "set" | "increment" | "append" }
+  | { kind: "insert"; values?: Record<string, number | string | boolean> } // unique conflict => 409
+  | { kind: "put"; values?: Record<string, number | string | boolean> }
+  | { kind: "update"; field: string; op: "set" | "increment" | "append"; value?: number | string | boolean }
   | { kind: "delete" }
-  | { kind: "conditionalPut" } // version mismatch => 409
+  | { kind: "conditionalPut"; expectedVersion?: number; values?: Record<string, number | string | boolean> } // absent uses the preceding read's version
   | { kind: "decrementIfPositive"; field: string }; // inventory/tickets; would go < 0 => 409
 
 export type Join = { kind: "all" } | { kind: "any" } | { kind: "quorum"; k: number } | { kind: "firstN"; n: number };
@@ -374,6 +374,7 @@ export type NodeStats = {
   meanQueueWaitUs?: number | null;
   inFlight?: number;
   wastedWork?: number;
+  dropsOnEdit?: number;
   cache?: { hits: number; misses: number; evictions: number; hitRate: number | null };
   // P2 (present only for the relevant kinds)
   replicationLagUs?: { mean: number; max: number };
@@ -442,6 +443,8 @@ export interface Simulation {
   advance(options?: AdvanceOptions): 'running' | 'done';
   snapshot(): LiveSnapshot;
   result(): RunResult;
+  liveEdit(nodeId: NodeId, path: string, value: unknown, acknowledge?: (edit: LiveEdit) => void): string | undefined;
+  replayEdits(edits: LiveEdit[]): void;
 }
 
 // ---------- live animation feed (visual only, never part of results) ----------
@@ -460,7 +463,7 @@ export type LiveSnapshot = {
 export type Speed = 0.1 | 1 | 10 | "max";
 
 export type ToWorker =
-  | { type: "start"; design: Design; scenario: Scenario; seed: number; settings: RunSettings; speed: Speed }
+  | { type: "start"; design: Design; scenario: Scenario; seed: number; settings: RunSettings; speed: Speed; liveEditLog?: LiveEdit[] }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "setSpeed"; speed: Speed }

@@ -1,0 +1,133 @@
+{/*
+id: percentiles
+slug: percentiles
+track: foundations
+title: "Percentiles and tail latency"
+description: "Calculate percentile ranks, predict tail amplification in fan-out, and choose measurements and mitigations that preserve the user experience."
+objectives:
+  - id: compute-percentile
+    text: Locate a percentile using a stated nearest-rank convention
+  - id: predict-fanout-tail
+    text: Calculate the probability that a join-all request encounters a slow branch
+  - id: diagnose-tail-latency
+    text: Choose valid percentile aggregation and a bounded tail-latency intervention
+requires: [throughput]
+activities: [C, Q, R]
+limitations:
+  - "Fan-out arithmetic assumes independent branches with identical slow-call probability."
+  - "Nearest rank is one percentile convention; monitoring tools can interpolate or approximate differently."
+  - "The sandbox link is a manual experiment, not a preconfigured fan-out template."
+sources:
+  - title: "The Tail at Scale"
+    authors: "Jeffrey Dean, Luiz André Barroso"
+    year: 2013
+    url: "https://research.google/pubs/the-tail-at-scale/"
+  - title: "Monitoring Distributed Systems, Site Reliability Engineering"
+    authors: "Rob Ewaschuk"
+    year: 2016
+    url: "https://sre.google/sre-book/monitoring-distributed-systems/"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 24
+*/}
+
+<Step id="mean" title="An average can hide the slow users">
+
+Imagine 99 requests take 10 ms each and one takes 1,010 ms. The mean is 20 ms, yet one user waited over a second. Averages answer questions about total work and Little's law; they do not describe the experience of the slowest users.
+
+A percentile describes a point in an ordered distribution. A p99 of 200 ms says about 99% of measured observations are at or below that value under the chosen convention. It does not promise that every user gets 200 ms or that the worst request takes only a little longer.
+
+<Choice id="mean-tail" objective="diagnose-tail-latency" prompt="Mean latency stays at 20 ms while p99 rises from 80 ms to 900 ms. What should you conclude?" options={[
+  { id: "tail", text: "The slow portion of the measured distribution worsened despite a stable mean", correct: true, feedback: "Right. Investigate slow requests and workload groups; the mean alone cannot rule out a user-visible regression." },
+  { id: "fine", text: "No user experience changed because the mean is stable", feedback: "The percentile directly shows that the slow portion changed, which the mean can obscure." },
+  { id: "every", text: "Every request now takes 900 ms", feedback: "p99 is a quantile, not a statement that all requests equal that duration." }
+]} />
+
+</Step>
+
+<Step id="rank" title="Calculate the rank before reading the value">
+
+We use **nearest rank = ceil(p × N)** with one-based indexing. For 1,000 sorted samples, p99 uses rank 990. Read the latency value at that rank; the rank itself is not a time measurement.
+
+With very few samples, high percentiles collapse toward the maximum and vary sharply between windows. A p99 from ten requests is weak evidence for a service handling millions. State the sample size, observation interval, included statuses and quantile convention when comparing results.
+
+<VariantQuestion template="percentiles.rank" />
+
+</Step>
+
+<Step id="aggregation" title="Do not average machine percentiles">
+
+Suppose one server receives 100 requests and another receives 100,000. Their local p99 values do not contain enough information to reconstruct the fleet p99. Even weighting those two values by request count generally fails because a quantile is not a mean.
+
+Aggregate compatible histogram bucket counts, or use a mergeable distribution sketch with a known error bound. Then calculate the percentile for the combined observations. Check bucket resolution near your SLO; a coarse bucket spanning 100 ms to 1,000 ms gives a weak estimate of a 200 ms objective.
+
+<Choice id="fleet-percentile" objective="diagnose-tail-latency" prompt="How should you estimate fleet p99 across machines with different traffic volumes?" options={[
+  { id: "hist", text: "Merge compatible histogram counts and compute the quantile from the merged distribution", correct: true, feedback: "Right. Counts preserve the distribution and traffic volume needed for a fleet quantile, within bucket resolution." },
+  { id: "average", text: "Average each machine's p99", feedback: "Percentiles are not additive or generally averageable; local quantiles discard most distribution information." },
+  { id: "max", text: "Take the largest local p99 and call it the exact fleet p99", feedback: "That is a conservative local diagnostic in some settings, not the exact quantile of all fleet observations." }
+]} />
+
+</Step>
+
+<Step id="fanout" title="A rare branch delay becomes common in fan-out">
+
+A search request queries 100 shards and needs every result. If each independent shard has a 1% chance of exceeding a threshold, the chance all are fast is **0.99^100 ≈ 36.6%**. About **63.4%** of parents encounter at least one slow branch.
+
+The formula is **P(any slow) = 1 − (1 − q)^n**. It gives a probability at a chosen threshold, not an exact end-to-end p99 latency. Correlated pauses, shared queues and unequal shard distributions change the result. Dean and Barroso's tail-at-scale paper motivates treating these rare delays as a system-level problem.
+
+<VariantQuestion template="percentiles.fanout" />
+
+</Step>
+
+<Step id="correlation" title="Check the independence assumption">
+
+If all shards share a network bottleneck, their delays may happen together. Multiplying independent probabilities then misstates the actual parent distribution. At the extreme, if every branch crosses the threshold on exactly the same requests, the parent slow probability equals the single-branch slow probability.
+
+Real systems mix correlated and independent causes. Trace which branches slow down together and group requests by region, payload, tenant and dependency. A fleet graph can hide one badly affected tenant behind many fast small requests.
+
+<Choice id="shared-pause" objective="predict-fanout-tail" prompt="All 100 branches exceed 100 ms on exactly the same 1% of parent requests, and never otherwise. What percent of parents encounter a slow branch?" options={[
+  { id: "one", text: "1%, because the slow events coincide perfectly", correct: true, feedback: "Right. These branches are perfectly correlated; the independence formula does not apply." },
+  { id: "sixty", text: "About 63.4%, by assuming independent 1% tails", feedback: "That number requires independence, which the scenario explicitly removes." },
+  { id: "hundred", text: "100%, because there are 100 branches", feedback: "Adding probabilities double-counts the same slow parent events when branches fail together." }
+]} />
+
+</Step>
+
+<Step id="mitigate" title="Reduce tails without causing another queue">
+
+First remove avoidable variance: bound batch size, control admission, fix hot partitions and isolate noisy workloads. If the response can tolerate partial results, a deadline can bound waiting, but it changes the result contract and must be visible to the caller.
+
+Hedged requests send an extra copy after a delay and use the first acceptable response. They can reduce some read tails, but extra work competes for capacity. Bound the hedge rate, avoid unsafe side effects, and cancel losers where supported. Hedging an already saturated dependency can make the tail worse.
+
+<Choice id="hedging" objective="diagnose-tail-latency" prompt="A read dependency is saturated and p99 is rising. What is the safest first move?" options={[
+  { id: "admission", text: "Control admitted load and investigate the constrained resource", correct: true, feedback: "Right. Creating spare capacity addresses queueing; measure before adding duplicate work." },
+  { id: "duplicate", text: "Immediately duplicate every read to the same saturated pool", feedback: "That raises load on the bottleneck. Hedging needs a bounded policy and enough independent spare capacity." },
+  { id: "hide", text: "Remove timed-out requests from every dashboard", feedback: "That hides user-visible failures and biases the reported experience toward successes." }
+]} />
+
+</Step>
+
+<Step id="measurement" title="Measure the wait the user actually experienced">
+
+A client that waits for a slow request before generating the next one can miss delays that a constant arrival stream would have encountered. Record the load model and include time spent waiting before execution when that time belongs to the user-visible boundary.
+
+Keep both latency and availability views. A one-second timeout is a failed user request even if it produces no successful response sample. A success-only p99 may improve while more requests fail. Look at rates, sample counts and failures before celebrating a percentile change.
+
+<Choice id="success-only" objective="diagnose-tail-latency" prompt="Success-only p99 improves after you shorten timeouts, while failures triple. Did overall service quality necessarily improve?" options={[
+  { id: "no", text: "No; slow requests may have moved from the success histogram into failures", correct: true, feedback: "Right. Evaluate availability and user-visible waiting alongside successful-request latency." },
+  { id: "yes", text: "Yes; any lower p99 proves a better service", feedback: "The measured population changed. Faster surviving successes do not account for the additional failures." },
+  { id: "cpu", text: "Yes; this proves CPU capacity increased", feedback: "A timeout policy does not establish any change in processing capacity." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then stress the tail">
+
+Score at least 80% on fresh percentile-rank and fan-out questions. State the independence assumption every time you apply the fan-out formula.
+
+<MasteryCheck templates={["percentiles.rank", "percentiles.fanout"]} count={5} />
+
+In the [sandbox](/sandbox), build independent parallel calls that join on all results. Slow one dependency, compare parent and branch latency, then repeat near saturation. This manual experiment illustrates a critical path; the fixed-probability question above is a separate mathematical approximation.
+
+</Step>

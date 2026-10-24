@@ -1,0 +1,127 @@
+{/*
+id: estimation
+slug: estimation
+track: foundations
+title: "Back-of-envelope estimation"
+description: "Estimate peak QPS, retained storage, memory and server count with explicit assumptions, consistent units and a failure reserve."
+objectives:
+  - id: estimate-peak-qps
+    text: Estimate peak request rate from daily users and actions
+  - id: estimate-storage-memory
+    text: Estimate retained replicated storage and hot-entry memory
+  - id: size-server-count
+    text: Calculate whole server count from a measured capacity and utilization target
+  - id: expose-estimate-assumptions
+    text: Identify assumptions and missing overhead that materially change a capacity estimate
+requires: [throughput]
+activities: [C, Q]
+limitations:
+  - "Uniform record sizes and explicit peak factors are simplifying inputs, not measured workload distributions."
+  - "Storage calculations exclude indexes, WAL, backups and compression unless explicitly supplied."
+  - "Server arithmetic assumes load can be balanced and shared dependencies do not constrain throughput."
+sources:
+  - title: "Handling Overload, Site Reliability Engineering"
+    authors: "Alejandro Forero Cuervo"
+    year: 2016
+    url: "https://sre.google/sre-book/handling-overload/"
+  - title: "The Datacenter as a Computer: An Introduction to the Design of Warehouse-Scale Machines"
+    authors: "Luiz André Barroso, Urs Hölzle"
+    year: 2009
+    url: "https://doi.org/10.2200/S00193ED1V01Y200905CAC006"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="scope" title="Estimate to choose a design">
+
+The goal is not a precise bill from incomplete requirements. It is to discover whether you need one database or many, whether images dominate bandwidth, and which assumption most affects the design. Start with users, actions, payload, retention, latency and availability requirements.
+
+Separate known measurements from guesses. Ten million registered users does not mean ten million daily users, and one page view may make several API calls. State a baseline and a plausible high case; avoid false precision such as seven decimal places on an assumed peak factor.
+
+<Choice id="estimation-input" objective="expose-estimate-assumptions" prompt="You know there are ten million registered accounts. What else do you need before deriving request rate?" options={[
+  { id: "activity", text: "Active users per period and requests per active user", correct: true, feedback: "Right. Account count alone does not determine activity or API call volume." },
+  { id: "same", text: "Nothing; registered accounts equal requests per second", feedback: "Those quantities have different units and no direct conversion without activity assumptions." },
+  { id: "shards", text: "Choose a shard count before estimating any traffic", feedback: "First estimate workload and capacity needs so partitioning solves an identified constraint." }
+]} />
+
+</Step>
+
+<Step id="qps" title="Turn a day into a peak second">
+
+Two million daily users making 12 requests each create 24 million requests/day. Divide by **86,400 seconds/day** for about 278 requests/s on average. With a stated peak factor of four, plan an initial peak near 1,111 requests/s.
+
+Estimate reads and writes separately when their paths differ. A launch or live event may have a much larger peak than ordinary diurnal traffic. A peak factor is an assumption to validate against traces, not a law of web traffic.
+
+<VariantQuestion template="estimation.qps" />
+
+</Step>
+
+<Step id="storage" title="Retention multiplies daily ingestion">
+
+One million 500-byte records/day retained for 90 days consume **45 GB** of logical decimal storage. Three full copies make **135 GB** before indexes, logs, backups and free space. Replication factor is not a substitute for accounting for these other copies.
+
+Check whether retention deletes data physically and when. Tombstones, compaction and snapshots can keep old bytes around after logical expiry. For object storage, large blobs may dominate while database rows hold only metadata. Name each category so a small metadata estimate does not hide a huge media store.
+
+<VariantQuestion template="estimation.storage" />
+
+</Step>
+
+<Step id="memory" title="Hot data includes more than payload">
+
+A cache of ten million 200-byte values contains 2 GB of payload. If keys, metadata and allocation make total size three times payload, budget **6 GB per copy**. Replicas and recovery headroom come after that.
+
+Do not assume the hottest 1% of keys produce exactly 1% of traffic. Popularity skew can make a small hot set valuable, but the distribution must be measured. Read the [caching lesson](/learn/building-blocks/caching) before translating a byte budget into a promised hit rate.
+
+<VariantQuestion template="estimation.memory" />
+
+</Step>
+
+<Step id="servers" title="Round up after applying usable capacity">
+
+Suppose one server benchmarks at 2,000 requests/s but you choose a 50% target to meet latency under variation. Its usable planning capacity is 1,000/s. A 7,500/s peak needs **ceil(7,500 / 1,000) = 8 servers**, before reserving for failures.
+
+The benchmark must match request mix, payload, data size and dependencies. If a database saturates at 5,000/s, adding front-end servers will not deliver 7,500/s. Keep the estimate tied to the narrowest measured resource rather than treating server counts as independent knobs.
+
+<VariantQuestion template="estimation.servers" />
+
+</Step>
+
+<Step id="bandwidth" title="Carry the estimate through the response path">
+
+At 1,000 responses/s and 20 kB each, outbound payload rate is **20 MB/s**, or **160 Mbit/s**. That is about 1,728 GB/day at a constant rate. Daily traffic uses the average rate; a link's peak capacity uses the peak rate. Applying peak load to every second of the month overstates monthly bytes unless the traffic truly stays there.
+
+Include fan-out and cache misses on internal links. Ten database reads per request can make a 1,000 request/s API generate 10,000 reads/s. A cache shifts the load only at its sustained hit rate, including cold starts and popularity changes.
+
+<Choice id="peak-vs-volume" objective="expose-estimate-assumptions" prompt="You know peak response traffic is four times average. Which rate should estimate total daily bytes under that assumption?" options={[
+  { id: "average", text: "Average response rate times bytes per response times seconds/day", correct: true, feedback: "Right. Peak informs capacity, while integrated or average rate informs total volume." },
+  { id: "peak", text: "Peak rate times all 86,400 seconds, without stating it as an upper bound", feedback: "That assumes peak lasts all day and would be four times the stated average-volume estimate." },
+  { id: "registered", text: "Registered user count alone", feedback: "Volume still needs activity and bytes per operation; account count is not a byte rate." }
+]} />
+
+</Step>
+
+<Step id="failure-reserve" title="Ask what remains after a failure">
+
+Eight servers meeting normal demand may be insufficient after losing a zone containing three. If five survivors cannot handle the peak within the target, normal-state capacity is not your availability plan. Autoscaling also takes time to provision and warm caches.
+
+Vary the uncertain inputs: twice as many active users, twice the payload, a lower hit rate, one failed zone. Identify which change first breaks the design. This sensitivity check is more useful than polishing the last digit of a baseline estimate.
+
+<Choice id="zone-reserve" objective="size-server-count" prompt="Eight servers meet peak at the chosen target, but three are in a zone that may fail. What must you verify?" options={[
+  { id: "survivors", text: "Whether the five survivors can carry peak within the required latency and admission policy", correct: true, feedback: "Right. Failure-state capacity, routing and recovery delay belong in the plan." },
+  { id: "average", text: "Only that eight servers cover the daily average", feedback: "That misses peak demand and the loss of an entire failure domain." },
+  { id: "instant", text: "Assume replacement servers appear instantly with warm caches", feedback: "Provisioning and warm-up take time; demand continues while replacement capacity is unavailable." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh QPS, storage, memory and server-count variants. For each result, state one excluded overhead and one assumption you would measure before implementation.
+
+<MasteryCheck templates={["estimation.qps", "estimation.storage", "estimation.memory", "estimation.servers"]} count={5} />
+
+Continue to [partitioning](/learn/building-blocks/partitioning) when a single node is too small, and [bandwidth](/learn/foundations/bandwidth) when response bytes dominate. An estimate should lead to a specific design decision and a validation plan.
+
+</Step>

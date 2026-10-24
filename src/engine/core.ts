@@ -1,7 +1,7 @@
 import type { Design, Dist, Percentiles } from './types';
 
-export const ENGINE_VERSION = '1.0.0';
-export const REPLAY_COMPAT_ID = 'exact-p1-2026-10-24.1';
+export const ENGINE_VERSION = '2.0.0';
+export const REPLAY_COMPAT_ID = 'exact-p2-2026-10-24.2';
 export const duration = (x: number) => Math.max(1, Math.ceil(x));
 
 export function hash32(s: string): number {
@@ -94,12 +94,17 @@ export function canonical(value: unknown): string {
 export function designHash(design: Design): string {
   const { nodes, edges, endpoints, schemaVersion } = design;
   const value = canonical({ schemaVersion,
+    entities: design.entities ? [...design.entities].sort((a, b) => a.name.localeCompare(b.name)) : undefined, regions: design.regions,
     nodes: nodes.map(n => ({ id: n.id, kind: n.kind, params: n.params, handlers: n.handlers })).sort((a, b) => a.id.localeCompare(b.id)),
-    edges: [...edges].sort((a, b) => a.id.localeCompare(b.id)),
+    edges: edges.map(e => ({ id: e.id, from: e.from, to: e.to, latency: e.latency, bandwidthBytesPerSec: e.bandwidthBytesPerSec, lossRate: e.lossRate })).sort((a, b) => a.id.localeCompare(b.id)),
     endpoints: [...endpoints].sort((a, b) => a.id.localeCompare(b.id)),
   });
   // Two independent 32-bit hashes keep this synchronous in Node and workers.
   return hash32(value).toString(16).padStart(8, '0') + hash32(`design:${value}`).toString(16).padStart(8, '0');
+}
+
+export function computeMonthlyCost(design: Design): number {
+  return [...design.nodes].sort((a, b) => a.id.localeCompare(b.id)).reduce((sum, n) => sum + ('costPerHour' in n.params ? n.params.costPerHour * (n.kind === 'database' ? n.params.replicas : 1) : 0), 0) * 720;
 }
 
 /** Geometric buckets have <0.5% upper-bound error, including integer rounding. */

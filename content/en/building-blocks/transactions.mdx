@@ -1,0 +1,153 @@
+{/*
+id: transactions
+slug: transactions
+track: building-blocks
+title: "Transactions and isolation anomalies"
+description: "Trace concurrent schedules, distinguish isolation anomalies, protect reservation invariants, and compare measured B-tree and LSM write costs."
+objectives:
+  - id: identify-isolation-anomaly
+    text: Distinguish dirty reads, non-repeatable reads, phantoms, lost updates and write skew
+  - id: protect-transaction-invariant
+    text: Choose constraints, locking or serializable execution for a reservation race
+  - id: compare-concurrency-control
+    text: Choose optimistic or pessimistic concurrency control and handle aborts
+  - id: compare-write-cost
+    text: Calculate physical write volume from measured B-tree and LSM amplification
+requires: []
+activities: [M, C, Q]
+limitations:
+  - "Isolation schedules use a focused deterministic model; the operational request engine is not a full SQL isolation simulator."
+  - "The focused serializable mode uses simplified locking; real databases may use different algorithms and level names."
+  - "Write-amplification factors are supplied measurements, not universal properties of B-trees or LSM engines."
+sources:
+  - title: "Transaction Isolation, PostgreSQL 18 Documentation"
+    authors: "The PostgreSQL Global Development Group"
+    year: 2025
+    url: "https://www.postgresql.org/docs/18/transaction-iso.html"
+  - title: "Explicit Locking, PostgreSQL 18 Documentation"
+    authors: "The PostgreSQL Global Development Group"
+    year: 2025
+    url: "https://www.postgresql.org/docs/18/explicit-locking.html"
+  - title: "Constraints, PostgreSQL 18 Documentation"
+    authors: "The PostgreSQL Global Development Group"
+    year: 2025
+    url: "https://www.postgresql.org/docs/18/ddl-constraints.html"
+  - title: "The Log-Structured Merge-Tree (LSM-Tree)"
+    authors: "Patrick O'Neil, Edward Cheng, Dieter Gawlick, Elizabeth O'Neil"
+    year: 1996
+    url: "https://www.cs.umb.edu/~poneil/lsmtree.pdf"
+  - title: "Index Types, PostgreSQL 18 Documentation"
+    authors: "The PostgreSQL Global Development Group"
+    year: 2025
+    url: "https://www.postgresql.org/docs/18/indexes-types.html"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 28
+*/}
+
+<Step id="atomic" title="Atomic is not the same as isolated">
+
+A transfer should debit one account and credit another together. Atomicity makes the transaction commit or abort as a unit. Isolation constrains what concurrent transactions can observe and which combined outcomes are allowed. Two individually atomic transactions can still violate a shared invariant under a weaker isolation level.
+
+Durability concerns surviving a failure after acknowledgement. None of these properties implies that a transaction also atomically sends an external email. Write the invariant first: for example, a seat has at most one active reservation, or at least one doctor remains on call.
+
+<Choice id="atomic-isolation" objective="protect-transaction-invariant" prompt="Two atomic transactions each read that a seat is free, then both create a reservation. What is missing from the claim that atomicity alone makes this safe?" options={[
+  { id: "invariant", text: "A concurrency rule or constraint that prevents two reservations for the same seat", correct: true, feedback: "Right. All-or-nothing writes do not by themselves serialize competing decisions." },
+  { id: "larger", text: "A larger server, which guarantees isolation", feedback: "Faster hardware can change timing, but it does not establish a correctness rule for concurrent transactions." },
+  { id: "tls", text: "TLS encryption between clients and the database", feedback: "Encryption protects transport; it does not arbitrate conflicting reservations." }
+]} />
+
+</Step>
+
+<Step id="anomalies" title="Name the read that changed">
+
+A **dirty read** sees data from a transaction that has not committed and may abort. A **non-repeatable read** sees a different committed value when reading the same row again. A **phantom** changes the set matching a predicate, such as all reservations for one event.
+
+Read Committed prevents dirty reads in the focused model and in PostgreSQL, but successive statements can see different committed data. A stable snapshot can prevent many changing-read effects while still allowing write skew. Isolation names are not interchangeable across products; inspect the actual guarantee and retry behavior.
+
+<Choice id="anomaly-name" objective="identify-isolation-anomaly" prompt="Within one transaction, SELECT finds three matching reservations. Another transaction inserts and commits a fourth; a later SELECT sees four. What changed?" options={[
+  { id: "phantom", text: "The predicate result gained a phantom row", correct: true, feedback: "Right. The membership of the matching set changed between reads." },
+  { id: "dirty", text: "A dirty read, because any concurrent read is dirty", feedback: "The new row was committed. Dirty reads specifically expose uncommitted data." },
+  { id: "lost", text: "A lost update, because one write overwrote another", feedback: "No overwritten write is described; the anomaly concerns a changing predicate result." }
+]} />
+
+</Step>
+
+<Step id="lost-update" title="A read-modify-write can erase another update">
+
+Two clients read a counter at 10. Each computes 11 in application code and writes 11. The final value is 11 even though two increments were requested. This is a **lost update**. An atomic `UPDATE ... SET value = value + 1` can avoid that particular read-modify-write race.
+
+Another option is a version predicate: update only if the stored version still matches the version read, then inspect the affected-row count. A zero-row result means retry the whole decision against fresh data or return a conflict; it is not a successful update.
+
+<Choice id="lost-update-fix" objective="compare-concurrency-control" prompt="An optimistic UPDATE includes WHERE version = 7 and affects zero rows. What should the caller do?" options={[
+  { id: "retry", text: "Treat it as a conflict and re-read before retrying the decision", correct: true, feedback: "Right. The stale precondition failed; recompute from current state or return a conflict." },
+  { id: "success", text: "Report success because the SQL statement executed", feedback: "Execution without an affected row did not apply the requested state change." },
+  { id: "overwrite", text: "Remove the version predicate and overwrite unconditionally", feedback: "That discards the check and can reintroduce the lost update the version was meant to prevent." }
+]} />
+
+</Step>
+
+<Step id="write-skew" title="A snapshot can preserve reads and still break a rule">
+
+Two doctors are on call. Each transaction reads that the other is on call, then turns its own row off. Under snapshot isolation, their writes touch different rows, so both may commit and leave nobody on call. This is **write skew**: the invariant spans the rows each transaction read.
+
+Run the focused schedule at snapshot isolation, then reset and compare serializable execution. Predict the final invariant before stepping. This player teaches interleavings and simplified concurrency control; it is not a claim that every database implements the same locking algorithm.
+
+<IsolationPlayer anomaly="writeSkew" level="snapshot" seed={11} />
+
+<Choice id="write-skew-rule" objective="identify-isolation-anomaly" prompt="Why can first-committer-wins conflict detection miss the doctors' write skew?" options={[
+  { id: "different", text: "The transactions write different rows, although their decisions depend on a shared multirow invariant", correct: true, feedback: "Right. Detecting overlapping writes alone does not capture every read-write dependency." },
+  { id: "dirty", text: "Both must have read uncommitted data", feedback: "Write skew can occur when both read valid committed snapshots." },
+  { id: "atomic", text: "One transaction must have partially committed", feedback: "Both may commit atomically. Their combined outcome can still violate the invariant." }
+]} />
+
+</Step>
+
+<Step id="reservation" title="Enforce the rule where the race happens">
+
+For one reservation per seat, a unique constraint on the seat identifier gives the database an authority to reject a duplicate. A prior application check that finds no reservation is insufficient: another transaction can insert between the check and the write.
+
+For a multirow invariant, use an appropriate serializable transaction or a deliberately shared locked record covering the decision. Locking only existing matching rows may not protect an absent row or predicate. Handle constraint failures and serialization aborts as expected outcomes, and keep external side effects out of a transaction that may retry.
+
+<Choice id="unique-seat" objective="protect-transaction-invariant" prompt="Two requests simultaneously reserve seat A12. Which directly enforces at most one active reservation in a simplified table with one row per reserved seat?" options={[
+  { id: "unique", text: "A unique seat constraint, with conflict handling in the caller", correct: true, feedback: "Right. The constraint arbitrates concurrent inserts at the database boundary." },
+  { id: "check", text: "SELECT for absence, then INSERT without any constraint", feedback: "Both transactions can observe absence before either insert commits." },
+  { id: "cache", text: "Cache the fact that the seat looked free", feedback: "A cached observation is older evidence, not an atomic reservation authority." }
+]} />
+
+</Step>
+
+<Step id="locking" title="Choose where contention is paid">
+
+Pessimistic locking coordinates before making a conflicting change. It can be useful when conflicts are frequent, but long transactions hold locks, consume connections and can deadlock. Acquire shared resources in a consistent order and handle deadlock aborts.
+
+Optimistic control checks whether the decision is still valid at commit or update time. It works well when conflicts are uncommon, but repeated retries can waste work under a hot key. Retry with bounds and fresh reads. Serializable execution promises a serial-equivalent committed result, not that every transaction succeeds immediately or that its business logic is correct.
+
+<Choice id="lock-remote" objective="compare-concurrency-control" prompt="A transaction locks inventory rows and waits five seconds for an external API. What is the main concern?" options={[
+  { id: "hold", text: "It holds scarce locks and connections during an unpredictable remote wait", correct: true, feedback: "Right. Shorten the transaction and design an explicit reservation or compensation workflow around remote effects." },
+  { id: "safe", text: "The remote API is automatically part of the SQL rollback", feedback: "A database rollback does not undo an unrelated external side effect." },
+  { id: "faster", text: "Longer lock hold time always increases concurrency", feedback: "Longer holds generally increase contention and the number of blocked callers." }
+]} />
+
+</Step>
+
+<Step id="indexes" title="Isolation and storage structure answer different questions">
+
+A B-tree keeps ordered pages for point and range access, while an LSM buffers updates and merges sorted runs over time. Their write cost depends on page behavior, compaction, indexes, data shape and the durability policy. Neither name alone tells you which isolation level is provided.
+
+**Write amplification = physical bytes written / logical bytes updated.** If 50 MB of logical updates produce 150 MB of B-tree writes and 400 MB of LSM writes in a measured workload, amplification is 3 and 8; the LSM writes 250 MB more. Sequential I/O can still make an engine with more physical bytes useful. Compare throughput, read amplification, space and tail latency too.
+
+<VariantQuestion template="transactions.write-amplification" />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh measured write-cost calculations. Then revisit the choices: name the anomaly, state the invariant and identify the database rule that enforces it. The numerical mastery check covers write amplification; the schedule and choices assess isolation reasoning.
+
+<MasteryCheck templates={["transactions.write-amplification"]} count={5} />
+
+Use the focused player to compare the same write-skew schedule under snapshot and serializable modes. Continue to [queues](/learn/building-blocks/queues) for the separate problem of coordinating a committed database effect with message delivery.
+
+</Step>

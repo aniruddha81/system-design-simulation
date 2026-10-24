@@ -1,0 +1,132 @@
+{/*
+id: latency-numbers
+slug: latency-numbers
+track: foundations
+title: "Latency numbers"
+description: "Build a request latency budget, distinguish service time from waiting, and calculate sequential and parallel critical paths."
+objectives:
+  - id: distinguish-latency-costs
+    text: Distinguish service time, queueing, propagation and serialization
+  - id: calculate-critical-path
+    text: Calculate latency for sequential calls and parallel joins
+  - id: choose-latency-intervention
+    text: Choose an optimization from a measured request trace
+requires: []
+activities: [C, Q]
+limitations:
+  - "All numerical latencies are illustrative inputs, not hardware benchmarks or vendor guarantees."
+  - "Critical-path calculations use fixed durations and omit contention, loss, retries and cancellation."
+sources:
+  - title: "The Tail at Scale"
+    authors: "Jeffrey Dean, Luiz André Barroso"
+    year: 2013
+    url: "https://research.google/pubs/the-tail-at-scale/"
+  - title: "Transmission Control Protocol (TCP) (RFC 9293)"
+    authors: "W. Eddy, editor"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9293"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 22
+*/}
+
+<Step id="units" title="Keep the orders of magnitude straight">
+
+A nanosecond is a billionth of a second; a microsecond is 1,000 nanoseconds; a millisecond is 1,000 microseconds. A 5 ms operation is **5,000 µs**, not five. Unit mistakes can make an infeasible design look comfortable.
+
+Think in rough scales before reaching for memorized numbers: CPU cache access is far closer than a remote region, and a local memory lookup is not a substitute benchmark for a database query. Device generation, payload size, cache warmth and concurrency change the actual values. In an interview, state the number you assume and validate it later.
+
+<Choice id="latency-conversion" objective="distinguish-latency-costs" prompt="A trace reports 2,500 microseconds. How should you label it in milliseconds?" options={[
+  { id: "right", text: "2.5 ms", correct: true, feedback: "Right. Divide microseconds by 1,000 to obtain milliseconds." },
+  { id: "large", text: "2,500 ms", feedback: "That changes the label without converting the value and exaggerates the duration by 1,000." },
+  { id: "small", text: "0.0025 ms", feedback: "That divides by a million; microseconds are only a thousandth of a millisecond." }
+]} />
+
+</Step>
+
+<Step id="budget" title="Four costs hide inside one duration">
+
+A remote call includes **waiting**, **service**, **serialization** and **propagation**. Waiting is time queued for a worker, lock, connection or link. Service is work on the request. Serialization puts bytes onto a finite-capacity link; propagation moves the signal over distance.
+
+Suppose a 30 ms RPC contains 18 ms waiting for a connection, 4 ms database work and 8 ms network cost. Halving database work saves only 2 ms. Removing the pool wait could matter much more, provided the database can safely accept the additional concurrency. Increasing a pool without that check may just move the queue into the database.
+
+<Choice id="pool-wait" objective="choose-latency-intervention" prompt="An RPC spends 18 of its 30 ms waiting for a connection. What should you investigate first?" options={[
+  { id: "pool", text: "Pool occupancy, connection hold time and downstream capacity", correct: true, feedback: "Right. Those measurements explain the dominant wait and whether more connections help or overload the database." },
+  { id: "cpu", text: "Rewrite a 1 ms JSON formatter immediately", feedback: "Even eliminating that work saves at most 1 ms; it does not explain the dominant 18 ms wait." },
+  { id: "all", text: "Set an unlimited connection pool", feedback: "Unlimited concurrency can overwhelm the database and turn a local queue into a larger downstream queue." }
+]} />
+
+</Step>
+
+<Step id="serial" title="Sequential round trips add up">
+
+Five dependent RPCs each taking 20 ms network time and 4 ms remote work cost **5 × (20 + 4) = 120 ms**. The caller cannot send the next request until it has the previous result. Connection reuse saves setup but does not erase these request-response round trips.
+
+Batching can reduce the number of round trips. Fetching five rows in one bounded query may beat five sequential lookups even if the database performs similar total work. Check response size and query cost: an unbounded batch can become a new latency and memory problem.
+
+<VariantQuestion template="latency.serial" />
+
+</Step>
+
+<Step id="parallel" title="Parallel work follows the slowest branch">
+
+If independent calls take 15 ms and 60 ms and start together, a join that requires both takes 60 ms. Add 5 ms of response formatting afterward and the total is **65 ms**, not 80 ms. Draw the dependencies before adding durations.
+
+This improvement requires genuine independence. You cannot fetch an account-specific permission before discovering which account to check, and you should not start side effects speculatively just to shorten a diagram. Parallelism also increases instantaneous load on dependencies, which can lengthen the very durations you are trying to overlap.
+
+<VariantQuestion template="latency.parallel" />
+
+</Step>
+
+<Step id="measure" title="Read the critical path, not the sum of spans">
+
+A distributed trace shows nested and overlapping spans. A 100 ms handler containing two concurrent 70 ms database spans did not necessarily spend 140 ms on the critical path. Summing child durations double-counts overlap. Conversely, a missing span can hide client-side queueing before the first instrumented call.
+
+Measure at the user-visible boundary as well as inside each service. Include failed requests and timeouts in the appropriate latency or availability view. A server's fast completion histogram says little about a client waiting for a lost response.
+
+<Choice id="trace-overlap" objective="calculate-critical-path" prompt="Two 70 ms child spans overlap completely inside a 100 ms parent. What follows?" options={[
+  { id: "overlap", text: "The children contribute 70 ms to that critical path; examine the remaining parent time", correct: true, feedback: "Right. Overlap is counted once on the critical path. Other parent work or waits can explain the remaining 30 ms." },
+  { id: "sum", text: "The parent must really have taken at least 140 ms", feedback: "That treats parallel work as sequential and double-counts the overlap." },
+  { id: "zero", text: "Parallel child work adds no latency", feedback: "The parent still waits for the required children. Parallelism changes the sum to a maximum, not to zero." }
+]} />
+
+</Step>
+
+<Step id="distance" title="Distance remains after faster hardware">
+
+If a remote dependency adds 80 ms of round-trip propagation, shaving a few microseconds from a local lookup will not remove that network floor. Moving computation near the data, caching reusable results, or eliminating a call changes the path itself.
+
+Each option has a cost. A cache can return stale data; a regional replica may lag; a local aggregation service adds operational responsibility. Prefer a measured intervention tied to the requirement. Do not replace correctness with a lower stopwatch reading.
+
+<Choice id="remote-lookup" objective="choose-latency-intervention" prompt="A stable, public catalog is fetched cross-region on every page. The response may be up to one minute old. What directly reduces the network floor?" options={[
+  { id: "local", text: "Cache catalog responses near the reader with a bounded freshness policy", correct: true, feedback: "Right. Local hits avoid the cross-region round trip while the TTL or invalidation policy addresses the stated freshness bound." },
+  { id: "cpu", text: "Double the caller's CPU only", feedback: "More local CPU does not shorten propagation to the remote region." },
+  { id: "timeout", text: "Raise every timeout to ten seconds", feedback: "A longer timeout changes how long the caller waits before failing; it does not make a successful call faster." }
+]} />
+
+</Step>
+
+<Step id="variance" title="Averages do not promise a deadline">
+
+Two services can both average 20 ms while one has nearly constant latency and the other has occasional one-second pauses. A fixed budget is useful for finding large terms, but it cannot predict tail behavior without distributions and correlations.
+
+Separate an idle baseline from loaded behavior. Record payload size, warm or cold state, concurrency and request mix alongside measurements. The next lessons connect arrival rate to waiting and explain why a good mean can hide a bad p99.
+
+<Choice id="benchmark-context" objective="distinguish-latency-costs" prompt="A database benchmark reports 3 ms with one client and warm data. Can you use 3 ms as a production p99 at peak?" options={[
+  { id: "no", text: "No; measure a latency distribution under representative load and data", correct: true, feedback: "Right. The benchmark states one operating point, not the queueing or tail behavior at peak." },
+  { id: "yes", text: "Yes; service time is independent of workload", feedback: "Contention, cache misses and queueing can all change observed latency as load changes." },
+  { id: "multiply", text: "Yes, after multiplying it by an arbitrary safety factor", feedback: "A guessed factor cannot reveal tail shape or a saturation threshold. Use it only as an explicit preliminary assumption, then measure." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Recalculate both sequential and parallel paths with fresh numbers. Score at least 80%, and explain aloud which work overlaps and which remains on the critical path. Include units in your explanation even though the answer box supplies them.
+
+<MasteryCheck templates={["latency.serial", "latency.parallel"]} count={5} />
+
+Continue to [throughput and Little's law](/learn/foundations/throughput), then use the [caching lesson](/learn/building-blocks/caching) to see how avoiding remote work changes database load.
+
+</Step>

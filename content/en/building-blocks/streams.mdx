@@ -1,0 +1,135 @@
+{/*
+id: streams
+slug: streams
+track: building-blocks
+title: "Stream processing and windows"
+description: "Assign events to windows, reason about watermarks and late updates, and size bounded deduplication state without claiming global exactly-once effects."
+objectives:
+  - id: assign-event-window
+    text: Assign event timestamps to aligned half-open tumbling windows
+  - id: handle-late-data
+    text: Calculate state cleanup thresholds and choose a policy for late events
+  - id: bound-stream-state
+    text: Estimate deduplication memory from unique arrival rate and retention
+  - id: preserve-stream-correctness
+    text: Choose keys and sink semantics that keep replay and late corrections safe
+requires: [queues]
+activities: [C, Q]
+limitations:
+  - "Window exercises are mathematical models; no windowing player is registered for this lesson."
+  - "Watermarks estimate event-time progress and do not prove that no older event can arrive."
+  - "The cleanup policy is stated explicitly; runner-specific triggers, idle-input handling and checkpoint protocols can differ."
+sources:
+  - title: "The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost in Massive-Scale, Unbounded, Out-of-Order Data Processing"
+    authors: "Tyler Akidau et al."
+    year: 2015
+    url: "https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/"
+  - title: "Beam Programming Guide"
+    authors: "Apache Beam contributors"
+    year: 2026
+    url: "https://beam.apache.org/documentation/programming-guide/"
+  - title: "Design, Apache Kafka 4.1"
+    authors: "Apache Kafka contributors"
+    year: 2025
+    url: "https://kafka.apache.org/41/design/design/"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 26
+*/}
+
+<Step id="time" title="An event has more than one clock">
+
+An app records a purchase at 12:01, goes offline, then uploads it at 12:08. **Event time** is when the purchase occurred; **processing time** is when the pipeline handles it. Network delay, batching and replay can make their order differ.
+
+If the report asks what customers bought during 12:00–12:05, processing-time grouping would misplace this purchase. Event-time grouping respects its timestamp but needs a policy for late arrival. Validate timestamps at ingestion: an untrusted clock far in the future can distort progress estimates and state retention.
+
+<Choice id="event-vs-processing" objective="assign-event-window" prompt="A purchase occurs at 12:01 and arrives at 12:08. Which time belongs in an event-time revenue report?" options={[
+  { id: "event", text: "12:01, subject to timestamp validation and the late-data policy", correct: true, feedback: "Right. The report groups by when the business event happened, not when the pipeline received it." },
+  { id: "process", text: "12:08, because processing time always replaces event time", feedback: "That would answer when data was processed, which is a different report." },
+  { id: "drop", text: "Neither; any delayed event must be silently discarded", feedback: "Dropping is one possible explicit policy, but delay alone does not dictate it and silent loss can corrupt the report." }
+]} />
+
+</Step>
+
+<Step id="windows" title="A window boundary needs a convention">
+
+A tumbling window is fixed-width and non-overlapping. We use **[start, end)**: include the start and exclude the end. With width 60 seconds and alignment at epoch zero, timestamp 125 belongs to **[120, 180)**. Timestamp 180 belongs to the next window.
+
+The formula is **start = floor(timestamp / width) × width**. State the alignment as well as the width: calendar days in a local timezone are not always 24 hours across daylight-saving transitions. These questions use integer epoch seconds so boundary arithmetic stays explicit.
+
+<VariantQuestion template="streams.window" />
+
+</Step>
+
+<Step id="window-types" title="Choose the grouping the question asks for">
+
+Sliding windows overlap. A five-minute window emitted every minute can include one event in several outputs. Do not sum overlapping outputs as if they counted disjoint events. Session windows instead join activity separated by less than a configured inactivity gap; late data can merge sessions previously thought separate.
+
+Choose a window for the product question, not merely for a convenient timer. Tumbling minutes fit non-overlapping per-minute totals. A rolling five-minute abuse detector needs overlapping or continuously updated state. Session duration needs a gap rule and a policy for late bridging events.
+
+<Choice id="sliding-double-count" objective="preserve-stream-correctness" prompt="An event contributes to five overlapping five-minute windows emitted every minute. Can you sum those window totals to obtain a unique-event total?" options={[
+  { id: "no", text: "No; overlapping outputs can count the same event repeatedly", correct: true, feedback: "Right. Use disjoint windows or a separately defined unique aggregate for totals." },
+  { id: "yes", text: "Yes; every window output contains a disjoint event set", feedback: "Sliding windows overlap by design, so their event sets are not disjoint." },
+  { id: "dedup", text: "Yes, because broker delivery deduplication removes intentional window overlap", feedback: "One legitimately delivered event can belong to multiple windows; delivery deduplication does not change window membership." }
+]} />
+
+</Step>
+
+<Step id="watermark" title="A watermark estimates progress">
+
+A watermark says how far an input estimates event time has progressed. It helps decide when to emit results or clean up old state. It is not a physical barrier preventing an older event from arriving after a slow device reconnects.
+
+For an operator that waits on several inputs, the slowest relevant input can constrain progress. An idle partition may hold the watermark back unless the runner has an explicit idleness policy. Advancing aggressively lowers latency but can classify more events as late; waiting longer improves completeness at the cost of state and delayed results.
+
+<Choice id="watermark-claim" objective="handle-late-data" prompt="A watermark passes 12:05. Which statement is safe?" options={[
+  { id: "estimate", text: "The pipeline estimates event-time progress past 12:05, but older arrivals remain possible", correct: true, feedback: "Right. The late-data policy decides what to do with those older events." },
+  { id: "proof", text: "No event timestamped before 12:05 can ever arrive again", feedback: "Delayed devices, replay and input disorder can still deliver older timestamps." },
+  { id: "wall", text: "Every worker's wall clock is exactly 12:05", feedback: "A watermark is event-time progress information, not a synchronization guarantee for machine clocks." }
+]} />
+
+</Step>
+
+<Step id="late-data" title="Late events need a visible result policy">
+
+Suppose a window ends at event time 120 seconds and allowed lateness is 30 seconds. Under our stated policy, retain state until the watermark reaches **150 seconds**. Events arriving during retention can revise the output; after cleanup they take the configured drop, side-output or reconciliation path.
+
+Separate emission from cleanup. An early result can be useful while it is still provisional. An accumulating update should replace the prior value for that key and window; treating each updated total as a new increment double-counts. Label finality and record dropped late data so the report's completeness is observable.
+
+<VariantQuestion template="streams.retention" />
+
+</Step>
+
+<Step id="dedup" title="Deduplication spends bounded state">
+
+At 500 new IDs/s, retaining IDs for ten minutes holds about **300,000 IDs** at steady rate. With 64 bytes per entry, that is **19.2 MB** before any excluded allocation overhead. Replication and checkpoint copies add more.
+
+Choose a stable event ID rather than a fresh delivery ID. Set retention from the replay and lateness horizon: a duplicate arriving after its ID expires can be accepted again. Unlimited retention is not free, and a short TTL is not a lifetime exactly-once guarantee. Partition deduplication by a key that routes repeated IDs to the same authority.
+
+<VariantQuestion template="streams.dedup-state" />
+
+</Step>
+
+<Step id="sink" title="Replay safety must reach the sink">
+
+A processor can restore its checkpoint and replay input after failure. If it already sent an external payment or incremented a separate database before the crash, replay can repeat that effect. Processing state, input position and sink commit need compatible recovery rules.
+
+For window totals, an idempotent upsert keyed by metric, entity and window can replace a prior total. Include a version rule so an older retry cannot overwrite a newer correction. If the sink accepts only increments, send uniquely identified deltas with atomic deduplication instead of repeatedly adding the entire revised total.
+
+<Choice id="late-correction" objective="preserve-stream-correctness" prompt="A window first emits total 10, then a late event revises it to 12. What should a total-valued sink do?" options={[
+  { id: "replace", text: "Replace the keyed total with 12 using an update version that rejects stale retries", correct: true, feedback: "Right. The new value supersedes the provisional total and replay must not restore an older value." },
+  { id: "add", text: "Add 12 to the stored 10", feedback: "That stores 22 and counts the original ten twice. Full totals are replacements, not deltas." },
+  { id: "new", text: "Use a new random window key on every retry", feedback: "Random keys prevent idempotent replacement and produce multiple records for one logical window." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh window, cleanup-threshold and dedup-state variants. State the timestamp convention, progress measure and retained horizon in each explanation.
+
+<MasteryCheck templates={["streams.window", "streams.retention", "streams.dedup-state"]} count={5} />
+
+Transfer the lesson to a design: give an event ID, partition key, window definition, provisional-output rule, late-data path and sink recovery rule for a revenue counter. These questions model event-time arithmetic; they do not claim the operational sandbox implements a full streaming runner.
+
+</Step>

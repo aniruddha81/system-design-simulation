@@ -1,0 +1,132 @@
+{/*
+id: throughput
+slug: throughput
+track: foundations
+title: "Throughput and Little's law"
+description: "Relate arrival rate, concurrency and mean latency, estimate worker capacity, and recognize a queue that cannot reach steady state."
+objectives:
+  - id: apply-littles-law
+    text: Calculate mean in-flight requests from throughput and mean response time
+  - id: estimate-service-capacity
+    text: Estimate theoretical capacity from worker count and service time
+  - id: identify-unstable-queue
+    text: Identify overload and choose bounded admission rather than unbounded queues
+requires: [latency-numbers]
+activities: [C, Q, R]
+limitations:
+  - "Little's law here uses long-run stable averages and one consistent system boundary."
+  - "Worker capacity assumes independent workers, fixed service time and no shared resource bottleneck."
+sources:
+  - title: "A Proof for the Queuing Formula: L = λW"
+    authors: "John D. C. Little"
+    year: 1961
+    url: "https://doi.org/10.1287/opre.9.3.383"
+  - title: "Handling Overload, Site Reliability Engineering"
+    authors: "Alejandro Forero Cuervo"
+    year: 2016
+    url: "https://sre.google/sre-book/handling-overload/"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 24
+*/}
+
+<Step id="rates" title="Rate is different from time">
+
+Latency asks how long one request takes. **Throughput** asks how many requests finish per unit time. Concurrency counts requests present at once. A service can have high throughput and high latency if many requests run or wait concurrently.
+
+Distinguish offered load from completions. A load generator may send 2,000 requests/s while the service successfully completes 1,200/s, rejects 300/s and accumulates the rest. Label success, error and drop rates separately. Reporting only the send rate makes an overloaded service look faster than it is.
+
+<Choice id="offered-load" objective="identify-unstable-queue" prompt="The client sends 2,000 requests/s and successful completions remain at 1,200/s. Which claim is supported?" options={[
+  { id: "measure", text: "Offered load is 2,000/s; successful throughput is 1,200/s", correct: true, feedback: "Right. You still need error, rejection and queue measurements to account for the remaining arrivals." },
+  { id: "capacity", text: "The service sustains 2,000 successful requests/s", feedback: "Sending a request is not completing it. This confuses offered load with useful throughput." },
+  { id: "latency", text: "Mean latency must be 800 ms", feedback: "Subtracting rates produces another rate, not a duration. Latency requires timing or a valid Little's-law calculation." }
+]} />
+
+</Step>
+
+<Step id="inflight" title="Use Little's law with matching units">
+
+For a stable system, **L = λW**: average requests in the system equal average throughput times average time in the system. Include both queued and active requests if W includes both waiting and processing.
+
+At 2,000 requests/s and 50 ms mean response time, average concurrency is **2,000 × 0.050 = 100 requests**. That does not mean 100 CPU cores. Requests can be waiting for I/O or a connection. Little's law is accounting, not a CPU sizing formula.
+
+<VariantQuestion template="throughput.inflight" />
+
+</Step>
+
+<Step id="boundary" title="Draw the system boundary first">
+
+You can apply the law to a whole service, a database pool or just one queue, but the terms must describe the same boundary. If you count only active database queries, use query service time. If you count requests waiting for a pool slot too, include that wait in W.
+
+Use an appropriate observation interval. A snapshot of 100 requests at one instant is not automatically the long-run average L. A sudden backlog spike also makes a short measurement window misleading: work arriving in one window may complete in another.
+
+<Choice id="law-boundary" objective="apply-littles-law" prompt="A pool reports 40 active queries plus 60 waiting requests on average. Mean time from entering the pool queue to completion is 100 ms. Which L matches that W?" options={[
+  { id: "whole", text: "100 requests, counting waiting and active work", correct: true, feedback: "Right. The response-time boundary starts before pool waiting, so both groups belong in L." },
+  { id: "active", text: "40 requests, counting only active queries", feedback: "That would require a service-time measurement excluding the queue wait." },
+  { id: "waiting", text: "60 requests, counting only waiting requests", feedback: "That would match queue waiting time alone, not the time through query completion." }
+]} />
+
+</Step>
+
+<Step id="capacity" title="Estimate worker capacity, then leave room">
+
+One worker taking a constant 25 ms per job can finish at most 40 jobs/s. Eight independent workers can theoretically finish **320 jobs/s**. This ceiling assumes there is no shared database, CPU, lock or link bottleneck.
+
+Sizing at the ceiling leaves no room for burstiness or slow jobs. A pool that is adequate at the mean may queue badly when service times vary. Benchmark the actual request mix and choose headroom for your latency goal; there is no universal utilization target that works for every workload.
+
+<VariantQuestion template="throughput.capacity" />
+
+</Step>
+
+<Step id="unstable" title="A queue cannot manufacture capacity">
+
+An arrival rate of 500 jobs/s and completion capacity of 400/s adds 100 jobs to the backlog every second while those rates persist. A bigger queue delays rejection but does not make the system stable. Memory eventually fills or requests wait past their useful deadlines.
+
+Use a bounded queue to absorb a finite burst, then drain it with spare capacity. For sustained overload, reduce work, increase the constrained resource, or reject excess arrivals. Track queue age as well as length: 1,000 jobs may be milliseconds or hours of waiting depending on throughput.
+
+<Choice id="unbounded-queue" objective="identify-unstable-queue" prompt="Arrivals stay at 500/s and capacity stays at 400/s. Which change can stop unbounded backlog growth immediately?" options={[
+  { id: "admit", text: "Admit no more than the sustainable rate and reject or defer excess work", correct: true, feedback: "Right. Bounded admission prevents accepted work from growing forever; increasing real capacity is another remedy." },
+  { id: "queue", text: "Double the queue's memory limit", feedback: "That buys time but leaves the positive arrival-minus-completion rate unchanged." },
+  { id: "retry", text: "Retry rejected work immediately without a limit", feedback: "Immediate retries raise offered load during overload and can worsen the backlog." }
+]} />
+
+</Step>
+
+<Step id="closed-loop" title="Do not let the load test hide the queue">
+
+A fixed-concurrency client sends a replacement only after an earlier request finishes. When the service slows, this client sends fewer requests per second. That can be useful for modeling users, but it can also hide overload from an external arrival stream that would keep sending.
+
+A constant-rate arrival test asks a different question: what happens when demand does not politely pause? Use both models deliberately. Record offered load, completions and timeouts alongside latency so a lower send rate is not mistaken for recovery.
+
+<Choice id="load-generator" objective="identify-unstable-queue" prompt="Your ten-client test sends less traffic whenever latency rises. Production receives independently arriving webhooks. What additional test matters?" options={[
+  { id: "open", text: "A bounded, rate-driven arrival test that continues offering the production rate", correct: true, feedback: "Right. It reveals whether backlog, rejection and latency remain controlled when arrivals do not wait for completions." },
+  { id: "ignore", text: "Use only the ten-client test because it cannot queue", feedback: "The test can under-offer load precisely when production would continue accumulating arrivals." },
+  { id: "average", text: "Publish the average latency without the offered rate", feedback: "Latency without load context cannot establish sustainable throughput." }
+]} />
+
+</Step>
+
+<Step id="scale" title="Scaling one tier can expose the next bottleneck">
+
+Adding stateless workers helps only until a shared resource saturates. If every request holds a database connection for 20 ms and the pool has ten usable slots, the pool bounds that path near 500 requests/s under the simplified constant-time model.
+
+Watch where time is spent before scaling. More web workers cannot increase a fixed link's bandwidth or remove a hot-row lock. After any intervention, repeat the same workload and compare completions, queue age and error rate as well as latency.
+
+<Choice id="shared-bottleneck" objective="estimate-service-capacity" prompt="Doubling web workers leaves throughput unchanged while database-pool wait grows. What does that suggest?" options={[
+  { id: "db", text: "The database path or pool is constraining throughput", correct: true, feedback: "Right. Measure query time, occupancy and downstream limits before adding more callers." },
+  { id: "web", text: "Web workers must still be the only bottleneck", feedback: "Their increase did not raise completions, while waiting grew at a shared dependency." },
+  { id: "law", text: "Little's law has stopped applying to stable averages", feedback: "Accounting still holds for a stable boundary; it does not promise that every resource scales linearly." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then observe a queue">
+
+Score at least 80% on fresh concurrency and capacity calculations. Always say whether the time includes waiting and whether the capacity assumes independent workers.
+
+<MasteryCheck templates={["throughput.inflight", "throughput.capacity"]} count={5} />
+
+Open the [sandbox](/sandbox), run a service under increasing arrival rates, and watch completions flatten while waiting rises. Predict the capacity from workers and service time first. Then read [queues and delivery guarantees](/learn/building-blocks/queues) for what happens when accepted work must survive failures.
+
+</Step>

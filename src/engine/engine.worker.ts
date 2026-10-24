@@ -1,5 +1,5 @@
 import { createSimulation, validateDesign } from './index';
-import type { FromWorker, Packet, Simulation, Speed, ToWorker } from './types';
+import type { FromWorker, LiveEdit, Packet, Simulation, Speed, ToWorker } from './types';
 
 // A structural worker scope keeps this module type-checkable without DOM imports.
 const scope = globalThis as unknown as { postMessage(message: FromWorker): void; onmessage: ((event: { data: ToWorker }) => void) | null };
@@ -11,6 +11,7 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let anchorWall = 0, anchorSim = 0, heartbeatAt = 0;
 let currentTime = 0;
 let generation = 0;
+let edits: LiveEdit[] = [];
 const post = (message: FromWorker) => scope.postMessage(message);
 const anchor = () => { anchorWall = performance.now(); anchorSim = currentTime; };
 const emit = () => {
@@ -40,8 +41,9 @@ scope.onmessage = ({ data }) => {
         paused = true; cancelScheduled(); simulation = undefined;
         const issues = validateDesign(data.design, data.scenario);
         if (issues.length) { post({ type: 'invalid', issues }); return; }
-        inputs = data; speed = data.speed; doneSent = false; currentTime = 0;
+        inputs = data; speed = data.speed; doneSent = false; currentTime = 0; edits = structuredClone(data.liveEditLog ?? []);
         simulation = createSimulation(data.design, data.scenario, data.seed, data.settings);
+        simulation.replayEdits(edits);
         post({ type: 'started', runKey: simulation.result().runKey }); heartbeatAt = performance.now(); resume(); break;
       }
       case 'pause': paused = true; cancelScheduled(); break;
@@ -68,6 +70,7 @@ scope.onmessage = ({ data }) => {
         cancelScheduled();
         paused = true; doneSent = false;
         simulation = createSimulation(inputs.design, inputs.scenario, inputs.seed, inputs.settings);
+        simulation.replayEdits(edits);
         currentTime = 0;
         const target = data.cursor;
         const thisGeneration = generation;
@@ -95,6 +98,11 @@ scope.onmessage = ({ data }) => {
         timer = setTimeout(replaySlice, 0); break;
       }
       case 'ping': post({ type: 'pong' }); break;
+      case 'liveEdit': {
+        const reason = simulation?.liveEdit(data.nodeId, data.path, data.value, edit => { edits.push(edit); post({ type: 'editAck', edit }); }) ?? (simulation ? undefined : 'No active run.');
+        if (reason) post({ type: 'editRejected', nodeId: data.nodeId, path: data.path, reason });
+        break;
+      }
     }
   } catch (error) { post({ type: 'error', message: error instanceof Error ? error.message : String(error) }); }
 };

@@ -1,0 +1,133 @@
+{/*
+id: replication
+slug: replication
+track: building-blocks
+title: "Replication and quorums"
+description: "Predict acknowledged-write loss after failover, calculate quorum overlap and failure tolerance, and reason about repair and stale replicas."
+objectives:
+  - id: predict-async-loss
+    text: Estimate acknowledged writes at risk from a specified async replication gap
+  - id: calculate-quorum
+    text: Calculate intersecting read and write sets and majority failure tolerance
+  - id: choose-replication-policy
+    text: Choose acknowledgement and read routing policies for a stated consistency requirement
+  - id: explain-replica-repair
+    text: Distinguish read repair, anti-entropy, hints and tombstone retention
+requires: [availability]
+activities: [C, Q, R]
+limitations:
+  - "Quorum arithmetic uses a fixed replica set; sloppy quorums and membership transitions can invalidate the overlap guarantee."
+  - "Overlap alone does not prove linearizability or resolve concurrent versions."
+  - "Loss estimates use constant write rate and an exactly specified replication gap; no Merkle-tree implementation is taught."
+sources:
+  - title: "Dynamo: Amazon's Highly Available Key-value Store"
+    authors: "Giuseppe DeCandia et al."
+    year: 2007
+    url: "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+  - title: "Log-Shipping Standby Servers, PostgreSQL 18 Documentation"
+    authors: "The PostgreSQL Global Development Group"
+    year: 2025
+    url: "https://www.postgresql.org/docs/18/warm-standby.html"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 27
+*/}
+
+<Step id="copies" title="Copies protect different promises">
+
+A leader orders writes and ships them to followers. Followers can serve reads or take over after failure, but a follower may not yet have a write the leader acknowledged. A read-only replica can improve read capacity without increasing the leader's write capacity.
+
+Synchronous replication waits for a configured replica condition before acknowledging. Asynchronous replication does not wait for remote receipt. Specify whether an acknowledgement means memory receipt, durable log flush or apply: these are different points. Replication also copies accidental deletes, so keep a separate recovery strategy.
+
+<Choice id="ack-policy" objective="choose-replication-policy" prompt="An order acknowledgement must survive loss of the leader's machine. Which condition directly supports that requirement?" options={[
+  { id: "durable", text: "Wait for the required independent replica to durably record the write before acknowledging", correct: true, feedback: "Right. Define the durability boundary and ensure failover selects a replica containing acknowledged writes." },
+  { id: "async", text: "Acknowledge locally and assume the async follower is already current", feedback: "The follower can lag; local acknowledgement does not establish another durable copy." },
+  { id: "backup", text: "Rely only on a daily backup for every new acknowledgement", feedback: "A daily backup cannot include writes committed after that backup and leaves a large recovery-point gap." }
+]} />
+
+</Step>
+
+<Step id="async-loss" title="A successful write can disappear after failover">
+
+The leader accepts 500 writes/s and its only follower is two seconds behind. If the leader and its disk are lost and that follower is promoted, **about 1,000 acknowledged writes** are at risk under the constant-rate model. A rapid failover can restore availability while losing data.
+
+The actual loss depends on the surviving log, promotion policy and durability configuration. Lag measured in bytes or log positions is often more informative than a single time number. Do not infer a hard maximum from an average lag dashboard; a slow tail can be much larger.
+
+<VariantQuestion template="replication.loss" />
+
+</Step>
+
+<Step id="reads" title="Read routing defines the freshness promise">
+
+A user updates an address, then immediately reads from a lagging follower and sees the old value. Replication is working as configured, but read-your-writes is violated for that session. Options include reading from the leader, waiting for the follower to reach the write's log position, or carrying a session-specific consistency token.
+
+Leader reads still require correct leadership and durability handling; a stale former leader is not an authority. Multi-leader replication adds concurrent write conflicts. Decide whether the data permits merging, needs a single writer per key, or requires stronger coordination.
+
+<Choice id="read-own-write" objective="choose-replication-policy" prompt="A user must see their own acknowledged profile change immediately. A random async follower may lag. What is a suitable read policy?" options={[
+  { id: "position", text: "Read from the current leader or a follower known to have applied at least that write", correct: true, feedback: "Right. Tie the read to evidence of the acknowledged version rather than random replica selection." },
+  { id: "random", text: "Always choose any follower regardless of its progress", feedback: "A lagging follower can return the old version immediately after acknowledgement." },
+  { id: "ttl", text: "Promise freshness solely because a DNS TTL is short", feedback: "DNS cache expiry says nothing about a replica's applied log position." }
+]} />
+
+</Step>
+
+<Step id="quorum" title="Overlap requires a strict inequality">
+
+For a fixed set of N replicas, a write that reaches W and a read that consults R must overlap if **R + W > N**. With N = 5 and W = 3, the smallest intersecting R is 3. R = 2 can select the two replicas that missed the write.
+
+Intersection gives the reader contact with at least one member of the acknowledged write set. The protocol still needs to choose the right version, handle incomplete writes and order concurrent writes. Sloppy quorums that substitute other nodes do not automatically satisfy the fixed-set argument.
+
+<VariantQuestion template="replication.quorum" />
+
+</Step>
+
+<Step id="failures" title="Stronger acknowledgements can reduce availability">
+
+For five fixed replicas with majority reads and writes, each operation needs three live participants. Two can be unavailable if the three survivors can communicate. A 2–3 partition leaves only the three-node side able to form that majority.
+
+Lowering a threshold may keep more operations moving but changes the consistency and durability contract. Raising W increases the work required before acknowledgement; raising R increases read coordination. Count available replicas and connectivity for each operation rather than assigning one vague availability number to the whole cluster.
+
+<VariantQuestion template="replication.failures" />
+
+</Step>
+
+<Step id="repair" title="Repair has several paths">
+
+**Read repair** fixes discrepancies discovered while reading. It helps frequently accessed keys, but cold keys may remain divergent. **Anti-entropy** compares replica state in the background; Merkle trees can help locate differing ranges without sending every value.
+
+**Hinted handoff** stores a write intended for an unavailable replica and forwards it later. A hint is not proof the intended replica is current, and hints need their own durability and expiration policy. Conflicting concurrent values still need resolution; last-write-wins depends on ordering timestamps that can be skewed.
+
+<Choice id="cold-repair" objective="explain-replica-repair" prompt="A cold key is never read after one replica misses its update. Why is read repair alone insufficient?" options={[
+  { id: "background", text: "No read discovers the mismatch; background anti-entropy is needed for cold data", correct: true, feedback: "Right. Repair triggered by reads cannot visit an unread key." },
+  { id: "instant", text: "Read repair synchronizes every key continuously", feedback: "Read repair is scoped to data checked by reads; it is not a full background scan." },
+  { id: "hint", text: "A hint guarantees every missed update has already been applied", feedback: "A hint is pending repair work, not evidence that the target replica completed it." }
+]} />
+
+</Step>
+
+<Step id="deletes" title="A deletion needs evidence too">
+
+Deleting a key on one replica cannot simply erase every trace immediately. A stale replica may later offer the old value and resurrect it. A **tombstone** records the deletion so repair can propagate it. Retention must cover the supported outage and repair horizon before safe garbage collection.
+
+Failover also needs fencing: the former leader must not return and accept conflicting writes under an obsolete authority. A timeout suggests failure but cannot prove it. Promotion, write authority and replica catch-up belong in the same recovery design.
+
+<Choice id="tombstone-retention" objective="explain-replica-repair" prompt="A replica is offline longer than the tombstone retention window, then rejoins with an old value. What is the risk?" options={[
+  { id: "resurrection", text: "The old value may be resurrected unless rejoin and repair rules prevent it", correct: true, feedback: "Right. The deletion evidence may be gone, so an obsolete copy can appear to be live data." },
+  { id: "none", text: "There is no risk because deletes never need replication", feedback: "A delete is a state change that must reach other copies, just like a write." },
+  { id: "quorum", text: "Any R + W > N setting automatically solves tombstone garbage collection", feedback: "Set overlap does not specify safe retention or the treatment of replicas returning with old state." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then lose a leader">
+
+Score at least 80% on fresh loss, overlap and failure-tolerance questions. State whether replicas are fixed, what acknowledgement means, and whether the survivors can communicate.
+
+<MasteryCheck templates={["replication.loss", "replication.quorum", "replication.failures"]} count={5} />
+
+In the [sandbox](/sandbox), configure a leader and async follower, write continuously, then lose the leader before catch-up. Inspect acknowledged-write-loss violations as well as latency. Compare a synchronous policy and observe which operations wait or fail when the required follower is unavailable.
+
+For the leaderless case, configure a three-replica KV store with R = 2 and W = 2. Predict which operations remain possible after one replica becomes unavailable, then after two do. Compare the outcome with the fixed-set arithmetic; do not treat a successful overlapping read as proof of a complete linearizability protocol.
+
+</Step>

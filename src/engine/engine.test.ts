@@ -67,8 +67,8 @@ describe('deterministic core', () => {
     const result = runToCompletion(simple(), single(), 17, settings);
     expect({ replayCompatId: REPLAY_COMPAT_ID, resultHash: hash32(JSON.stringify(result)) }).toMatchInlineSnapshot(`
       {
-        "replayCompatId": "exact-p1-2026-10-24.1",
-        "resultHash": 220393151,
+        "replayCompatId": "exact-p2-2026-10-24.2",
+        "resultHash": 3944623023,
       }
     `);
   });
@@ -113,10 +113,10 @@ describe('operational semantics', () => {
     expect(noDrain.metrics.succeeded + noDrain.metrics.failed + noDrain.metrics.unfinished).toBe(2);
   });
   it('uses null metrics for zero traffic and keeps failure and success histograms separate', () => {
-    const d = simple(), s = single(); s.workload.arrival.rps = 0;
+    const d = simple(), s = single(); s.workload.arrival = { kind: 'constant', rps: 0 };
     const r = runToCompletion(d, s, 1, settings);
     expect(r.metrics.goodput).toBeNull(); expect(r.metrics.availability).toBeNull(); expect(r.metrics.retryAmplification).toBeNull(); expect(r.metrics.successLatency.p50).toBeNull();
-    s.workload.arrival.rps = 1; server(d).handlers = { get: [{ type: 'respond', status: 503 }] };
+    s.workload.arrival = { kind: 'constant', rps: 1 }; server(d).handlers = { get: [{ type: 'respond', status: 503 }] };
     const failed = runToCompletion(d, s, 1, settings);
     expect(failed.metrics.successLatency.p50).toBeNull(); expect(failed.metrics.allLatency.p50).not.toBeNull(); expect(failed.metrics.goodput).toBe(0);
   });
@@ -149,7 +149,7 @@ describe('operational semantics', () => {
     d.endpoints[0].idempotent = false; delete call.retry; expect(runToCompletion(d, s, seed, settings).violations).toEqual([]);
   });
   it('stops retry amplification at a deterministic resource ceiling', () => {
-    const d = simple(), s = single(); s.measureUs = 2e6; s.workload.arrival.rps = 1000;
+    const d = simple(), s = single(); s.measureUs = 2e6; s.workload.arrival = { kind: 'constant', rps: 1000 };
     server(d).handlers = { get: [{ type: 'call', target: 'db', timeoutUs: 1, retry: { max: 1000, backoffUs: 0, multiplier: 1, jitter: 'none', retryOn: ['timeout'] } }] };
     server(d).params.concurrency = 1000;
     d.nodes.push({ id: 'db', kind: 'database', label: '', position: { x: 0, y: 0 }, params: { ...q(1000), replicas: 1, readTime: { kind: 'constant', us: 100000 }, writeTime: { kind: 'constant', us: 100000 } } });
@@ -169,7 +169,7 @@ describe('validation and properties', () => {
     const isolated = simple(); isolated.nodes.push({ ...node(), id: 'isolated' });
     expect(validateDesign(isolated, s).map(i => i.code)).toContain('UNREACHABLE_NODE');
     isolated.nodes = [node()]; expect(validateDesign(isolated, s).map(i => i.code)).toContain('NO_TRAFFIC_SOURCE');
-    s.chaos = [{ id: 'a', target: 'server', kind: 'kill', atUs: 1, endUs: 10 }, { id: 'b', target: 'server', kind: 'gray', errorRate: 0, atUs: 5 }];
+    s.chaos = [{ id: 'a', target: 'server', kind: 'kill', atUs: 1, endUs: 10 }, { id: 'b', target: 'server', kind: 'kill', atUs: 5 }];
     expect(validateDesign(simple(), s).map(i => i.code)).toContain('OVERLAPPING_CHAOS');
     s.workload.keys.n = 1_000_001; expect(validateDesign(simple(), s).map(i => i.code)).toContain('INVALID_PARAMETER');
   });
@@ -201,7 +201,7 @@ describe('caching challenge', () => {
     const fail = gradeChallenge(noCacheDesign, cachingChallenge);
     expect(fail.verdict).toBe('fail'); expect(fail.stars).toBe(0);
   }, 30000);
-  it('returns inconclusive for insufficient latency samples and unsupported invariants', () => {
+  it('returns inconclusive for insufficient latency samples with any supported invariant', () => {
     const c = structuredClone(cachingChallenge); c.scenario = single(); c.scenario.workload.mix = { get: 1 }; c.variantChaos = []; c.seeds = [1];
     expect(gradeChallenge(cacheAsideDesign, c).verdict).toBe('inconclusive');
     c.invariants = ['staleRead']; expect(gradeChallenge(cacheAsideDesign, c).verdict).toBe('inconclusive');

@@ -1,0 +1,138 @@
+{/*
+id: partitioning
+slug: partitioning
+track: building-blocks
+title: "Partitioning and consistent hashing"
+description: "Choose a shard key, estimate key movement when a ring grows, and explain why balanced storage does not eliminate hot-key load."
+objectives:
+  - id: choose-shard-key
+    text: Choose range or hash partitioning and calculate an indivisible hot key's load floor
+  - id: estimate-key-movement
+    text: Estimate moved keys when an equal node joins an ideally balanced ring
+  - id: explain-ring-routing
+    text: Route a key to its clockwise owner and explain virtual-node trade-offs
+  - id: plan-rebalancing
+    text: Order a migration that preserves reads and writes during ownership changes
+requires: [estimation]
+activities: [M, C, Q, R]
+limitations:
+  - "Key-movement estimates assume uniform hashes, equal nodes, ideal balance and one owner per key."
+  - "The focused model uses a small synthetic keyspace and models ownership rather than network copying or replica placement."
+  - "Virtual nodes improve statistical balance but do not split a single hot key."
+sources:
+  - title: "Consistent Hashing and Random Trees: Distributed Caching Protocols for Relieving Hot Spots on the World Wide Web"
+    authors: "David Karger, Eric Lehman, Tom Leighton, Rina Panigrahy, Matthew Levine, Daniel Lewin"
+    year: 1997
+    url: "https://doi.org/10.1145/258533.258660"
+  - title: "Dynamo: Amazon's Highly Available Key-value Store"
+    authors: "Giuseppe DeCandia et al."
+    year: 2007
+    url: "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 26
+*/}
+
+<Step id="key" title="A shard key chooses where work lands">
+
+Partitioning splits a dataset across nodes. Replication copies it. A shard key controls routing, locality and which operations need cross-shard coordination. Start with the queries and invariants, not with a preferred hash function.
+
+Putting an account's rows together makes account queries local, but a huge account may dominate its shard. Partitioning by a random row ID spreads writes but can scatter a range query across every shard. There is no universal shard key: choose the locality you need and expose the resulting skew and fan-out.
+
+<Choice id="shard-locality" objective="choose-shard-key" prompt="Most queries fetch all recent events for one tenant, and tenants are reasonably sized. Which initial key keeps those queries local?" options={[
+  { id: "tenant", text: "Tenant ID, with a plan for unusually large tenants", correct: true, feedback: "Right. Tenant locality reduces fan-out, while the large-tenant exception remains a capacity concern." },
+  { id: "random", text: "A new random shard for every event regardless of tenant", feedback: "That spreads load but scatters each tenant's query over the cluster." },
+  { id: "same", text: "One constant key shared by every event", feedback: "A constant key sends all work to one shard and defeats partitioning." }
+]} />
+
+</Step>
+
+<Step id="range" title="Range and hash partitioning fail differently">
+
+Range partitioning keeps adjacent keys together and supports efficient range scans. A timestamp key can send every new write to the newest range. Splitting ranges helps distribute stored data, but an ever-moving write frontier can remain hot.
+
+Hash partitioning spreads distinct keys more evenly but loses natural range locality. A request for all records in a time interval may require scatter-gather. Composite schemes can hash by tenant and range by time within a tenant, but the extra layout should solve a demonstrated workload need.
+
+<Choice id="timestamp-hotspot" objective="choose-shard-key" prompt="All inserts use increasing timestamps and route by timestamp range. One newest shard is overloaded. Why?" options={[
+  { id: "frontier", text: "Current writes concentrate in the active end range", correct: true, feedback: "Right. Balanced historical bytes do not imply balanced current write rate." },
+  { id: "enough", text: "Range partitioning guarantees equal request rate", feedback: "Ranges preserve order; request popularity and insertion patterns determine load." },
+  { id: "replica", text: "Adding read-only replicas must divide the leader's write rate", feedback: "Read replicas can offload reads, but leader writes still need an appropriate partitioning or ingestion strategy." }
+]} />
+
+</Step>
+
+<Step id="ring" title="Follow the ring clockwise">
+
+Simple `hash(key) % N` changes routing for many keys when N changes. Consistent hashing places both keys and node tokens on a circular hash space. A key belongs to the first node token clockwise, wrapping around at the end.
+
+Add a node and only the intervals it takes change owner. Virtual nodes give one physical machine many tokens, reducing sensitivity to one unlucky large interval. They also add routing metadata and migration fragments. Predict which keys move, then use the focused model to add and remove nodes and compare with modulo routing.
+
+<HashRingPlayer seed={7} />
+
+<Choice id="ring-owner" objective="explain-ring-routing" prompt="Tokens are at 10, 40 and 80 on a circular space from 0 to 99. Which token owns a key at 90?" options={[
+  { id: "ten", text: "10, after wrapping around", correct: true, feedback: "Right. Ownership goes to the next token clockwise, including wraparound." },
+  { id: "eighty", text: "80, because it is numerically nearest", feedback: "This routing rule is successor clockwise, not nearest absolute distance." },
+  { id: "forty", text: "40, because it is near the middle", feedback: "The midpoint has no special role; follow clockwise from the key's hash." }
+]} />
+
+</Step>
+
+<Step id="movement" title="Estimate how much data must move">
+
+For N ideally balanced equal nodes, one added node should own about **1 / (N + 1)** of keys after rebalancing. Growing from four to five nodes moves about one fifth of existing keys. With ten million keys, that is approximately **two million** ownership changes.
+
+This is an expectation under balance assumptions, not a guarantee for a small ring. Payload sizes, replication and token placement change copied bytes. A two-million-key migration may move very different volumes if one key holds a large object. Measure bytes and migration bandwidth as well as key counts.
+
+<VariantQuestion template="partitioning.movement" />
+
+</Step>
+
+<Step id="hot-key" title="Balanced keys can still mean unbalanced traffic">
+
+Suppose one celebrity profile receives 30% of 20,000 reads/s. Its owner handles **at least 6,000 reads/s**, even if every other key is perfectly balanced. Virtual nodes redistribute intervals, not requests within that single key.
+
+For reads, replication or a cache can spread demand. For writes, split an aggregatable counter or a tenant's data into subkeys only if the operation permits it. Splitting a key may sacrifice simple ordering or atomic updates, so a salting trick must come with a read and reconciliation plan.
+
+<VariantQuestion template="partitioning.hot-key" />
+
+</Step>
+
+<Step id="rebalance" title="Ownership changes need a data protocol">
+
+Updating the routing map does not copy data. During migration, old and new owners can disagree, and writes can arrive while a snapshot is in transit. A safe design needs a versioned ownership map, a change catch-up path and a defined handoff point.
+
+One approach copies a snapshot, catches up changes, switches ownership under a coordinated protocol, then retains forwarding or fallback during the transition. Exact mechanics depend on the storage system. Rate-limit copying so rebalancing does not consume the spare capacity needed to serve traffic or recover from a failure.
+
+<Ordering id="migration-order" objective="plan-rebalancing" prompt="Order a simplified coordinated shard handoff." items={[
+  { id: "copy", text: "Copy a snapshot while tracking subsequent source changes" },
+  { id: "catchup", text: "Catch up changes and coordinate the final write handoff" },
+  { id: "route", text: "Publish the new ownership version and handle stale clients" },
+  { id: "retire", text: "Retire the old copy only after the safety and rollback window" }
+]} explanation="The destination must be complete at the coordinated handoff. Versioned routing and stale-client handling prevent a map update from exposing an empty or outdated owner." />
+
+</Step>
+
+<Step id="tradeoffs" title="Partitioning moves coordination into the design">
+
+A unique username constraint on one shard is easy to enforce locally. A constraint spanning all shards needs routing to one authority or distributed coordination. Cross-shard joins and transactions also add network and failure cases. Do not shard only because a future scale number sounds large.
+
+Choose the smallest layout that meets measured capacity and growth needs. Make the partition key part of data access patterns and observability: per-shard latency, bytes and key popularity show failures hidden by fleet averages. Keep an escape path for a large tenant before it becomes the whole incident.
+
+<Choice id="global-unique" objective="plan-rebalancing" prompt="Every shard locally enforces unique usernames, but any username may be inserted on any shard. Is global uniqueness guaranteed?" options={[
+  { id: "no", text: "No; route each username to one uniqueness authority or coordinate globally", correct: true, feedback: "Right. Two shards can each accept the same name without seeing the other's local constraint." },
+  { id: "yes", text: "Yes; local uniqueness automatically composes across shards", feedback: "A local constraint sees only local rows, so it cannot reject a conflicting row elsewhere." },
+  { id: "vnodes", text: "Yes, after increasing virtual-node count", feedback: "Virtual nodes affect placement balance, not the scope of a database constraint." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then create a hot shard">
+
+Score at least 80% on fresh movement and hot-key variants. Compare the ideal prediction with the finite focused ring and explain why actual movement varies.
+
+<MasteryCheck templates={["partitioning.movement", "partitioning.hot-key"]} count={5} />
+
+In the [sandbox](/sandbox), compare uniform keys with a concentrated hot key on partitioned storage. Add capacity and observe whether the hot owner remains the bottleneck. The ring model above explains ownership; the sandbox adds service and network costs.
+
+</Step>

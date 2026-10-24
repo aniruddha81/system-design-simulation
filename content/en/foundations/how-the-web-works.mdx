@@ -1,0 +1,159 @@
+{/*
+id: how-the-web-works
+slug: how-the-web-works
+track: foundations
+title: "How the web works"
+description: "Trace a browser request through DNS, TCP, TLS and HTTP, estimate connection setup, and choose a transport for real-time updates."
+objectives:
+  - id: trace-web-request
+    text: Order DNS resolution, connection setup, TLS and an HTTPS request
+  - id: estimate-handshake
+    text: Estimate cold-connection latency from round-trip time and server work
+  - id: compare-http-transports
+    text: Explain how HTTP/2 and HTTP/3 differ when a packet is lost
+  - id: choose-update-transport
+    text: Choose SSE, WebSockets or polling for an update requirement
+requires: []
+activities: [C, Q]
+limitations:
+  - "Handshake estimates exclude packet loss, DNS misses, proxies, certificate fetching and TLS resumption."
+  - "Protocol comparisons describe transport behavior, not a measured browser performance ranking."
+sources:
+  - title: "Domain names - concepts and facilities (RFC 1034)"
+    authors: "P. Mockapetris"
+    year: 1987
+    url: "https://www.rfc-editor.org/rfc/rfc1034"
+  - title: "The Transport Layer Security (TLS) Protocol Version 1.3 (RFC 8446)"
+    authors: "E. Rescorla"
+    year: 2018
+    url: "https://www.rfc-editor.org/rfc/rfc8446"
+  - title: "HTTP/3 (RFC 9114)"
+    authors: "M. Bishop"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9114"
+  - title: "HTTP Semantics (RFC 9110)"
+    authors: "R. Fielding, M. Nottingham, J. Reschke"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9110"
+  - title: "HTTP/2 (RFC 9113)"
+    authors: "M. Thomson, C. Benfield"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9113"
+  - title: "The WebSocket Protocol (RFC 6455)"
+    authors: "I. Fette, A. Melnikov"
+    year: 2011
+    url: "https://www.rfc-editor.org/rfc/rfc6455"
+  - title: "HTML Living Standard: Server-sent events"
+    authors: "WHATWG contributors"
+    year: 2026
+    url: "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 25
+*/}
+
+<Step id="request-path" title="A URL becomes a request">
+
+You enter `https://shop.example/orders/42`. The browser needs an address for the host, a connection to that address, and an authenticated encrypted channel before it sends the HTTP request. The path `/orders/42` goes to the server; a URL fragment after `#` stays in the browser.
+
+For a cold HTTPS request over TCP, the useful order is **DNS → TCP → TLS → HTTP**. A warm browser can reuse cached DNS answers and existing connections, so a waterfall may omit several stages. A fast application cannot compensate for repeated cold setup across a distant network.
+
+<Ordering id="web-request-order" objective="trace-web-request" prompt="Order a fresh HTTPS request over TCP, assuming DNS is not cached." items={[
+  { id: "dns", text: "Resolve the host name to an IP address" },
+  { id: "tcp", text: "Establish a TCP connection" },
+  { id: "tls", text: "Negotiate TLS and authenticate the server" },
+  { id: "http", text: "Send the HTTP request and receive the response" }
+]} explanation="DNS finds an address; TCP establishes transport; TLS authenticates and encrypts; HTTP carries the application request. HTTP/3 combines secure setup with QUIC instead of using TCP." />
+
+</Step>
+
+<Step id="dns" title="DNS answers have a lifetime">
+
+The browser usually asks a recursive resolver. That resolver follows cached answers or asks the authoritative hierarchy. An A record gives an IPv4 address; AAAA gives IPv6; a CNAME points to another name. The record's **TTL** controls how long an answer may be cached.
+
+A low TTL increases query traffic and can help future clients discover a new address sooner. It does not push an update into every browser, close existing connections, or repair a failed backend. During migration, keep both destinations serving while old answers and connections drain.
+
+<Choice id="dns-failover" objective="trace-web-request" prompt="You change a DNS answer during an outage. Why do some users still connect to the old IP?" options={[
+  { id: "cached", text: "They have an unexpired cached answer or an existing connection", correct: true, feedback: "Right. DNS updates affect future resolutions; cached answers and open connections can outlive the change." },
+  { id: "path", text: "DNS cached the HTTP path /orders/42", feedback: "DNS resolves the host name. It does not route individual HTTP paths." },
+  { id: "tls", text: "TLS always pins a domain to one IP forever", feedback: "TLS authenticates identities and negotiates keys; it does not permanently bind the name to an IP." }
+]} />
+
+</Step>
+
+<Step id="handshake" title="Count the round trips before optimizing code">
+
+Use a simple cold-path budget: one RTT for TCP setup, one for a full TLS 1.3 handshake, and one for the HTTP request and first response byte. Add server processing. At 60 ms RTT and 10 ms server work, that is **3 × 60 + 10 = 190 ms** before downloading the response body.
+
+This is a teaching model, not a universal protocol stopwatch. Cached DNS is assumed. Connection reuse removes setup costs; session resumption and early data have different rules. TLS 0-RTT early data can be replayed, so accepting it requires application-level replay safety.
+
+<VariantQuestion template="web.handshake" />
+
+</Step>
+
+<Step id="tls" title="Encryption does not decide permission">
+
+TLS protects data in transit and lets a client authenticate the server's certificate identity. It does not decide whether the signed-in user may read order 42. That authorization check belongs to the application on every protected resource.
+
+A reverse proxy may terminate TLS and open a separate upstream connection. Draw both trust boundaries in an interview. A browser padlock says nothing about encryption between that proxy and the database, nor about whether the handler exposes another customer's record.
+
+<Choice id="tls-authorization" objective="trace-web-request" prompt="HTTPS is working, but changing /orders/42 to /orders/43 reveals another customer's order. What is missing?" options={[
+  { id: "authorization", text: "A server-side check that the caller may access that order", correct: true, feedback: "Right. Secure transport protects the request in flight; the application must authorize access to the requested object." },
+  { id: "dns", text: "A shorter DNS TTL", feedback: "DNS cache lifetime cannot establish ownership of an order." },
+  { id: "http3", text: "An upgrade to HTTP/3", feedback: "Changing transport cannot fix a missing resource authorization check." }
+]} />
+
+</Step>
+
+<Step id="versions" title="Multiplexing changes where requests wait">
+
+HTTP/1.1 commonly uses persistent connections, but browsers usually avoid pipelining; concurrency often requires multiple connections. HTTP/2 multiplexes streams over one TCP connection. A lost TCP segment can delay delivery of later bytes for every stream sharing that connection.
+
+HTTP/3 maps requests onto QUIC streams. Loss on one stream need not block delivery on another stream that has its data. The streams still share network capacity and congestion control, so HTTP/3 does not make loss or congestion free. Measure the workload rather than promising every request becomes faster.
+
+<Choice id="http-loss" objective="compare-http-transports" prompt="A packet carrying one HTTP/3 response stream is lost. What advantage can QUIC offer over HTTP/2 over TCP?" options={[
+  { id: "streams", text: "Other streams can deliver received data without waiting for that stream's missing bytes", correct: true, feedback: "Right. QUIC separates stream delivery; shared congestion control and connection-level limits still apply." },
+  { id: "no-loss", text: "Lost bytes no longer need retransmission", feedback: "Reliable streams still recover missing data. The advantage is avoiding transport delivery blocking across independent streams." },
+  { id: "udp", text: "Using UDP means there is no congestion control", feedback: "QUIC implements congestion control above UDP. UDP alone is not the complete protocol." }
+]} />
+
+</Step>
+
+<Step id="semantics" title="A timeout does not mean nothing happened">
+
+HTTP separates method semantics from transport. GET is intended to be safe; PUT and DELETE are idempotent in their intended effect. POST has no general idempotency guarantee. A connection can fail after a server commits a payment but before the response arrives.
+
+For retried creates, an application can associate an idempotency key with the operation and its durable result. The same key must describe the same request. A transport retry alone cannot establish whether the original side effect happened.
+
+<Choice id="post-timeout" objective="compare-http-transports" prompt="A payment POST times out after the server may have committed it. Which retry plan avoids creating a second payment?" options={[
+  { id: "key", text: "Reuse an application idempotency key whose result is recorded durably", correct: true, feedback: "Right. The server can return the earlier result for the same operation rather than applying the effect again." },
+  { id: "new", text: "Generate a new key for every retry", feedback: "A new key identifies a new operation, so it defeats deduplication of the original payment." },
+  { id: "tcp", text: "Assume TCP failure proves the server rolled back", feedback: "The response can be lost after commit. A failed connection does not reveal transaction outcome." }
+]} />
+
+</Step>
+
+<Step id="updates" title="Choose how updates reach the browser">
+
+Polling is simple when seconds of delay are acceptable; long-polling holds a request until an update or timeout. **SSE** sends a one-way server event stream over HTTP and includes reconnection support. **WebSockets** support messages in both directions after establishing a persistent connection.
+
+For a dashboard that receives updates but sends occasional commands by ordinary HTTP, SSE can be enough. For an interactive game with frequent bidirectional messages, WebSockets are a better fit. Either choice needs bounded buffers, authentication renewal and a reconnect strategy; reconnecting is not proof that missed events were replayed.
+
+<Choice id="dashboard-updates" objective="choose-update-transport" prompt="A status dashboard needs server-to-browser updates every second. User commands are rare HTTP requests. Which is a straightforward fit?" options={[
+  { id: "sse", text: "SSE with event IDs and a defined replay policy", correct: true, feedback: "Right. The main flow is one-way; IDs plus server retention can support recovery after reconnect." },
+  { id: "poll", text: "Poll every millisecond to minimize complexity", feedback: "That creates 1,000 requests/s per client for updates arriving once a second." },
+  { id: "required", text: "WebSockets are mandatory for any server update", feedback: "WebSockets are useful for bidirectional traffic, but HTTP streaming and polling also deliver server updates." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Estimate a new cold-connection budget, then explain which terms disappear on a reused connection. A score of at least 80% on fresh variants marks numerical mastery. Keep the protocol distinctions from the choices in your design explanation: naming, transport, encryption and application semantics solve different problems.
+
+<MasteryCheck templates={["web.handshake"]} count={5} />
+
+Continue to [latency numbers](/learn/foundations/latency-numbers) to budget a whole request path rather than just connection setup.
+
+</Step>

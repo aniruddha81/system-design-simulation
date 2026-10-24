@@ -1,0 +1,128 @@
+{/*
+id: bandwidth
+slug: bandwidth
+track: foundations
+title: "Bandwidth, saturation and egress"
+description: "Convert bytes to link demand, budget propagation and transfer time, and predict how compression and edge caching change origin traffic and egress."
+objectives:
+  - id: calculate-transfer-time
+    text: Calculate serialization time with consistent bit and byte units
+  - id: size-link-and-egress
+    text: Estimate aggregate bandwidth and a stated egress charge
+  - id: relieve-link-saturation
+    text: Choose compression, caching or capacity for a saturated link
+requires: [latency-numbers]
+activities: [C, Q, R]
+limitations:
+  - "Transfer arithmetic uses decimal units and excludes headers, retransmissions and TCP congestion dynamics."
+  - "Egress prices are hypothetical inputs, not current provider quotes; cache hits can still incur edge egress charges."
+sources:
+  - title: "Transmission Control Protocol (TCP) (RFC 9293)"
+    authors: "W. Eddy, editor"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9293"
+  - title: "HTTP Caching (RFC 9111)"
+    authors: "R. Fielding, M. Nottingham, J. Reschke"
+    year: 2022
+    url: "https://www.rfc-editor.org/rfc/rfc9111"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 24
+*/}
+
+<Step id="units" title="A byte is eight bits">
+
+Network links are commonly sold in bits per second; response sizes are commonly measured in bytes. In this lesson **1 MB = 1,000,000 bytes**, while **1 Mbit = 1,000,000 bits**. A 100 Mbit/s link has an ideal payload ceiling of 12.5 MB/s before protocol overhead.
+
+Do not silently substitute binary units. A MiB is 1,048,576 bytes, and a GiB is 1,073,741,824 bytes. Neither is wrong, but mixing them makes capacity and cost estimates disagree. Write units beside each input and cancel them in the formula.
+
+<Choice id="bit-byte" objective="calculate-transfer-time" prompt="What is the ideal decimal MB/s payload rate of an 80 Mbit/s link before overhead?" options={[
+  { id: "ten", text: "10 MB/s", correct: true, feedback: "Right. Divide bits per second by eight to get bytes per second." },
+  { id: "eighty", text: "80 MB/s", feedback: "That treats a byte as one bit and overstates capacity eightfold." },
+  { id: "sixforty", text: "640 MB/s", feedback: "Multiplying by eight converts in the wrong direction. There are fewer bytes than bits for the same data." }
+]} />
+
+</Step>
+
+<Step id="transfer" title="Separate serialization from propagation">
+
+Putting 50 MB onto an idle 100 Mbit/s link takes **50 × 8 / 100 = 4 seconds**. That is serialization time. Propagation, setup, queueing and server work are additional terms. A small response may be dominated by propagation; a large download may be dominated by bytes divided by bandwidth.
+
+Buying a faster link reduces serialization but cannot make a signal travel instantly between continents. Moving a cached copy closer can reduce propagation and the long-haul transfer demand at once. The best intervention depends on which term dominates.
+
+<VariantQuestion template="bandwidth.transfer" />
+
+</Step>
+
+<Step id="load" title="Aggregate traffic saturates a shared link">
+
+At 1,000 responses/s and 50 kB per response, payload demand is **50 MB/s = 400 Mbit/s**. A 100 Mbit/s outbound link cannot carry that sustained rate. More application workers cannot change this ceiling; they can only enqueue bytes faster.
+
+Leave headroom for bursts and overhead. Request and response directions can have different sizes and bottlenecks. A service with tiny GET requests and large images may have low inbound bandwidth while outbound serialization dominates latency.
+
+<VariantQuestion template="bandwidth.load" />
+
+</Step>
+
+<Step id="queue" title="Bandwidth contention becomes latency">
+
+Suppose ten 10 MB responses share a 10 MB/s FIFO link. The bytes take ten seconds to serialize in total, even if every handler finishes its CPU work immediately. The last response waits behind earlier bytes. A low CPU chart does not imply a fast service.
+
+Bound queued bytes, not just request counts, when payload sizes vary widely. One large export can consume more memory and link time than thousands of metadata responses. Separate bulk traffic or apply fair scheduling when small interactive requests must retain a deadline.
+
+<Choice id="link-bottleneck" objective="relieve-link-saturation" prompt="CPU is 20%, but outbound link utilization is pinned and response queues grow. Which action directly addresses the bottleneck?" options={[
+  { id: "bytes", text: "Reduce outbound bytes or increase usable outbound link capacity", correct: true, feedback: "Right. Compression, cache placement or a larger link can change the bytes-to-capacity ratio." },
+  { id: "workers", text: "Add web workers without changing traffic or networking", feedback: "More producers cannot raise a shared link's byte rate and may grow its queue." },
+  { id: "timeout", text: "Lengthen timeouts and call the problem fixed", feedback: "That permits longer waiting while leaving the sustained byte deficit unchanged." }
+]} />
+
+</Step>
+
+<Step id="compression" title="Compression trades CPU for fewer bytes">
+
+Compression helps when the saved transfer and queueing time exceeds compression cost. Text and repeated JSON often compress well; already compressed video or images may not. Measure size reduction and CPU at realistic concurrency before applying it to every response.
+
+For public versioned static assets, edge caching moves delivery away from the origin. An origin shield can collapse misses from many edges. Cache keys must include representation differences, and private responses need explicit policies to avoid exposing one user's data to another.
+
+<Choice id="cdn-choice" objective="relieve-link-saturation" prompt="Public versioned JavaScript bundles dominate origin egress. Which change is a strong fit?" options={[
+  { id: "cdn", text: "Compress once and cache immutable versioned assets at the edge", correct: true, feedback: "Right. Reuse reduces origin fetches, while compression reduces bytes delivered. Verify cache keys and content encoding." },
+  { id: "private", text: "Cache every authenticated response under its path alone", feedback: "Different users can receive different data at the same path. A shared path-only cache can leak private responses." },
+  { id: "recompress", text: "Recompress every already compressed image at maximum effort", feedback: "That can consume CPU for little size reduction. Measure format-specific benefit first." }
+]} />
+
+</Step>
+
+<Step id="egress" title="A cache hit changes who sends the bytes">
+
+Cost is **billable GB × price per GB**, with extra terms for requests, storage and other contract details. If a hypothetical agreement charges 8 cents/GB and 10,000 GB leave the origin, that component costs **$800**. This is arithmetic with a supplied price, not a vendor quote.
+
+A CDN can reduce origin egress while still billing for delivery from the edge to the user. Distinguish origin-to-edge traffic, user delivery and cross-region replication. Do not claim a 90% origin cache hit rate removes 90% of all network bills.
+
+<VariantQuestion template="bandwidth.egress" />
+
+</Step>
+
+<Step id="tradeoff" title="Choose a complete bandwidth intervention">
+
+An origin shield reduces repeated upstream misses but adds another hop on a miss. Compression lowers bytes but can raise compute use. A larger link buys capacity but still needs overload handling. Each decision should preserve freshness, privacy and response-time requirements.
+
+Predict the new byte rate first, then observe link queueing and errors. A change that lowers average egress but synchronizes cache expiry may still create a burst that overwhelms the origin. Use staggered expiry or request coalescing where repeated misses are possible.
+
+<Choice id="egress-accounting" objective="size-link-and-egress" prompt="A CDN serves 90% of requests from its cache. Which cost statement is justified without a contract?" options={[
+  { id: "origin", text: "Origin fetch traffic may fall substantially, but edge delivery can still be billable", correct: true, feedback: "Right. Identify each billable traffic path and price before calculating total savings." },
+  { id: "free", text: "All delivery is now 90% cheaper", feedback: "Origin hit rate alone does not specify edge delivery prices, request charges or byte-weighted hit rate." },
+  { id: "zero", text: "Cache hits transmit zero bytes to users", feedback: "The response still crosses a link from the edge to the user; only its source changed." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery, then saturate a link">
+
+Score at least 80% on fresh transfer, aggregate bandwidth and cost variants. Keep byte and bit units explicit, and separate quoted assumptions from measured values.
+
+<MasteryCheck templates={["bandwidth.transfer", "bandwidth.load", "bandwidth.egress"]} count={5} />
+
+Open the [sandbox](/sandbox), choose a large response payload and constrain the response link. Raise traffic until link waiting grows. Reduce response size, then compare latency and completed throughput at the same arrival rate. The link model demonstrates serialization and contention; it does not simulate TCP's congestion window.
+
+</Step>

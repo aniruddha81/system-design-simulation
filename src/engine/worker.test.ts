@@ -54,4 +54,23 @@ describe('worker protocol', () => {
     const done = messages.find((m): m is Extract<FromWorker, { type: 'done' }> => m.type === 'done');
     expect(done?.result).toEqual(runToCompletion(cacheAsideDesign, scenario, 3, { traceSampleRate: 1 }));
   });
+  it('acknowledges live edits at the next boundary, rejects structural edits, and replays the edited run', async () => {
+    send(start()); send({ type: 'pause' });
+    send({ type: 'liveEdit', nodeId: 'svc1', path: 'concurrency', value: 8 });
+    expect(messages.some(m => m.type === 'editAck')).toBe(false);
+    send({ type: 'step', by: 'event' });
+    const ack = messages.find((m): m is Extract<FromWorker, { type: 'editAck' }> => m.type === 'editAck')!;
+    expect(ack).toBeDefined();
+    send({ type: 'liveEdit', nodeId: 'missing', path: 'concurrency', value: 8 });
+    expect(messages.some(m => m.type === 'editRejected')).toBe(true);
+    send({ type: 'resume' }); await vi.runAllTimersAsync();
+    const first = messages.find((m): m is Extract<FromWorker, { type: 'done' }> => m.type === 'done')!.result;
+    send({ type: 'replayTo', cursor: ack.edit.cursor }); await vi.runAllTimersAsync();
+    send({ type: 'resume' }); await vi.runAllTimersAsync();
+    const done = messages.filter((m): m is Extract<FromWorker, { type: 'done' }> => m.type === 'done');
+    expect(done.at(-1)!.result).toEqual(first);
+    const input = start(); if (input.type !== 'start') throw Error('start'); input.liveEditLog = [ack.edit]; send(input); await vi.runAllTimersAsync();
+    const restored = messages.filter((m): m is Extract<FromWorker, { type: 'done' }> => m.type === 'done').at(-1)!.result;
+    expect(restored).toEqual(first);
+  });
 });

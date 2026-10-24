@@ -1,0 +1,132 @@
+{/*
+id: availability
+slug: availability
+track: foundations
+title: "Availability nines"
+description: "Turn nines into a downtime or request budget, define the success boundary, and reason about dependencies and shared failure domains."
+objectives:
+  - id: convert-nines
+    text: Convert an availability target into downtime over a specified window
+  - id: define-availability-sli
+    text: Define eligible successful requests and calculate their error budget
+  - id: reason-about-redundancy
+    text: Explain why redundancy depends on independence and usable failover
+requires: []
+activities: [C, Q]
+limitations:
+  - "Time-based downtime and request-based failure budgets are different measures and are not interchangeable."
+  - "Dependency arithmetic requires explicit independence and failover assumptions; no correlated-failure distribution is modeled."
+sources:
+  - title: "Service Level Objectives, Site Reliability Engineering"
+    authors: "Chris Jones, John Wilkes, Niall Murphy, Cody Smith"
+    year: 2016
+    url: "https://sre.google/sre-book/service-level-objectives/"
+  - title: "Embracing Risk, Site Reliability Engineering"
+    authors: "Marc Alvidrez"
+    year: 2016
+    url: "https://sre.google/sre-book/embracing-risk/"
+reviewedBy: "K1 content review"
+lastReviewed: "2026-10-24"
+revision: 1
+estimatedMinutes: 22
+*/}
+
+<Step id="success" title="Available for whom, doing what?">
+
+A process can answer health checks while users cannot place orders. Start with a user-visible **service-level indicator**, or SLI: for example, eligible checkout requests that return a correct result within two seconds, divided by all eligible checkout requests.
+
+Define eligibility before looking at the graph. Specify how invalid input, intentional rate limiting, timeouts and dependency failures count. A service-level objective, or SLO, gives that indicator a target and window. An SLA is a contractual commitment and may have different exclusions or consequences.
+
+<Choice id="availability-boundary" objective="define-availability-sli" prompt="Every health check succeeds, but valid checkout requests time out. Which SLI best reflects checkout availability?" options={[
+  { id: "user", text: "The share of eligible checkout requests returning correct results within the deadline", correct: true, feedback: "Right. The boundary matches the user's operation rather than just process liveness." },
+  { id: "process", text: "The share of machines with a running process", feedback: "A running process can still fail the user's operation through dependency or correctness problems." },
+  { id: "cpu", text: "One minus average CPU utilization", feedback: "CPU utilization measures resource use, not the proportion of successful user operations." }
+]} />
+
+</Step>
+
+<Step id="downtime" title="Convert nines to a time budget">
+
+Three nines means **99.9% available**, so the unavailable fraction is **0.001**. Over exactly 30 days, the time budget is **30 × 24 × 60 × 0.001 = 43.2 minutes**. Four nines permits one tenth as much downtime over the same window.
+
+Always state the window. Calendar months differ in length; a 365-day year has 525,600 minutes. An uptime percentage without its measurement interval and definition cannot tell you how much interruption was allowed.
+
+<VariantQuestion template="availability.downtime" />
+
+</Step>
+
+<Step id="requests" title="A request budget is a different denominator">
+
+At a request-based 99.9% SLO, ten million eligible requests allow **10,000 unsuccessful requests**. A five-minute outage at peak can burn more budget than a longer outage overnight. That is why request success and elapsed uptime need separate labels.
+
+Measure what matters to the operation. If a fast HTTP 200 contains a corrupt result, counting it as a success can hide a correctness incident. If a deadline is part of the promise, a late response is unsuccessful for that SLI even when the server eventually finishes.
+
+<VariantQuestion template="availability.requests" />
+
+</Step>
+
+<Step id="budget" title="Use the error budget to make a decision">
+
+The error budget is the permitted unsuccessful share: **1 − SLO**. It is a planning tool, not a target for how many requests to break. A release that consumes budget rapidly should trigger investigation and the team's agreed response.
+
+Compare budget use with elapsed time. If half of a monthly budget disappears in one hour, the burn rate is far above a sustainable pace. A healthy monthly aggregate can also hide a severe regional outage; segment important user groups and operations.
+
+<Choice id="budget-response" objective="define-availability-sli" prompt="A new release consumes half the monthly error budget in its first hour. What is a sensible response?" options={[
+  { id: "act", text: "Investigate immediately and use the agreed rollback or mitigation policy", correct: true, feedback: "Right. Rapid budget consumption is an early warning even before the monthly target is missed." },
+  { id: "wait", text: "Wait until the last minute of the month to inspect the aggregate", feedback: "Waiting permits avoidable failures and makes the remaining budget harder to preserve." },
+  { id: "exclude", text: "Redefine failed requests as ineligible after seeing the incident", feedback: "Changing the denominator after the fact hides the incident instead of improving the user experience." }
+]} />
+
+</Step>
+
+<Step id="dependencies" title="Every required dependency can fail the request">
+
+If a request needs two independent services, each available 99.9% at the same measurement boundary, their joint availability is **0.999 × 0.999 = 0.998001**, or 99.8001%. A chain of individually good dependencies can miss a stronger end-to-end promise.
+
+This multiplication requires independence and matching definitions. Shared power, DNS, identity or deployment failures break that assumption. Optional features can sometimes degrade gracefully: an unavailable recommendation service need not prevent checkout if the product contract allows recommendations to be omitted.
+
+<Choice id="dependency-contract" objective="reason-about-redundancy" prompt="Checkout currently fails when optional recommendations fail. Which change can improve checkout availability directly?" options={[
+  { id: "degrade", text: "Allow checkout to proceed with recommendations omitted under a bounded deadline", correct: true, feedback: "Right. Removing a nonessential dependency from the required success path reduces the failures that block checkout." },
+  { id: "average", text: "Average the dependencies' uptime percentages", feedback: "Averaging does not describe the success of a request that requires both dependencies." },
+  { id: "infinite", text: "Wait indefinitely for recommendations", feedback: "Indefinite waiting violates checkout deadlines and consumes concurrency." }
+]} />
+
+</Step>
+
+<Step id="redundancy" title="Two copies need separate failure domains">
+
+With two independent replicas and perfect switching, either surviving copy can serve, so simultaneous unavailability is the product of their unavailability fractions. Real failover takes detection time, routing changes and recovery, and the surviving copy needs enough capacity for the full load.
+
+Two replicas on the same host share its power, disk controller and operating system. Two regions can still share a bad configuration rollout or global authentication dependency. Draw the shared components and practice failover instead of claiming extra nines from replica count alone.
+
+<Choice id="same-host" objective="reason-about-redundancy" prompt="Two replicas run on one physical machine. Why can you not square the machine's failure probability to predict their joint outage?" options={[
+  { id: "shared", text: "The machine failure takes down both replicas, so their outages are correlated", correct: true, feedback: "Right. Multiplying independent probabilities is unjustified for a shared host failure." },
+  { id: "twice", text: "Two processes always halve every kind of outage", feedback: "Process redundancy does not survive failure of their shared physical host." },
+  { id: "traffic", text: "Availability depends only on total request rate", feedback: "Load matters, but hardware and shared dependencies can also make the operation unavailable." }
+]} />
+
+</Step>
+
+<Step id="durability" title="Available data is not necessarily durable data">
+
+**Availability** asks whether an operation succeeds now. **Durability** asks whether acknowledged data survives failures. A system can respond quickly after failover while silently losing the last seconds of async-replicated writes. It may look available while violating a durability promise.
+
+Backups address another part of the problem: a replica can faithfully copy an accidental delete. Specify recovery point objective, the acceptable data-loss interval, and recovery time objective, the acceptable restoration delay. Test restores; a successful backup job alone does not prove recovery works.
+
+<Choice id="durability-loss" objective="reason-about-redundancy" prompt="Failover restores responses in ten seconds but loses a minute of acknowledged orders. What must the design review record?" options={[
+  { id: "both", text: "Both the availability interruption and the acknowledged-data loss", correct: true, feedback: "Right. Recovery time and recovery point describe different consequences and both affect the user contract." },
+  { id: "none", text: "No incident, because the service eventually responded", feedback: "A later response does not restore the missing orders or erase the earlier interruption." },
+  { id: "backup", text: "A replica count alone proves backups are unnecessary", feedback: "Replicas can copy corruption or deletion. Recovery requires a separate, tested strategy." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+Score at least 80% on fresh time and request budgets. Say the denominator and the window before giving a percentage. A numerical budget is useful only when the success definition matches the user-visible operation.
+
+<MasteryCheck templates={["availability.downtime", "availability.requests"]} count={5} />
+
+Continue to [replication and quorums](/learn/building-blocks/replication) to see how acknowledgement rules trade data safety against availability during failures.
+
+</Step>
