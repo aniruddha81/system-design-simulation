@@ -4,7 +4,7 @@ import { nextCookies } from "better-auth/next-js";
 import { getDb } from "./db";
 import * as schema from "./db/schema";
 import { env } from "./env";
-import { accountEmail, emailConfigured, sendEmail } from "./email";
+import { accountEmail, emailEnforced, sendEmail } from "./email";
 
 const e = env();
 const social = {
@@ -18,14 +18,14 @@ export const auth = betterAuth({
   database: drizzleAdapter(getDb(), { provider: "pg", schema }),
   emailAndPassword: {
     enabled: true, minPasswordLength: 10, maxPasswordLength: 128,
-    requireEmailVerification: emailConfigured(),
+    requireEmailVerification: emailEnforced(),
     revokeSessionsOnPasswordReset: true,
     sendResetPassword: async ({ user, url }) => {
       await sendEmail({ to: user.email, ...accountEmail("Reset your password", url) });
     },
   },
   emailVerification: {
-    sendOnSignUp: emailConfigured(),
+    sendOnSignUp: emailEnforced(),
     sendVerificationEmail: async ({ user, url }) => {
       await sendEmail({ to: user.email, ...accountEmail("Verify your email", url) });
     },

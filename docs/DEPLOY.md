@@ -30,6 +30,16 @@ flowchart LR
 
 Copy `.env.example` to `.env.local` for development. Never commit real values.
 
+## Email (Resend)
+
+Development uses the sandbox sender `onboarding@resend.dev`, which Resend delivers only to the account owner. The app detects it (`emailSandbox()` in `src/server/email.ts`) and never requires verification while it is in use, so no user can be locked out.
+
+To email real users:
+
+1. `resend domains create --name your-domain.com --region ap-northeast-1` (closest sending region to Bangladesh), add the DNS records it prints, then `resend domains verify <id>` until it reports verified.
+2. Set `EMAIL_FROM="System Design Simulator <noreply@your-domain.com>"` and a send-only key (`resend api-keys create --name production --permission sending_access`) as `RESEND_API_KEY` in the host's environment.
+3. From then on sign-up requires a verified email and password-reset mails go out. Users who signed up earlier must verify before their next sign-in.
+
 ## Release steps
 
 1. Set the variables above in the Vercel project (Production and Preview).
