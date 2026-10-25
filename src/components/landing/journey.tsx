@@ -144,10 +144,12 @@ export function Journey() {
   return (
     <JourneyScroller
       stage={
-        <figure className="panel paper-grid overflow-hidden p-3 sm:p-5">
-          <Drawing layout={WIDE} notes={notes} times={times} className="hidden w-full md:block" />
-          <Drawing layout={TALL} notes={notes} times={times} className="block w-full md:hidden" />
-          <figcaption className="figcap mt-2 hidden md:block">
+        <figure>
+          <div className="panel paper-grid overflow-hidden p-3 sm:p-5">
+            <Drawing layout={WIDE} notes={notes} times={times} className="hidden w-full md:block" />
+            <Drawing layout={TALL} notes={notes} times={times} className="block w-full md:hidden" />
+          </div>
+          <figcaption className="figcap mt-3 hidden md:block">
             <b>Fig. 2</b>Cold read, then warm. {t.ops.join(", ")}.
           </figcaption>
         </figure>
@@ -155,8 +157,8 @@ export function Journey() {
     >
       {steps.map((s, i) => (
         <li key={s.title} data-step={i} className="relative pb-[30vh] pl-5 last:pb-[18vh] md:pb-[42vh] md:pl-7 md:last:pb-[24vh]">
-          <span aria-hidden data-step-rule className="absolute bottom-0 left-0 top-1 w-0.5 origin-top bg-border" />
-          <span aria-hidden data-step-ink className="absolute bottom-0 left-0 top-1 w-0.5 origin-top bg-accent" />
+          <span aria-hidden data-step-rule className="absolute inset-y-0 left-0 w-0.5 origin-top bg-border" />
+          <span aria-hidden data-step-ink className="absolute inset-y-0 left-0 w-0.5 origin-top bg-accent" />
           <p className="flex items-baseline gap-3 font-mono text-[0.8125rem] text-muted">
             <span className="text-accent">{s.kicker}</span>
             <span className="num">{i < 3 ? "before the data centre" : times[i]}</span>

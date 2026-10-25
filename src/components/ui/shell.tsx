@@ -206,7 +206,7 @@ function MobileMenuInner({ pathname = "" }: { pathname?: string }) {
   const current = ALL_NAV.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
 
   return (
-    <details ref={detailsRef} className="group relative lg:hidden">
+    <details ref={detailsRef} className="group relative xl:hidden">
       <summary
         aria-label="Open navigation menu"
         className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-[var(--radius)] border border-rule bg-surface px-2.5 text-xs font-medium text-fg transition-colors hover:border-fg [&::-webkit-details-marker]:hidden"

@@ -64,22 +64,22 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
             <nav
               aria-label="Main"
-              className="mx-auto flex h-13 max-w-7xl flex-nowrap items-center justify-between gap-2 px-3 sm:gap-4 sm:px-6 lg:grid lg:grid-cols-[1fr_auto_1fr]"
+              className="mx-auto flex h-13 max-w-7xl flex-nowrap items-center justify-between gap-2 px-3 sm:gap-4 sm:px-6 xl:grid xl:grid-cols-[auto_1fr_auto]"
             >
               <Link
                 href="/"
                 aria-label="System Design Simulator, home"
-                className="group flex min-w-0 shrink-0 items-center gap-2 py-1 sm:gap-2.5 lg:justify-self-start"
+                className="group flex min-w-0 shrink-0 items-center gap-2 py-1 sm:gap-2.5 xl:justify-self-start"
               >
                 <Logo />
                 <span className="hidden truncate font-display text-[1rem] sm:inline leading-none tracking-tight sm:text-[1.125rem]">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
-              <div className="hidden min-w-0 items-center justify-center lg:flex lg:justify-self-center">
+              <div className="hidden min-w-0 items-center justify-center xl:flex xl:justify-self-center">
                 <NavLinks />
               </div>
-              <div className="ml-auto flex shrink-0 items-center justify-end gap-1.5 sm:gap-2 lg:ml-0 lg:justify-self-end">
+              <div className="ml-auto flex shrink-0 items-center justify-end gap-1.5 sm:gap-2 xl:ml-0 xl:justify-self-end">
                 <CommandPalette />
                 <ThemeToggle />
                 <UserMenu />

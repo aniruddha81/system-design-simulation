@@ -95,16 +95,16 @@ export default function Home() {
             <p className="max-w-[34rem] text-lg leading-relaxed text-ink-2 lg:text-[1.1875rem]">
               Lessons, a simulator and graded challenges, all in your browser.
             </p>
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Link href={CACHING_LESSON} className="btn btn-primary h-12 px-5 text-base">
+            <div className="mt-8 grid max-w-[22rem] gap-3">
+              <Link href={CACHING_LESSON} className="btn btn-primary h-12 w-full px-5 text-base">
                 Start the caching lesson
               </Link>
-              <Link href="/sandbox" className="btn h-12 px-5 text-base">
+              <Link href="/sandbox" className="btn h-12 w-full px-5 text-base">
                 Open the sandbox
               </Link>
               <Link
                 href={CHALLENGE}
-                className="group inline-flex min-h-12 items-center gap-1.5 px-2 font-medium text-accent underline decoration-1 underline-offset-4 hover:decoration-2"
+                className="group inline-flex min-h-12 items-center gap-1.5 justify-self-start font-medium text-accent underline decoration-1 underline-offset-4 hover:decoration-2"
               >
                 Try the challenge
                 <span aria-hidden className="transition-transform group-hover:translate-x-0.5">
@@ -195,7 +195,7 @@ export default function Home() {
                   {i < STEPS.length - 1 && (
                     <svg viewBox="0 0 200 12" preserveAspectRatio="none" className="hidden h-3 flex-1 overflow-visible md:block">
                       <Strokes
-                        d={sketch.line(4, 6, 196, 6, 210 + i, { roughness: 1.4 })}
+                        d={sketch.line(4, 6, 196, 6, 210 + i, { roughness: 0, disableMultiStroke: true })}
                         strokeWidth="1.5"
                         strokeDasharray="6 7"
                         vectorEffect="non-scaling-stroke"

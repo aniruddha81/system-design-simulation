@@ -464,10 +464,10 @@ export function HeroSim({ strokes: s, engineVersion }: { strokes: Record<string,
               sub={read?.cache === "down" ? "unavailable" : read?.cache === "refilling" ? "restarted empty" : "LRU · 2 MB"}
               subClass={read?.cache === "down" ? "fill-danger font-medium" : read?.cache === "refilling" ? "fill-warning font-medium" : undefined}
             />
-            <rect x={N.db.x + 8} y={N.db.y + 39} width={N.db.w - 16} height="58" rx="2" className="fill-surface" />
-            <Label box={{ ...N.db, y: N.db.y + 30 }} title="Database" sub={read ? `${Math.round(busy * 100)}% busy` : "5 workers"} />
+            <rect x={N.db.x + 8} y={N.db.y + 35} width={N.db.w - 16} height="52" rx="2" className="fill-surface" />
+            <Label box={{ ...N.db, y: N.db.y + 26 }} title="Database" sub={read ? `${Math.round(busy * 100)}% busy` : "5 workers"} />
             {read && (
-              <text x={N.db.x + 12} y={N.db.y + 92} className={`font-mono text-[11px] ${heat >= 3 ? "fill-danger font-medium" : "fill-muted"}`}>
+              <text x={N.db.x + 12} y={N.db.y + 84} className={`font-mono text-[11px] ${heat >= 3 ? "fill-danger font-medium" : "fill-muted"}`}>
                 {loadWord(busy)}
               </text>
             )}
@@ -528,7 +528,7 @@ function Label({ box, title, sub, subClass }: { box: Box; title: string; sub: st
       <text x={x} y={box.y + 26} className="fill-fg text-[16px] font-semibold">
         {title}
       </text>
-      <text x={x} y={box.y + 45} className={`font-mono text-[12px] ${subClass ?? "fill-muted"}`}>
+      <text x={x} y={box.y + 45} className={`font-mono text-[11px] ${subClass ?? "fill-muted"}`}>
         {sub}
       </text>
     </>
