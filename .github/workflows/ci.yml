@@ -1,4 +1,4 @@
-name: ci
+name: ci-cd
 on:
   push:
     branches: [release]
@@ -38,3 +38,29 @@ jobs:
       - run: npm run db:migrate
         env:
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+
+  deploy:
+    # Builds the Docker image on the runner and ships it to EC2 with deploy/deploy.sh. Needs the EC2_SSH_KEY repo secret (contents of sds-prod.pem).
+    if: github.ref == 'refs/heads/release' && github.event_name == 'push'
+    needs: [verify, migrate]
+    runs-on: ubuntu-latest
+    concurrency: deploy-prod
+    env:
+      HOST: ubuntu@13.250.70.115
+      SDS_SSH_KEY: /home/runner/.ssh/sds-prod.pem
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > "$SDS_SSH_KEY"
+          chmod 600 "$SDS_SSH_KEY"
+          ssh-keyscan -T 10 "${HOST#*@}" >> ~/.ssh/known_hosts
+      - run: deploy/deploy.sh "$HOST"
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            ssh -i "$SDS_SSH_KEY" "$HOST" 'curl -fsS http://localhost/api/health' && exit 0
+            sleep 10
+          done
+          exit 1
