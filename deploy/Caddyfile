@@ -1,0 +1,8 @@
+# SITE_ADDRESS is ":80" (plain HTTP by IP) until a domain exists, then "app.example.com" (automatic HTTPS).
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+	# flush_interval -1: stream RSC/PPR responses instead of buffering them.
+	reverse_proxy app:3000 {
+		flush_interval -1
+	}
+}

@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.github
+.env*
+!.env.example
+e2e
+ops
+docs
+drizzle
+*.tsbuildinfo
+npm-debug.log*
+.claude
+.agents

@@ -29,6 +29,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Docker/self-hosted builds set BUILD_STANDALONE=1 (see Dockerfile); Vercel builds are unaffected.
+  ...(process.env.BUILD_STANDALONE ? { output: "standalone" as const } : {}),
   experimental: {
     agentFeedback: true,
   },
