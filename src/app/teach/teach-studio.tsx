@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState, useSyncExternalStore } from "react";
 import { useProgress } from "@/components/lesson/progress";
+import { Ring, RingText } from "@/components/lesson/ring";
 import { formatPercent } from "@/lib/format";
 
 export type AssignableItem = {
@@ -36,12 +37,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/challenges/cache-aside-recovery",
     launchLabel: "Open Cache Recovery Challenge",
     steps: [
-      "Run the starter design first and point students to Database utilisation (100%) and p99 latency spiking above 250 ms.",
-      "Drag a Cache node onto both Service → Database edges (auto-wires cache-aside) and re-run with coalesce OFF vs ON through the 7s cache kill.",
-      "Inspect the time-series chart at t = 7s: show how singleflight coalescing prevents the cold-cache stampede from saturating the 5 DB workers.",
+      "Run the starter: DB at 100%, p99 above 250 ms.",
+      "Add a cache on both edges; compare coalescing off and on.",
+      "At t = 7 s, show coalescing absorb the stampede.",
     ],
-    question:
-      "Ask the class: Why does adding a cache without request coalescing still fail when a hot key expires or a cache node restarts?",
+    question: "Why does a cache without coalescing still fail on restart?",
   },
   {
     id: "oversell",
@@ -51,12 +51,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/challenges/flash-sale-no-oversell",
     launchLabel: "Open Flash-Sale Challenge",
     steps: [
-      "Run the starter booking service under 1,000 RPS for 100 concert seats and open the Invariants panel to reveal the oversell violation.",
-      "Step through the Request Trace debugger to show two concurrent buyers reading remaining = 1 before either writes remaining = 0.",
-      "Replace the separate get + update steps with a single atomic decrementIfPositive step and show clean 409 Conflict responses once 100 seats sell.",
+      "Run 1,000 RPS at 100 seats; open Invariants.",
+      "Trace two buyers reading remaining = 1.",
+      "Swap in atomic decrementIfPositive; see clean 409s.",
     ],
-    question:
-      "Ask the class: Would increasing database worker concurrency make the read-then-write race better or worse?",
+    question: "Would more DB concurrency help or hurt the race?",
   },
   {
     id: "lost-ack",
@@ -66,12 +65,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/challenges/idempotent-payment-retry",
     launchLabel: "Open Idempotent Payment Challenge",
     steps: [
-      "Show the directional network partition (payments → gateway) at 10.6 ms: the ledger increment commits, but the 200 OK response packet drops.",
-      "Point out the duplicateEffect violation when the gateway's timeout retry increments the customer's ledger a second time.",
-      "Wire the Payment Service PUT handler to check the atomic, durable Dedup Store first and branch on dedupHit → 200 OK.",
+      "Drop the ack at 10.6 ms; the ledger already committed.",
+      "Spot the duplicateEffect on retry.",
+      "Check the dedup store first; branch on dedupHit.",
     ],
-    question:
-      "Ask the class: What happens if the idempotency store is non-atomic or loses state on restart before the client retry arrives?",
+    question: "What if the idempotency store loses state on restart?",
   },
   {
     id: "failover",
@@ -81,12 +79,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/challenges/fenced-leader-failover",
     launchLabel: "Open Fenced Failover Challenge",
     steps: [
-      "Run the starter async-replicated database through the primary crash and highlight both ackedWriteLost and splitBrainWrite violations.",
-      "Explain why async writes acknowledged before the crash vanish when a lagging follower is promoted, and why the recovering old leader accepts stale-term writes.",
-      "Switch replication to sync/semiSync and enable failover fencing (fencing: true) so stale-term writes are rejected and committed writes survive promotion.",
+      "Crash the primary; read both violations.",
+      "Async acks vanish; the old leader writes stale terms.",
+      "Switch to semiSync and enable fencing.",
     ],
-    question:
-      "Ask the class: In a 3-node cluster where 1 node crashes, what is the availability trade-off between full sync (all 3) and semi-sync (quorum of 2)?",
+    question: "Full sync (3) or semi-sync (2 of 3): what is the trade-off?",
   },
   {
     id: "quorum",
@@ -96,12 +93,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/challenges/quorum-fresh-reads",
     launchLabel: "Open Quorum Fresh Reads Challenge",
     steps: [
-      "Run the 3-replica KV ring with R = 1, W = 1 under 50% reads / 50% writes and inspect the staleRead violation in the Results tab.",
-      "Use the Pigeonhole Principle on the board: with N = 3, R = 1, W = 1, R + W = 2 ≤ 3, so a reader can contact a replica outside the write set.",
-      "Raise readQuorum to 2 and writeQuorum to 2 (R + W = 4 > 3) and verify that every read intersects at least one replica with the latest version.",
+      "Run R = 1, W = 1 at 50% writes; find staleRead.",
+      "R + W = 2 is at most N = 3: no overlap.",
+      "Set R = 2, W = 2; every read overlaps.",
     ],
-    question:
-      "Ask the class: If latency-sensitive reads require R = 1 on N = 3, what must W be to preserve strict quorum intersection?",
+    question: "With R = 1 on N = 3, what must W be?",
   },
   {
     id: "breaking-point",
@@ -111,12 +107,11 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
     launchHref: "/sandbox?ref=global-cdn",
     launchLabel: "Open Global CDN in Sandbox",
     steps: [
-      "Open the Global CDN & Edge Compute architecture in the Sandbox and click 'Find breaking point' in the top bar.",
-      "Watch the binary-search load multiplier sweep offered RPS until goodput or p99 crosses the SLO cliff.",
-      "Identify the bottleneck component in the breakdown table, double its concurrency or enable Origin Shield, and re-run the sweep to measure the new ceiling.",
+      "Open Global CDN; click Find breaking point.",
+      "Watch the load sweep reach the SLO cliff.",
+      "Fix the bottleneck; re-run to see the new ceiling.",
     ],
-    question:
-      "Ask the class: Why does p99 latency spike sharply around 80–85% utilisation even before throughput completely flattens?",
+    question: "Why does p99 spike near 80-85% utilisation?",
   },
 ];
 
@@ -499,16 +494,14 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         <div className="max-w-2xl">
           <div className="flex items-center gap-2.5">
             <h2 id="projector-heading" className="font-display text-xl text-fg">
-              Lecture Hall &amp; Projector Display Mode
+              Projector mode
             </h2>
             <span className="rounded border border-border bg-surface-2 px-2 py-0.5 font-mono text-xs text-muted">
               {projectorOn ? "ACTIVE (112.5%)" : "STANDARD (100%)"}
             </span>
           </div>
           <p className="mt-1 text-sm text-ink-2">
-            Scales typography and diagram rules across the Sandbox, Challenges,
-            and Lessons so back-row students can read queue depths, p99 numbers,
-            and invariant traces clearly.
+            <span aria-hidden className="mr-1.5">▭</span>Bigger type for the back row.
           </p>
         </div>
         <button
@@ -539,24 +532,23 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             >
               {assignmentTitle}
             </h2>
-            <p className="mt-1 text-sm text-muted">
-              Complete each assigned module below. Progress is tracked
-              automatically in your browser; export a signed JSON receipt when
-              finished to submit to your instructor.
-            </p>
           </div>
-          <div className="text-right">
-            <p className="font-mono text-2xl text-fg num">
-              {completedAssignedCount} / {assignedItems.length}
-            </p>
-            <p className="text-xs text-muted">items completed on this device</p>
+          <div className="flex items-center gap-3">
+            <Ring value={assignedItems.length ? completedAssignedCount / assignedItems.length : 0} size={56} stroke={6}>
+              <RingText size={56} fontSize={13}>
+                {completedAssignedCount}/{assignedItems.length}
+              </RingText>
+            </Ring>
+            <p className="text-xs text-muted">done on this device</p>
           </div>
         </div>
 
         {assignedItems.length === 0 ? (
-          <p className="py-6 text-sm text-muted">
-            No items selected yet. Choose a module preset or check items in the
-            syllabus builder below.
+          <p className="flex items-center gap-3 py-6 text-sm text-muted">
+            <svg aria-hidden viewBox="0 0 48 48" className="size-10 shrink-0 text-rule" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="3 3">
+              <path d="M10 6h28v36H10zM16 16h16M16 24h16M16 32h8" />
+            </svg>
+            Nothing assigned. Pick a preset below.
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -616,7 +608,7 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         <div className="mt-5 flex flex-wrap items-end justify-between gap-4 border-t border-border pt-4">
           <div className="flex flex-wrap items-end gap-3">
             <label className="grid gap-1 text-xs text-muted">
-              <span>Student Name (for receipt)</span>
+              <span>Student name</span>
               <input
                 type="text"
                 value={studentName}
@@ -626,7 +618,7 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
               />
             </label>
             <label className="grid gap-1 text-xs text-muted">
-              <span>Student ID / Email</span>
+              <span>Student ID or email</span>
               <input
                 type="text"
                 value={studentId}
@@ -642,7 +634,7 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             disabled={assignedItems.length === 0}
             className="btn btn-primary"
           >
-            Download completion receipt (.json)
+            Download receipt
           </button>
         </div>
       </section>
@@ -651,13 +643,8 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       <section aria-labelledby="live-demos">
         <div className="max-w-3xl">
           <h2 id="live-demos" className="font-display text-3xl text-fg">
-            6 Live Classroom Demonstrations
+            Six live demos
           </h2>
-          <p className="mt-2 text-sm text-ink-2">
-            Each demo pairs a concrete distributed systems failure mode with
-            step-by-step lecture choreography and a Socratic question to pose to
-            your students before revealing the fix.
-          </p>
         </div>
         <div className="mt-6 grid gap-5 md:grid-cols-2">
           {CLASSROOM_DEMOS.map((demo) => (
@@ -684,7 +671,7 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
                   ))}
                 </ol>
                 <p className="mt-3 rounded border border-border bg-surface-2 px-3 py-2 text-xs text-ink-2">
-                  <strong className="text-fg">Discussion prompt:</strong>{" "}
+                  <strong className="text-fg"><span aria-hidden>? </span>Ask:</strong>{" "}
                   {demo.question}
                 </p>
               </div>
@@ -705,13 +692,8 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       >
         <div className="max-w-3xl">
           <h2 id="syllabus-builder" className="font-display text-3xl text-fg">
-            Syllabus &amp; Homework Link Builder
+            Assignment builder
           </h2>
-          <p className="mt-2 text-sm text-ink-2">
-            Start from a ready-made weekly module or pick any combination of
-            lessons, graded challenges, and case studies. The generated URL
-            encodes the assignment with zero backend setup.
-          </p>
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -719,14 +701,15 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             <button
               key={preset.id}
               type="button"
+              title={preset.description}
               onClick={() => applyPreset(preset)}
               className="flex flex-col items-start rounded-md border border-border bg-surface-2 p-3.5 text-left transition-colors hover:border-fg"
             >
               <span className="font-medium text-fg text-sm">
                 {preset.title}
               </span>
-              <span className="mt-1 text-xs text-muted">
-                {preset.description}
+              <span className="num mt-1 text-xs text-muted">
+                {preset.items.length} items
               </span>
             </button>
           ))}
@@ -734,7 +717,7 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
 
         <div className="mt-6 grid gap-4 border-t border-border pt-5 sm:grid-cols-[1fr_auto]">
           <label className="grid gap-1 text-xs text-muted">
-            <span>Assignment Title</span>
+            <span>Title</span>
             <input
               type="text"
               value={assignmentTitle}
@@ -752,8 +735,8 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
               className="btn btn-primary"
             >
               {copiedLink
-                ? "✓ Link copied to clipboard"
-                : "Copy shareable assignment URL"}
+                ? "✓ Link copied"
+                : "Copy assignment link"}
             </button>
           </div>
         </div>
@@ -836,19 +819,12 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-2xl">
             <h2 id="receipt-verifier" className="font-display text-3xl text-fg">
-              Instructor Receipt Verifier &amp; Gradebook
+              Gradebook
             </h2>
-            <p className="mt-2 text-sm text-ink-2">
-              Upload one or more student{" "}
-              <code className="font-mono text-xs">.json</code> completion
-              receipts to verify their FNV-1a integrity fingerprint, inspect
-              per-student mastery and challenge stars, and export a CSV
-              gradebook.
-            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="btn cursor-pointer text-xs">
-              <span>Upload student receipts (.json)</span>
+              <span>Upload receipts</span>
               <input
                 type="file"
                 accept="application/json,.json"
@@ -885,9 +861,11 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         )}
 
         {verifiedReceipts.length === 0 ? (
-          <p className="mt-6 rounded border border-dashed border-border py-8 text-center text-sm text-muted">
-            No student receipts loaded yet. Select one or more{" "}
-            <code>sds-receipt-*.json</code> files above to grade.
+          <p className="mt-6 flex items-center justify-center gap-3 rounded border border-dashed border-border py-8 text-sm text-muted">
+            <svg aria-hidden viewBox="0 0 48 48" className="size-10 shrink-0 text-rule" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M24 34V12M14 22l10-10 10 10M8 40h32" />
+            </svg>
+            No receipts loaded.
           </p>
         ) : (
           <div className="mt-6 overflow-x-auto">

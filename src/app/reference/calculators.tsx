@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { Bars } from "@/components/visual/kit";
 import { formatBandwidth, formatBytes, formatDuration, formatNumber, formatRps } from "@/lib/format";
 
 function NumberField({ label, value, onChange, unit, step = "any", min = 0 }: { label: string; value: number; onChange: (v: number) => void; unit?: string; step?: string; min?: number }) {
@@ -27,11 +28,16 @@ function NumberField({ label, value, onChange, unit, step = "any", min = 0 }: { 
   );
 }
 
-function Result({ label, value }: { label: string; value: string }) {
+function Result({ label, value, icon }: { label: string; value: string; icon: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-b border-border py-2 last:border-0">
-      <dt className="text-sm text-muted">{label}</dt>
-      <dd className="num text-right text-fg">{value}</dd>
+    <div className="rounded-md border-l-4 border-accent-2 bg-surface-2 p-3">
+      <dt className="text-xs uppercase tracking-wide text-muted">
+        <span aria-hidden className="mr-1.5">
+          {icon}
+        </span>
+        {label}
+      </dt>
+      <dd className="num mt-1 text-xl text-fg">{value}</dd>
     </div>
   );
 }
@@ -43,30 +49,45 @@ export function NinesCalculator() {
   const [availability, setAvailability] = useState(99.9);
   const valid = availability >= 0 && availability <= 100;
   const down = (1 - availability / 100) * YEAR_US;
+  const minutes = (1 - availability / 100) * 365.25 * 1440;
   return (
-    <div className="grid gap-6 sm:grid-cols-2">
-      <div className="grid content-start gap-4">
-        <NumberField label="Availability" value={availability} onChange={setAvailability} unit="%" step="0.001" />
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Common targets">
-          {PRESETS.map((p) => (
-            <button key={p} type="button" className="btn min-h-9 px-3 text-sm" aria-pressed={availability === p} onClick={() => setAvailability(p)}>
-              {p}%
-            </button>
-          ))}
+    <div className="grid gap-6">
+      <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+        <div className="grid content-start gap-4">
+          <NumberField label="Availability" value={availability} onChange={setAvailability} unit="%" step="0.001" />
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Common targets">
+            {PRESETS.map((p) => (
+              <button key={p} type="button" className="btn min-h-9 px-3 text-sm" aria-pressed={availability === p} onClick={() => setAvailability(p)}>
+                {p}%
+              </button>
+            ))}
+          </div>
         </div>
+        <dl aria-live="polite" className="grid grid-cols-2 content-start gap-3">
+          {valid ? (
+            <>
+              <Result icon="◷" label="Per year" value={formatDuration(down)} />
+              <Result icon="◷" label="Per 30 days" value={formatDuration((down * 30) / 365.25)} />
+              <Result icon="◷" label="Per week" value={formatDuration((down * 7) / 365.25)} />
+              <Result icon="◷" label="Per day" value={formatDuration(down / 365.25)} />
+            </>
+          ) : (
+            <div className="col-span-2">
+              <dt className="sr-only">Error</dt>
+              <dd className="py-2 text-sm text-danger">Enter a percentage between 0 and 100.</dd>
+            </div>
+          )}
+        </dl>
       </div>
-      <dl aria-live="polite" className="border-l-2 border-accent-2 bg-surface-2 px-4 py-2">
-        {valid ? (
-          <>
-            <Result label="Downtime per year" value={formatDuration(down)} />
-            <Result label="Per 30-day month" value={formatDuration((down * 30) / 365.25)} />
-            <Result label="Per week" value={formatDuration((down * 7) / 365.25)} />
-            <Result label="Per day" value={formatDuration(down / 365.25)} />
-          </>
-        ) : (
-          <p className="py-2 text-sm text-danger">Enter a percentage between 0 and 100.</p>
-        )}
-      </dl>
+      <Bars
+        title="Downtime per year by target"
+        log
+        items={[
+          ...PRESETS.map((p) => ({ label: `${p}%`, value: Math.round((1 - p / 100) * 365.25 * 1440 * 100) / 100, unit: "min", tone: "info" as const })),
+          ...(valid && minutes > 0 && !PRESETS.includes(availability) ? [{ label: `${availability}% (yours)`, value: Math.round(minutes * 100) / 100, unit: "min", tone: "warn" as const }] : []),
+        ]}
+        caption="Short runs are not yearly SLA attainment."
+      />
     </div>
   );
 }
@@ -99,18 +120,21 @@ export function EstimationCalculator() {
         <NumberField label="Retention" value={retention} onChange={setRetention} unit="days" step="1" />
         <NumberField label="Replication factor" value={replicas} onChange={setReplicas} unit="copies" step="1" min={1} />
       </div>
-      <dl aria-live="polite" className="content-start border-l-2 border-accent-2 bg-surface-2 px-4 py-2">
+      <dl aria-live="polite" className="grid grid-cols-2 content-start gap-3">
         {ok ? (
           <>
-            <Result label="Requests per day" value={formatNumber(perDay, 0)} />
-            <Result label="Average load" value={formatRps(avg)} />
-            <Result label="Peak load" value={formatRps(peakRps)} />
-            <Result label="Peak bandwidth" value={formatBandwidth(peakRps * payload)} />
-            <Result label="New data per day" value={formatBytes(storedPerDay)} />
-            <Result label={`Stored after ${formatNumber(retention, 0)} days`} value={formatBytes(total)} />
+            <Result icon="∑" label="Requests / day" value={formatNumber(perDay, 0)} />
+            <Result icon="~" label="Average load" value={formatRps(avg)} />
+            <Result icon="▲" label="Peak load" value={formatRps(peakRps)} />
+            <Result icon="⇄" label="Peak bandwidth" value={formatBandwidth(peakRps * payload)} />
+            <Result icon="+" label="New data / day" value={formatBytes(storedPerDay)} />
+            <Result icon="▤" label={`Stored, ${formatNumber(retention, 0)} days`} value={formatBytes(total)} />
           </>
         ) : (
-          <p className="py-2 text-sm text-danger">Every input must be a number of zero or more.</p>
+          <div className="col-span-2">
+              <dt className="sr-only">Error</dt>
+              <dd className="py-2 text-sm text-danger">Every input must be a number of zero or more.</dd>
+            </div>
         )}
       </dl>
     </div>

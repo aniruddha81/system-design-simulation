@@ -74,8 +74,15 @@ export default async function LessonPage({ params }: PageProps<"/learn/[track]/[
       <header className="mb-10">
         <h1 className="font-display text-4xl tracking-tight sm:text-5xl sm:leading-[1.1]">{lesson.title}</h1>
         <p className="mt-4 max-w-[60ch] text-lg leading-relaxed text-ink-2">{lesson.description}</p>
-        <p className="mt-4 text-sm text-muted">
-          About <span className="num text-fg">{lesson.estimatedMinutes}</span> minutes, {lesson.stepIds.length} steps
+        <p className="num mt-4 flex flex-wrap gap-2 text-sm">
+          <span className="rounded-full border border-rule bg-surface px-3 py-0.5">
+            <span aria-hidden>◷ </span>
+            {lesson.estimatedMinutes} min
+          </span>
+          <span className="rounded-full border border-rule bg-surface px-3 py-0.5">
+            <span aria-hidden>▤ </span>
+            {lesson.stepIds.length} steps
+          </span>
         </p>
         <details className="mt-6 border-y border-rule py-5 [&[open]>summary]:mb-3" open>
           <summary className="min-h-6 cursor-pointer font-medium">By the end you can</summary>

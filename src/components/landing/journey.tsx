@@ -102,42 +102,42 @@ export function Journey() {
     {
       kicker: "Browser",
       title: "Someone opens their profile",
-      body: "One read, GET /users/42, through the cache-aside template you will build in the sandbox. Scroll to send it. The server-side times come from the engine's own trace of this request.",
+      body: "One read, GET /users/42. Scroll to send it.",
     },
     {
       kicker: "DNS",
       title: "First, an address",
-      body: "The browser asks a resolver where the API lives. Usually the answer is already cached nearby; a miss walks from the root servers down to the domain's own name servers. Nothing has reached your system yet.",
+      body: "The browser asks a resolver where the API lives.",
     },
     {
       kicker: "CDN edge",
       title: "The edge cannot answer this one",
-      body: "A CDN serves copies from close to the user. A profile is personal and changes, so the edge passes the request through to the origin.",
+      body: "A profile is personal, so the edge passes it on.",
     },
     {
       kicker: "Load balancer",
       title: "Pick a service",
-      body: `Round robin sends it to svc-1. The balancer's own work is 50 µs, and each network hop in the template costs 100 µs. ${d(t.lbEnd)} on the server so far.`,
+      body: `Round robin picks svc-1. ${d(t.lbEnd)} on the server so far.`,
     },
     {
       kicker: "Cache",
       title: "Ask the cache first. Miss.",
-      body: "svc-1 looks up user:42, and nobody has read it recently. In cache-aside the service, not the cache, decides what happens next: go to the database.",
+      body: "svc-1 asks the cache for user:42. Nobody has read it lately.",
     },
     {
       kicker: "Database",
       title: "The slow part",
-      body: `The read takes ${d(t.dbUs)}, most of the request. The database has five workers; when all five are busy, reads wait in line. That queue is what breaks first, below.`,
+      body: `The read takes ${d(t.dbUs)}. Five workers; extra reads queue.`,
     },
     {
       kicker: "Response",
       title: "Fill the cache, then answer",
-      body: `svc-1 writes user:42 into the cache and replies back along the path. ${d(t.total)} on the server for a cold read.`,
+      body: `svc-1 fills the cache and replies. ${d(t.total)} on the server.`,
     },
     {
       kicker: "The next read",
       title: `A hit, ${faster}× faster`,
-      body: `The same key a moment later is answered from the cache in ${d(t.hit)}, and the database never hears about it. That ratio, across thousands of keys, is what a hit rate buys.`,
+      body: `Served from cache in ${d(t.hit)}. The database never hears.`,
     },
   ];
 
@@ -148,7 +148,7 @@ export function Journey() {
           <Drawing layout={WIDE} notes={notes} times={times} className="hidden w-full md:block" />
           <Drawing layout={TALL} notes={notes} times={times} className="block w-full md:hidden" />
           <figcaption className="figcap mt-2 hidden md:block">
-            <b>Fig. 2</b>One cold read of user:42, then a warm one. The trace: {t.ops.join(", ")}.
+            <b>Fig. 2</b>Cold read, then warm. {t.ops.join(", ")}.
           </figcaption>
         </figure>
       }

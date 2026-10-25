@@ -14,14 +14,15 @@ function Radios<T extends string>({
   legend: string;
   hint: string;
   value: T | null;
-  options: { value: T; label: string; detail: string }[];
+  options: { value: T; label: string; detail: string; icon: string }[];
   onChange: (v: T) => void;
 }) {
   const name = useId();
   return (
     <fieldset className="border-t border-rule py-6">
       <legend className="float-left w-full font-display text-2xl">{legend}</legend>
-      <p className="clear-left mb-4 pt-1 text-sm text-muted">{hint}</p>
+      {hint && <p className="clear-left mb-4 pt-1 text-sm text-muted">{hint}</p>}
+      {!hint && <div className="clear-left mb-3" />}
       <div className="grid gap-2 sm:grid-cols-2">
         {options.map((o) => (
           <label
@@ -29,6 +30,9 @@ function Radios<T extends string>({
             className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-rule p-3 has-[:checked]:border-fg has-[:checked]:bg-surface-2 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent"
           >
             <input type="radio" name={name} value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="mt-1 size-4 accent-[var(--accent)] focus-visible:outline-none" />
+            <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-md border border-rule bg-surface-2 text-lg">
+              {o.icon}
+            </span>
             <span>
               <span className="block font-medium">{o.label}</span>
               <span className="block text-sm text-muted">{o.detail}</span>
@@ -77,25 +81,25 @@ export function SettingsForm() {
     <div className="mt-10 grid gap-6">
       <Radios
         legend="Motion"
-        hint="Every continuous animation stops under Off. System follows your operating system's reduced-motion setting."
+        hint=""
         value={motion}
         onChange={(v) => setPref("motion", v)}
         options={[
-          { value: "system", label: "System", detail: "Full unless your OS asks for reduced motion" },
-          { value: "full", label: "Full", detail: "Springs, shakes and flowing traffic" },
-          { value: "reduced", label: "Reduced", detail: "Crossfades only, no movement" },
-          { value: "off", label: "Off", detail: "No animation at all" },
+          { value: "system", label: "System", detail: "Follows your OS", icon: "◐" },
+          { value: "full", label: "Full", detail: "All movement", icon: "≋" },
+          { value: "reduced", label: "Reduced", detail: "Crossfades only", icon: "≈" },
+          { value: "off", label: "Off", detail: "No animation", icon: "▬" },
         ]}
       />
       <Radios
         legend="Theme"
-        hint="Paper is the default: warm paper and graphite ink. Slate is a green-black chalkboard. Both use the same contrast targets."
+        hint=""
         value={theme}
         onChange={(v) => setPref("theme", v)}
         options={[
-          { value: "system", label: "System", detail: "Match your OS" },
-          { value: "light", label: "Paper", detail: "Warm paper, graphite and vermilion. Default." },
-          { value: "dark", label: "Slate", detail: "Green-black board with chalk ink" },
+          { value: "system", label: "System", detail: "Match your OS", icon: "◐" },
+          { value: "light", label: "Paper", detail: "Default", icon: "☐" },
+          { value: "dark", label: "Slate", detail: "Chalkboard", icon: "■" },
         ]}
       />
 
@@ -116,15 +120,13 @@ export function SettingsForm() {
           />
           <span>
             <span className="block font-medium">Share anonymous usage events</span>
-            <span className="block text-sm text-muted">
-              Off by default. Events are coarse (lesson started, step answered, challenge result) and never include your designs, labels or free text.
-            </span>
+            <span className="block text-sm text-muted">Off by default. Never includes your designs or text.</span>
           </span>
         </label>
       </Section>
 
       <Section title="Your data">
-        <p className="mt-1 text-sm text-muted">Designs, runs and progress are stored only in this browser. Export a backup to move them or keep them safe.</p>
+        <p className="mt-1 text-sm text-muted">Stored in this browser. Sign in (Account) to sync across devices.</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"

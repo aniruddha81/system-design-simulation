@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ids, isCompleted, saveTrackPlacement, useProgress, useReviews } from "@/components/lesson/progress";
+import { Ring, RingText } from "@/components/lesson/ring";
 import { formatPercent } from "@/lib/format";
 
 export type LessonSummary = {
   id: string;
   track?: string;
+  trackTitle?: string;
   title: string;
   href: string;
   steps: string[];
@@ -233,6 +235,42 @@ const PLACEMENT_TRACKS: PlacementTrack[] = [
 ];
 
 const MASTERED = 0.8;
+const WEEKS = 16;
+const DAY = 86_400_000;
+
+/** Active days (any lesson, step or challenge completed) over the last WEEKS weeks, oldest first, ending today. */
+function activity(stamps: number[], now: number) {
+  const end = new Date(now);
+  end.setHours(0, 0, 0, 0);
+  const cells = WEEKS * 7;
+  const counts = Array<number>(cells).fill(0);
+  for (const t of stamps) {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    const back = Math.round((end.getTime() - d.getTime()) / DAY);
+    if (back >= 0 && back < cells) counts[cells - 1 - back]++;
+  }
+  // Streak counts back from today; an empty today does not break it yet.
+  let streak = 0;
+  for (let i = cells - 1; i >= 0; i--) {
+    if (counts[i] > 0) streak++;
+    else if (i !== cells - 1) break;
+  }
+  return { counts, streak, active: counts.filter(Boolean).length, end };
+}
+
+const HEAT = ["var(--surface-2)", "color-mix(in oklab, var(--accent-2) 35%, var(--surface))", "color-mix(in oklab, var(--accent-2) 65%, var(--surface))", "var(--accent-2)"];
+
+function Empty({ children, d }: { children: string; d: string }) {
+  return (
+    <p className="flex items-center gap-3 text-sm text-muted">
+      <svg aria-hidden viewBox="0 0 48 48" className="size-10 shrink-0 text-rule">
+        <path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3" />
+      </svg>
+      {children}
+    </p>
+  );
+}
 
 export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]; challenges: { id: string; title: string }[] }) {
   const progress = useProgress();
@@ -272,19 +310,19 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
       }),
   );
 
-  const testedOutCount = rows.filter((r) => r.testedOut).length;
-
   const stats = [
-    { label: "Completed", value: rows.filter((r) => r.completed).length, icon: "✓" },
-    { label: "Mastered", value: rows.filter((r) => r.mastered).length, icon: "★" },
-    {
-      label: "Tested out",
-      value: testedOutCount,
-      icon: "⇥",
-      note: testedOutCount > 0 ? "Via track placement checks" : "Use placement checks below to test out",
-    },
-    { label: "Due for review", value: due.length, icon: "↻" },
+    { label: "Completed", value: rows.filter((r) => r.completed).length, of: rows.length, icon: "✓", tone: "var(--accent-2)" },
+    { label: "Mastered", value: rows.filter((r) => r.mastered).length, of: rows.length, icon: "★", tone: "var(--success)" },
+    { label: "Tested out", value: rows.filter((r) => r.testedOut).length, of: rows.length, icon: "⇥", tone: "var(--accent-2)" },
+    { label: "Due", value: due.length, of: Math.max(due.length, 1), icon: "↻", tone: "var(--warning)" },
   ];
+
+  const tracks = [...new Set(rows.map((r) => r.track ?? ""))].map((id) => {
+    const inTrack = rows.filter((r) => (r.track ?? "") === id);
+    return { id, title: inTrack[0].trackTitle ?? id, n: inTrack.length, done: inTrack.filter((r) => r.completed).length, mastered: inTrack.filter((r) => r.mastered).length };
+  });
+
+  const heat = reviews ? activity([...progress.values()].flatMap((r) => (r.completedAt !== undefined ? [r.completedAt] : [])), reviews.now) : null;
 
   const selectedPlacement = PLACEMENT_TRACKS.find((t) => t.track === activeTrack) ?? null;
 
@@ -299,47 +337,100 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
 
   return (
     <div className="mt-10 grid gap-12">
-      <dl className="grid grid-cols-2 gap-6 border-y border-rule py-6 sm:grid-cols-4">
+      <ul className="grid grid-cols-2 gap-4 border-y border-rule py-6 sm:grid-cols-4">
         {stats.map((s) => (
-          <div key={s.label} className="min-w-0">
-            <dt className="flex items-center gap-2 text-sm text-muted">
-              <span aria-hidden>{s.icon}</span>
-              {s.label}
-            </dt>
-            <dd className="num mt-2 text-3xl">{s.value}</dd>
-            {s.note && <dd className="mt-1 text-xs text-muted">{s.note}</dd>}
-          </div>
+          <li key={s.label} className="flex min-w-0 items-center gap-3">
+            <Ring value={s.value / Math.max(s.of, 1)} size={56} stroke={6} tone={s.tone}>
+              <RingText size={56} fontSize={15}>
+                {s.icon}
+              </RingText>
+            </Ring>
+            <div>
+              <span className="block text-sm text-muted">{s.label}</span>
+              <span className="num block text-3xl leading-none">{s.value}</span>
+            </div>
+          </li>
         ))}
-      </dl>
+      </ul>
+
+      <section aria-labelledby="streak">
+        <h2 id="streak" className="mb-4 font-display text-2xl">
+          Activity
+        </h2>
+        {heat && (
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-4">
+            <div
+              role="img"
+              aria-label={`Last ${WEEKS} weeks: ${heat.active} active days, current streak ${heat.streak} ${heat.streak === 1 ? "day" : "days"}`}
+              className="grid grid-flow-col grid-rows-7 gap-[3px]"
+            >
+              {heat.counts.map((c, i) => (
+                <span
+                  key={i}
+                  aria-hidden
+                  title={`${new Date(heat.end.getTime() - (heat.counts.length - 1 - i) * DAY).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: ${c}`}
+                  className={`size-3 rounded-[2px] sm:size-3.5 ${c ? "" : "border border-dashed border-rule"}`}
+                  style={{ background: HEAT[Math.min(c, 3)] }}
+                />
+              ))}
+            </div>
+            <p className="num flex gap-6">
+              <span className="text-3xl leading-none">
+                <span aria-hidden className="mr-1 text-xl text-accent">
+                  ◆
+                </span>
+                {heat.streak}
+                <span className="ml-1 text-sm text-muted">day streak</span>
+              </span>
+              <span className="text-3xl leading-none">
+                {heat.active}
+                <span className="ml-1 text-sm text-muted">active days</span>
+              </span>
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section aria-labelledby="mastery">
+        <h2 id="mastery" className="mb-4 font-display text-2xl">
+          Mastery by track
+        </h2>
+        <ul className="grid gap-2">
+          {tracks.map((t) => (
+            <li key={t.id} className="grid grid-cols-[minmax(7rem,30%)_1fr_auto] items-center gap-3 text-sm">
+              <span className="truncate">{t.title}</span>
+              <span aria-hidden className="relative h-3.5 overflow-hidden rounded-sm bg-surface-2">
+                <span className="absolute inset-y-0 left-0 bg-accent-2 opacity-50" style={{ width: `${(t.done / t.n) * 100}%` }} />
+                <span className="absolute inset-y-0 left-0 bg-success" style={{ width: `${(t.mastered / t.n) * 100}%` }} />
+              </span>
+              <span className="num whitespace-nowrap text-muted">
+                ★ {t.mastered} · ✓ {t.done} / {t.n}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <section aria-labelledby="review">
         <h2 id="review" className="mb-4 font-display text-2xl">
           Review queue
         </h2>
         {due.length === 0 ? (
-          <p className="text-muted">Nothing due. Objectives you miss in a mastery check or that reach their SM-2 spaced-repetition interval land here.</p>
+          <Empty d="M6 26h8l3 5h14l3-5h8M10 26l4-14h20l4 14v10H10z">All caught up. Misses and spaced reviews land here.</Empty>
         ) : (
-          <ul className="grid">
+          <ul className="flex flex-wrap gap-2">
             {due.map(({ lesson, objective, rec, rev }) => (
-              <li key={`${lesson.id}/${objective.id}`} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
-                <div>
-                  <p className="font-medium">{objective.text}</p>
-                  <p className="text-sm text-muted">
-                    {lesson.title}
-                    {rec?.mastery !== undefined && (
-                      <>
-                        , last score <span className="num">{formatPercent(rec.mastery, 0)}</span>
-                      </>
-                    )}
-                    {rev && (
-                      <>
-                        {" "}· SM-2 interval <span className="num">{rev.intervalDays}d</span> (ease <span className="num">{rev.ease.toFixed(2)}</span>)
-                      </>
-                    )}
-                  </p>
-                </div>
-                <Link href={`${lesson.href}${objective.step ? `#step-${objective.step}` : ""}`} className="btn">
-                  Review
+              <li key={`${lesson.id}/${objective.id}`}>
+                <Link
+                  href={`${lesson.href}${objective.step ? `#step-${objective.step}` : ""}`}
+                  title={`${lesson.title}${rev ? ` · SM-2 interval ${rev.intervalDays}d` : ""}`}
+                  className="flex min-h-9 max-w-[18rem] items-center gap-2 rounded-full border border-rule bg-surface px-3 py-1 text-sm hover:bg-surface-2"
+                >
+                  <span aria-hidden className="text-warning">
+                    ↻
+                  </span>
+                  <span className="truncate">{objective.text}</span>
+                  {rec?.mastery !== undefined && <span className="num shrink-0 text-xs text-muted">{formatPercent(rec.mastery, 0)}</span>}
                 </Link>
               </li>
             ))}
@@ -348,36 +439,31 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
       </section>
 
       <section aria-labelledby="placement">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h2 id="placement" className="font-display text-2xl">
-              Track placement checks (test out)
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Already know a track? Answer 3 verification questions (3/3 required) to mark that track&apos;s lessons as tested out.
-            </p>
-          </div>
-        </div>
+        <h2 id="placement" className="font-display text-2xl">
+          Test out of a track
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-muted">Three questions, all correct.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           {PLACEMENT_TRACKS.map((pt) => {
             const trackLessons = rows.filter((r) => r.track === pt.track);
+            const doneCount = trackLessons.filter((r) => r.completed).length;
             const allDone = trackLessons.length > 0 && trackLessons.every((r) => r.completed);
             const isOpen = activeTrack === pt.track;
             return (
-              <div key={pt.track} className="flex flex-col justify-between rounded-md border border-border bg-surface p-4">
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-medium text-fg">{pt.label}</h3>
-                    <span className="font-mono text-xs text-muted num">
-                      {trackLessons.filter((r) => r.completed).length}/{trackLessons.length} lessons
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-muted">{pt.summary}</p>
-                </div>
-                <div className="mt-4 flex items-center justify-between gap-2">
-                  <span className={`text-xs font-medium ${allDone ? "text-success" : "text-muted"}`}>
-                    {allDone ? "✓ Track complete" : "3 questions · 100% to test out"}
+              <div key={pt.track} title={pt.summary} className="flex items-center gap-3 rounded-md border border-border bg-surface p-4">
+                <Ring value={trackLessons.length ? doneCount / trackLessons.length : 0} size={44} stroke={5}>
+                  <RingText size={44} fontSize={11}>
+                    {allDone ? "✓" : doneCount}
+                  </RingText>
+                </Ring>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-medium text-fg">{pt.label}</h3>
+                  <span className="num text-xs text-muted">
+                    {doneCount}/{trackLessons.length} lessons{allDone ? " · ✓ complete" : ""}
                   </span>
+                </div>
+                <div className="flex items-center">
+                  <span className="sr-only">{pt.summary}</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -396,8 +482,7 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
 
         {selectedPlacement && (
           <div className="mt-4 rounded-md border border-rule bg-surface p-5">
-            <h3 className="font-display text-xl text-fg">{selectedPlacement.label} — Placement Check</h3>
-            <p className="mt-1 text-xs text-muted">Select the best answer for all three questions, then check your placement.</p>
+            <h3 className="font-display text-xl text-fg">{selectedPlacement.label}</h3>
             <div className="mt-4 grid gap-5">
               {selectedPlacement.questions.map((q, idx) => {
                 const chosen = answers[q.id];
@@ -459,8 +544,8 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
                   }`}
                 >
                   {selectedPlacement.questions.every((q) => answers[q.id] === q.correctId)
-                    ? `⇥ Passed 3/3! All lessons in ${selectedPlacement.label} are now marked Tested out and Mastered.`
-                    : "Score below 3/3. Review the explanations above or adjust your answers and try again."}
+                    ? `⇥ Passed 3/3. Track marked tested out.`
+                    : "Below 3/3. Check the explanations and retry."}
                 </p>
               )}
             </div>
@@ -472,10 +557,15 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
         <h2 id="lessons" className="mb-4 font-display text-2xl">
           Lessons
         </h2>
-        <ul className="grid">
+        <ul className="grid gap-2 sm:grid-cols-2">
           {rows.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
-              <div>
+            <li key={r.id} className="flex items-center gap-3 rounded-md border border-border bg-surface p-3">
+              <Ring value={r.steps.length ? r.stepsDone / r.steps.length : 0} size={36} stroke={4} tone={r.mastered ? "var(--success)" : "var(--accent-2)"}>
+                <RingText size={36} fontSize={13}>
+                  {r.mastered ? "★" : r.completed ? "✓" : r.stepsDone > 0 ? "◐" : "○"}
+                </RingText>
+              </Ring>
+              <div className="min-w-0">
                 <Link href={r.href} className="font-medium underline-offset-4 hover:underline">
                   {r.title}
                 </Link>
@@ -483,15 +573,16 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
                   <span className="num">{r.stepsDone}</span> of <span className="num">{r.steps.length}</span> steps
                   {r.rec?.mastery !== undefined && (
                     <>
-                      , best mastery check <span className="num">{formatPercent(r.rec.mastery, 0)}</span>
+                      {" "}· best <span className="num">{formatPercent(r.rec.mastery, 0)}</span>
                     </>
                   )}
-                  {r.testedOut && r.stepsDone < r.steps.length && <> · ⇥ Tested out via placement check</>}
+                  {r.testedOut && r.stepsDone < r.steps.length && <> · ⇥ Tested out</>}
+                  {" "}·{" "}
+                  <span className={r.mastered ? "text-success" : r.completed ? "text-accent-2" : ""}>
+                    {r.mastered ? "★ Mastered" : r.completed ? "✓ Completed" : r.stepsDone > 0 ? "◐ In progress" : "○ Not started"}
+                  </span>
                 </p>
               </div>
-              <span className={`text-sm font-medium ${r.mastered ? "text-success" : r.completed ? "text-accent-2" : "text-muted"}`}>
-                {r.mastered ? "★ Mastered" : r.completed ? "✓ Completed" : r.stepsDone > 0 ? "◐ In progress" : "○ Not started"}
-              </span>
             </li>
           ))}
         </ul>
@@ -501,15 +592,15 @@ export function ProgressView({ lessons, challenges }: { lessons: LessonSummary[]
         <h2 id="challenges" className="mb-4 font-display text-2xl">
           Challenges
         </h2>
-        <ul className="grid">
+        <ul className="grid gap-2 sm:grid-cols-2">
           {challenges.map((c) => {
             const stars = progress.get(`challenge:${c.id}`)?.stars ?? 0;
             return (
-              <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-4">
+              <li key={c.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface p-3">
                 <Link href={`/challenges/${c.id}`} className="font-medium underline-offset-4 hover:underline">
                   {c.title}
                 </Link>
-                <span className={`text-sm font-medium ${stars ? "text-success" : "text-muted"}`}>
+                <span className={`shrink-0 text-sm font-medium ${stars ? "text-success" : "text-muted"}`}>
                   {stars ? `${"★".repeat(stars)} Passed` : "○ Not passed"}
                 </span>
               </li>

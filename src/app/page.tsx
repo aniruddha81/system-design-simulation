@@ -20,31 +20,31 @@ const PILLARS: Pillar[] = [
   {
     title: "Learn",
     href: "/learn",
-    body: "Short steps, each with something to answer, calculate or reorder. Mastery checks draw fresh variants you have not seen.",
+    body: "Short steps, each with a question to answer.",
     glyph: [...sketch.path("M4 10 C12 7 18 8 22 12 C26 8 32 7 40 10 L40 34 C32 31 26 32 22 36 C18 32 12 31 4 34 Z", 101), ...sketch.line(22, 12, 22, 36, 102)],
   },
   {
     title: "Simulate",
     href: "/sandbox",
-    body: "Sketch a system on a whiteboard, send it traffic, kill a node, and read latency, errors and saturation as they happen.",
+    body: "Sketch a system, add traffic, kill a node.",
     glyph: [...sketch.rect(3, 17, 11, 10, 111), ...sketch.rect(30, 6, 11, 10, 112), ...sketch.rect(30, 28, 11, 10, 113), ...sketch.path("M14 22 C22 22 22 11 30 11 M14 22 C22 22 22 33 30 33", 114)],
   },
   {
     title: "Practice",
     href: "/challenges",
-    body: "Challenges with a pass bar, a reproducible seed, and a verdict that says exactly which check failed and why.",
+    body: "A fixed pass bar and a verdict that says why.",
     glyph: [...sketch.ellipse(22, 22, 36, 36, 121), ...sketch.ellipse(22, 22, 20, 20, 122), ...sketch.line(22, 22, 40, 4, 123)],
   },
   {
     title: "Interview",
     href: "/interview",
-    body: "Timed mock interviews built on the twenty-six case studies, with stage rubrics, a practice canvas and worked reference architectures.",
+    body: "Timed mocks on twenty-six case studies.",
     glyph: [...sketch.path("M3 6 L28 6 L28 22 L12 22 L6 28 L7 22 L3 22 Z", 131), ...sketch.path("M33 15 L41 15 L41 32 L37 32 L38 38 L31 32 L18 32 L18 27", 132)],
   },
   {
     title: "Reference",
     href: "/reference",
-    body: "Latency numbers, availability nines and capacity estimates, with the units spelled out.",
+    body: "Latency numbers, nines, capacity maths.",
     glyph: [
       ...sketch.rect(2, 15, 40, 14, 141),
       ...[8, 14, 20, 26, 32, 38].flatMap((x, i) => sketch.line(x, 15, x, i % 2 ? 20 : 23, 142 + i, { roughness: 0.5 })),
@@ -53,9 +53,9 @@ const PILLARS: Pillar[] = [
 ];
 
 const STEPS = [
-  { href: CACHING_LESSON, title: "Learn caching", body: "Why hit rate comes from key skew, how it sets database load, and why a cold cache can cause a stampede." },
-  { href: "/sandbox?template=cache-aside", title: "Build cache-aside", body: "Wire a load balancer, two services, a cache and a database. Drive Zipf traffic and watch the cache warm." },
-  { href: CHALLENGE, title: "Survive a cache restart", body: "The cache node restarts empty mid-run. Keep reads fast and successful while the database takes the misses." },
+  { href: CACHING_LESSON, title: "Learn caching", body: "Hit rate, database load, cold-cache stampede." },
+  { href: "/sandbox?template=cache-aside", title: "Build cache-aside", body: "Wire it up. Drive traffic. Watch the cache warm." },
+  { href: CHALLENGE, title: "Survive a cache restart", body: "The cache restarts empty. Keep reads fast." },
 ];
 
 const INVARIANT_TEXT: Record<string, string> = {
@@ -93,8 +93,7 @@ export default function Home() {
         <div className="mt-10 grid grid-cols-1 items-start gap-x-12 gap-y-12 lg:mt-14 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
           <div className="min-w-0 lg:pt-2">
             <p className="max-w-[34rem] text-lg leading-relaxed text-ink-2 lg:text-[1.1875rem]">
-              Lessons with a question in every step, a simulator you can push until it breaks, and challenges graded with explained verdicts. Everything
-              runs in your browser, on the same engine as the figure.
+              Lessons, a simulator and graded challenges, all in your browser.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <Link href={CACHING_LESSON} className="btn btn-primary h-12 px-5 text-base">
@@ -134,7 +133,7 @@ export default function Home() {
                 <span className="sec">§1</span>Life of a request
               </h2>
               <p className="mt-4 max-w-[48ch] text-lg leading-relaxed text-ink-2">
-                Follow a single read from the browser to the database and back, then watch the next read stop at the cache.
+                One read, browser to database and back.
               </p>
             </div>
             <p className="margin-note text-lg">Scroll to trace user:42.</p>
@@ -150,9 +149,7 @@ export default function Home() {
             <h2 id="contents" className="font-display text-4xl leading-tight tracking-tight sm:text-5xl">
               <span className="sec">§2</span>Five ways in
             </h2>
-            <p className="mt-5 max-w-sm text-lg leading-relaxed text-ink-2">
-              Each part stands alone. Together they take you from a number on a page to a system you have broken and fixed yourself.
-            </p>
+            <p className="mt-5 max-w-sm text-lg leading-relaxed text-ink-2">Each part stands alone.</p>
           </div>
           <ol className="min-w-0 border-t-2 border-fg">
             {PILLARS.map((p) => (
@@ -229,8 +226,7 @@ export default function Home() {
             <span className="sec">§4</span>How a verdict reads
           </h2>
           <p className="mt-5 max-w-[46ch] text-lg leading-relaxed text-ink-2">
-            Every challenge has a fixed pass bar and fixed seeds, so any result can be reproduced. The verdict lists each check and says exactly which one
-            failed, and why.
+            Fixed pass bar, fixed seeds, every check explained.
           </p>
           <Link href={CHALLENGE} className="btn mt-8 h-12 px-5 text-base">
             Attempt this challenge
@@ -268,7 +264,7 @@ export default function Home() {
             <span className="stamp absolute -top-4 right-3 bg-surface text-[0.8rem] text-success sm:right-4">Passed ★★★</span>
           </div>
           <figcaption className="figcap mt-3">
-            <b>Fig. 3</b>The pass bar for the first challenge. Three stars means the design also holds when the failure comes at a different moment.
+            <b>Fig. 3</b>The first challenge&apos;s pass bar.
           </figcaption>
         </figure>
       </section>
