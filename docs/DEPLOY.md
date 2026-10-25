@@ -1,17 +1,17 @@
 # Deploying with accounts and sync
 
-Accounts are **optional**. The app is local-first (IndexedDB); signing in mirrors designs, progress and reviews to Postgres so a learner can switch devices. Runs stay local.
+Accounts are **optional**. Each signed-in account has its own IndexedDB workspace and cloud copy of designs, progress, reviews and run summaries. Guest and legacy browser work stays local; transfer it explicitly by exporting while signed out and importing after signing in. Account changes abort sync and reload the page so mounted editors cannot retain another account's records. Sync requests carry the initiating account ID, which must match the server session.
 
 ```mermaid
 flowchart LR
-  B["Browser<br/>IndexedDB (source of truth)"] -- "better-auth session cookie" --> A["Next.js on Vercel<br/>region sin1"]
+  B["Browser<br/>IndexedDB per account"] -- "better-auth session cookie" --> A["Next.js on EC2<br/>Singapore"]
   A -- "Drizzle + neon-http<br/>pooled host" --> N[("Neon Postgres<br/>aws-ap-southeast-1<br/>Singapore")]
   B -- "POST/GET /api/sync<br/>batched, cursor-based" --> A
 ```
 
 ## Why these choices
 
-- **Neon `aws-ap-southeast-1` (Singapore)**: the closest Neon region to Bangladesh. Vercel functions are pinned to `sin1` in `vercel.json`, so the app-to-database hop stays inside one region.
+- **Neon `aws-ap-southeast-1` (Singapore)**: matches the production EC2 region.
 - **Drizzle ORM + `neon-http`**: no query engine binary, no connection pool to warm, one HTTPS round trip per query. Writes are single statements, so none needs an interactive transaction.
 - **Better Auth**: email + password out of the box; GitHub and Google switch on when their env vars exist. Rate limits are stored in Postgres, so they hold across serverless instances.
 
@@ -19,12 +19,12 @@ flowchart LR
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | Pooled Neon URL (host contains `-pooler`). Runtime. |
+| `DATABASE_URL` | Pooled Neon URL (host contains `-pooler`), using the restricted `sds_runtime` role. |
 | `DATABASE_URL_UNPOOLED` | Direct Neon URL. Migrations only. |
 | `BETTER_AUTH_SECRET` | 32+ random bytes. Rotate to invalidate all sessions. |
 | `BETTER_AUTH_URL` | Public origin, e.g. `https://your-domain`. Also the allowed `Origin` for `/api/sync`. |
-| `BREVO_CLIENT_ID` / `BREVO_CLIENT_SECRET` / `EMAIL_FROM` | Optional. When all three are set, sign-up requires email verification and password-reset emails are sent through Brevo's transactional API. `EMAIL_FROM` is `Name <address>` and the address must be authenticated in Brevo. When unset, nobody is locked out and emails are not sent. |
-| `CRON_SECRET` | Bearer token for `/api/cron/prune` (daily retention job in `vercel.json`). Vercel sends it automatically. |
+| `BREVO_CLIENT_ID` / `BREVO_CLIENT_SECRET` / `EMAIL_FROM` | Required for production account email. Verification stays enforced even if mail is misconfigured. `EMAIL_FROM` is `Name <address>`, authenticated in Brevo. |
+| `CRON_SECRET` | Bearer token for `/api/cron/prune`; the host runs `deploy/check.mjs` daily inside the container. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Optional. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional. |
 
@@ -44,9 +44,9 @@ Rotate the secret with the same `secret rotate` command; the old one keeps worki
 
 ## Release steps
 
-1. Set the variables above in the Vercel project (Production and Preview).
+1. Set runtime variables on EC2 as described in `DEPLOY-AWS.md`; keep migration owner credentials in GitHub.
 2. `npm run db:generate` after any change to `src/server/db/schema.ts`, commit the new `drizzle/` files.
-3. CI (`.github/workflows/ci.yml`) runs typecheck, lint, tests and build, then `npm run db:migrate` on `main`. Add the `DATABASE_URL_UNPOOLED` repo secret.
+3. Merge verified pull requests to `main`, then from `main` to `release`. Only a `release` push migrates and deploys; both branches and pull requests run verification.
 4. Monitor `GET /api/health` (returns 503 when the database is unreachable).
 
 ## Data model
@@ -61,7 +61,7 @@ Runs sync as RunKey + summary (never raw events); deleting a design deletes its 
 
 ## Known limits
 
-- Email verification and password reset are on when the three Brevo variables are set. Existing unverified users must verify before their next sign-in. Brevo's free plan allows 300 emails a day.
+- Production email verification is always required. Sessions are checked against the database without a session cache cookie, so logout and revocation take effect immediately. Profile names are limited to 80 characters and auth POST bodies to 16 KiB.
 - See `docs/OPERATIONS.md` for the runbook (restore, secret rotation, retention).
 - Conflict rule: designs and reviews are last-write-wins by `updatedAt`; progress is max-merged on the client.
 - Quotas: 5,000 synced records per user, 2 MB per design, 200 records per request.

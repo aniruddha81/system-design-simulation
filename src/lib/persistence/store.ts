@@ -9,6 +9,7 @@ import {
 export const DATABASE_VERSION = 2;
 export type OpenStoreOptions = {
   name?: string;
+  userId?: string;
   onVersionChange?: () => void;
   onBlocked?: () => void;
   onFallback?: (reason: string) => void;
@@ -199,7 +200,7 @@ export async function readAll<K extends StoreName>(tx: Transaction, name: K): Pr
 export class Store {
   private generation = 0;
   private requestedPersistence = false;
-  constructor(private backend: Backend, readonly persistent: boolean, readonly readOnly = false, readonly fallbackReason?: string) {}
+  constructor(private backend: Backend, readonly persistent: boolean, readonly readOnly = false, readonly fallbackReason?: string, readonly userId: string | null = null) {}
 
   /** Internal transaction boundary, also used for atomic multi-store restore. */
   async transaction<T>(body: (tx: Transaction) => Promise<T>, write = false): Promise<T> {
@@ -352,7 +353,7 @@ export class Store {
 }
 
 export async function createStore(options: OpenStoreOptions = {}): Promise<Store> {
-  const name = options.name ?? "sds";
+  const name = options.name ?? (options.userId ? `sds-account:${options.userId}` : "sds");
   let snapshot: Snapshot = {};
   let probe: IDBPDatabase | undefined;
   let connection: IDBPDatabase | undefined;
@@ -399,7 +400,7 @@ export async function createStore(options: OpenStoreOptions = {}): Promise<Store
       },
       blocking() { connection?.close(); options.onVersionChange?.(); },
     }, options.onBlocked);
-    return await new Store(indexedBackend(connection), true).initialize();
+    return await new Store(indexedBackend(connection), true, false, undefined, options.userId).initialize();
   } catch (error) {
     probe?.close();
     connection?.close();
@@ -407,12 +408,28 @@ export async function createStore(options: OpenStoreOptions = {}): Promise<Store
     if (needsMigration && !readOnly) for (const store of STORE_NAMES) snapshot[store] = snapshot[store]?.map(([key, value]) => [key, migrateRecord(store, value)]);
     const reason = readOnly ? "Database is newer than this app; running a read-only in-memory copy. Update the app." : "Storage unavailable; progress will not be saved. Export your work before leaving.";
     options.onFallback?.(reason);
-    return new Store(memoryBackend(snapshot), false, readOnly, reason).initialize();
+    return new Store(memoryBackend(snapshot), false, readOnly, reason, options.userId).initialize();
   }
 }
 
 let defaultStore: Promise<Store> | undefined;
+async function openWorkspace() {
+  let userId: string | undefined;
+  try {
+    const response = await fetch("/api/auth/get-session", { cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error("Session unavailable");
+    const session = await response.json();
+    if (typeof session?.user?.id === "string") userId = session.user.id;
+    try { localStorage.setItem("sds-workspace-user", userId ?? ""); } catch { /* Storage may be disabled. */ }
+  } catch {
+    // Offline work stays in the last selected workspace; sync still requires a fresh server session.
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      try { userId = localStorage.getItem("sds-workspace-user") || undefined; } catch { /* Use the local workspace. */ }
+    }
+  }
+  return createStore({ userId });
+}
 export function openStore(options?: OpenStoreOptions): Promise<Store> {
   if (options) return createStore(options);
-  return defaultStore ??= createStore();
+  return defaultStore ??= openWorkspace();
 }

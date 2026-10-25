@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1.0",
+  "description": "SDS deployment transport: SSH on port 22 only",
+  "sessionType": "Port",
+  "properties": { "portNumber": "22" }
+}

@@ -1,4 +1,3 @@
-import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { auth } from "@/server/auth";
 import { MAX_PAGE, pullRecords, pushRecords, pushSchema } from "@/server/sync";
@@ -10,14 +9,15 @@ import { readBody } from "../body";
 const MAX_BODY = 4 * 1024 * 1024;
 const noStore = { "Cache-Control": "no-store" };
 
-async function userId() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  return session?.user.id;
+async function userId(req: Request) {
+  const session = await auth.api.getSession({ headers: req.headers, query: { disableCookieCache: true } });
+  // Bind each request to the workspace that started it, even if another tab changes the session cookie.
+  return session && req.headers.get("x-sds-user") === session.user.id ? session.user.id : undefined;
 }
 
 /** Pull: records changed after `since` (server cursor), oldest first, one page at a time. */
 export async function GET(req: Request) {
-  const uid = await userId();
+  const uid = await userId(req);
   if (!uid)
     return NextResponse.json(
       { error: "unauthorized" },
@@ -39,7 +39,7 @@ export async function GET(req: Request) {
 
 /** Push: a batch of records. Same-origin JSON only (CSRF), size-capped, each record validated. */
 export async function POST(req: Request) {
-  const uid = await userId();
+  const uid = await userId(req);
   if (!uid)
     return NextResponse.json(
       { error: "unauthorized" },

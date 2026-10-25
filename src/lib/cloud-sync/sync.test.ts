@@ -47,7 +47,7 @@ const stores: Store[] = [];
 // Each device has its own IndexedDB and its own localStorage (sync cursor).
 const local = new Map<Store, Map<string, string>>();
 const device = async () => {
-  const s = await openStore({ name: `sds-sync-${crypto.randomUUID()}` });
+  const s = await openStore({ name: `sds-sync-${crypto.randomUUID()}`, userId: "u1" });
   stores.push(s);
   local.set(s, new Map());
   return s;
@@ -63,6 +63,27 @@ afterEach(() => {
 });
 
 describe("cloud sync", () => {
+  it("rejects another account's local records before making a request", async () => {
+    const a = await device();
+    await a.designs.put(design("private-A"), 0);
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    await expect(syncNow(a, "u2")).rejects.toThrow("another account");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("binds requests to the initiating account and stops before applying an aborted pull", async () => {
+    const a = await device();
+    const controller = new AbortController();
+    const apply = vi.spyOn(a.remote, "apply");
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      expect(new Headers(init.headers).get("x-sds-user")).toBe("u1");
+      controller.abort();
+      return Response.json({ records: [], cursor: 0, hasMore: false });
+    });
+    await expect(syncNow(a, "u1", controller.signal)).rejects.toThrow();
+    expect(apply).not.toHaveBeenCalled();
+  });
   it("mirrors progress and designs between two devices, propagates deletes, and settles", async () => {
     const server = fakeServer();
     vi.stubGlobal("fetch", server.handler);

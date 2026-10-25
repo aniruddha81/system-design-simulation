@@ -7,7 +7,7 @@ Monitor `GET /api/health` once per minute. A 200 means the process can query Pos
 During an incident:
 
 1. Record the start time, affected routes, deployment release and impact. Never copy session cookies, sync payloads or database URLs into tickets.
-2. Check health, Neon availability and Vercel function logs. Logs are one-line JSON with fixed event names; `rate_limit_unavailable` means protection is temporarily failing open.
+2. Check health, Neon availability and `docker compose logs app` on EC2. Logs are one-line JSON with fixed event names; `rate_limit_unavailable` means protection is temporarily failing open.
 3. Roll back the application deployment if correlated with a release. Do not blindly reverse a migration or delete local learner data.
 4. Restore service, verify authenticated push/pull and signed-out local use, then document the cause and prevention.
 
@@ -17,7 +17,7 @@ Server logs deliberately omit raw error messages, stacks, headers, user IDs and 
 
 `/api/sync` shares 120 requests and 10 MiB of POST body bytes per authenticated user per fixed UTC minute, across instances. Requests and bytes are charged atomically in one Postgres upsert. Rejected pushes do not alter sync records. 429 includes seconds in `Retry-After`; the browser pauses sync requests until that time, leaving local changes pending for the next sync trigger. Window boundaries can permit two minutes of quota in a short burst. DB failures log a warning and fail open, so an unavailable limiter does not itself block sync.
 
-`POST /api/errors` requires the configured same origin, JSON, and at most 16 KiB streamed bytes. It permits 20 reports per minute per IP and 10 per signed-in user. Keys use HMAC hashes; raw IPs are not stored. On Vercel only the platform-overwritten `x-vercel-forwarded-for` is trusted. Other hosts share an anonymous bucket until a trusted proxy address source is configured. Never trust arbitrary forwarded headers. Query strings, fragments, email patterns and credential-shaped text are removed before storage. Stack is capped to 4096 UTF-8 bytes and the whole request to 16 KiB. Release comes from the server deployment, not the browser.
+`POST /api/errors` requires the configured same origin, JSON, and at most 16 KiB streamed bytes. It permits 20 reports per minute per IP and 10 per signed-in user. Keys use HMAC hashes; raw IPs are not stored. Caddy overwrites `x-real-ip` with the TCP peer address and the app port is not public. Never trust arbitrary forwarded headers. Query strings, fragments, email patterns and credential-shaped text are removed before storage. Stack is capped to 4096 UTF-8 bytes and the whole request to 16 KiB. Release comes from the server deployment, not the browser.
 
 ## Migrations
 
@@ -36,7 +36,7 @@ Generate a fresh cryptographically random secret of at least 32 bytes through th
 
 ## Retention and cron
 
-The lead must add a daily UTC schedule `0 3 * * *` for `GET /api/cron/prune` in `vercel.json`. Configure a strong random `CRON_SECRET`; the scheduler must supply `Authorization: Bearer <CRON_SECRET>`. Missing or incorrect credentials return 401 and make no changes. Never put the secret in a URL. Check the scheduler's success record daily and alert on failures. The endpoint is safe to retry: it deletes client errors older than 30 days and limiter rows whose minute began over one day ago. Partial deletion on failure is harmless; rerun after resolving the database issue. Retention in backups follows Neon's separately configured recovery policy.
+The EC2 host runs the daily UTC schedule `17 3 * * *` described in `DEPLOY-AWS.md`. It executes `deploy/check.mjs prune` inside the app container, reading `CRON_SECRET` from its environment and requiring a successful HTTP 200 JSON response. Missing or incorrect credentials return 401 and make no changes. Never put the secret in a URL or call HTTP localhost through Caddy: that returns a redirect without pruning. Check the scheduler's success record daily and alert on failures. The endpoint is safe to retry: it deletes client errors older than 30 days and limiter rows whose minute began over one day ago. Partial deletion on failure is harmless; rerun after resolving the database issue. Retention in backups follows Neon's separately configured recovery policy.
 
 Required existing environment: `DATABASE_URL`, `DATABASE_URL_UNPOOLED` (migration only), `BETTER_AUTH_URL`, `BETTER_AUTH_SECRET`. New: `CRON_SECRET`. Optional: `VERCEL_GIT_COMMIT_SHA` for diagnostic release attribution (otherwise `unknown`). Never expose secrets with `NEXT_PUBLIC_`.
 

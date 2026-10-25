@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "ssm:StartSession",
+    "Resource": [
+      "arn:aws:ec2:ap-southeast-1:573693339820:instance/i-056b2dbe47b5a1a63",
+      "arn:aws:ssm:ap-southeast-1:573693339820:document/sds-ssh"
+    ]
+  }, {
+    "Effect": "Allow",
+    "Action": ["ssmmessages:OpenDataChannel", "ssm:TerminateSession"],
+    "Resource": "arn:aws:ssm:ap-southeast-1:573693339820:session/sds-deploy-*"
+  }]
+}

@@ -96,6 +96,7 @@ function Signed({ name, email, verify }: { name: string; email: string; verify: 
         </div>
       </div>
       {verify && <VerificationNotice email={email} />}
+      <p className="text-sm text-muted">Each account has its own workspace. Earlier local work stays on this device: export it from Settings while signed out, then sign in and import the backup to copy it here.</p>
       <Stats
         title="Sync status"
         items={[

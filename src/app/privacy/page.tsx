@@ -20,7 +20,7 @@ export default function PrivacyPage() {
       ].map(([data, local, cloud]) => <tr key={data} className="border-b border-rule"><th scope="row" className="p-3 font-medium">{data}</th><td className="p-3">{local}</td><td className="p-3">{cloud}</td></tr>)}</tbody>
     </table></div>
     <section className="mt-8"><h2 className="font-display text-2xl">Sync and sign-in</h2>
-      <p className="mt-3">Sync sends designs, progress, reviews and run summaries. The database region is Singapore. Sign-in uses a session cookie; the current authentication configuration also enables a short-lived session cache cookie. Preferences stay on your device.</p>
+      <p className="mt-3">Sync sends designs, progress, reviews and run summaries. The database region is Singapore. Sign-in uses a session cookie checked against the server. Each account has a separate workspace on this device. Earlier local work is kept separately and is only transferred when you explicitly export and import it. Preferences stay on your device.</p>
     </section>
     <section className="mt-8"><h2 className="font-display text-2xl">Export or erase</h2>
       <p className="mt-3">Export your local backup from <Link className="inline-flex min-h-6 items-center underline" href="/settings">Settings</Link>. Let sync finish first to include cloud records. To delete your account and synced data, open <Link className="inline-flex min-h-6 items-center underline" href="/account">Account</Link>, then Delete account. Reset local data separately in Settings; clear site data in your browser to remove offline copies.</p>

@@ -11,4 +11,5 @@ docker save system-design-simulation:latest | gzip > "${TMPDIR:-/tmp}/sds-image.
 scp -i "$KEY" "${TMPDIR:-/tmp}/sds-image.tgz" "$HOST:/opt/sds/"
 scp -i "$KEY" docker-compose.prod.yml "$HOST:/opt/sds/docker-compose.yml"
 scp -i "$KEY" deploy/Caddyfile "$HOST:/opt/sds/deploy/Caddyfile"
+scp -i "$KEY" deploy/check.mjs "$HOST:/opt/sds/deploy/check.mjs"
 "${SSH[@]}" 'cd /opt/sds && gunzip -c sds-image.tgz | docker load && rm sds-image.tgz && docker compose up -d && docker image prune -f >/dev/null && docker compose ps'

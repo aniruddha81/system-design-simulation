@@ -9,7 +9,7 @@ type State = { cursor: number; pushedRevision: number; designs: string[] };
 export type SyncResult = { pushed: number; pulled: number; rejected: string[] };
 
 const BATCH = 100;
-const stateKey = (userId: string) => `sds-sync:${userId}`;
+const stateKey = (userId: string) => `sds-sync-v2:${userId}`;
 
 function load(userId: string): State {
   try {
@@ -28,9 +28,10 @@ const save = (userId: string, s: State) => {
 
 let retryAt = 0;
 
-async function call<T>(url: string, init?: RequestInit): Promise<T> {
+async function call<T>(url: string, userId: string, signal: AbortSignal, init?: RequestInit): Promise<T> {
+  signal.throwIfAborted();
   if (Date.now() < retryAt) throw new Error("sync 429: backing off");
-  const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json" }, credentials: "same-origin" });
+  const res = await fetch(url, { ...init, signal, headers: { "Content-Type": "application/json", "X-SDS-User": userId }, credentials: "same-origin" });
   if (res.status === 429) {
     const retry = res.headers.get("Retry-After");
     const seconds = Number(retry);
@@ -41,7 +42,9 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function syncNow(store: Store, userId: string): Promise<SyncResult> {
+export async function syncNow(store: Store, userId: string, signal = new AbortController().signal): Promise<SyncResult> {
+  if (store.userId !== userId) throw new Error("Cannot sync another account's workspace");
+  signal.throwIfAborted();
   const st = load(userId);
   const [designs, progress, reviews, runs] = await Promise.all([store.designs.list(), store.progress.all(), store.reviews.all(), store.runs.all()]);
   const now = Date.now();
@@ -60,7 +63,7 @@ export async function syncNow(store: Store, userId: string): Promise<SyncResult>
   let pushed = 0;
   const rejected: string[] = [];
   for (let i = 0; i < out.length; i += BATCH) {
-    const r = await call<{ accepted: number; rejected: string[] }>("/api/sync", { method: "POST", body: JSON.stringify({ records: out.slice(i, i + BATCH) }) });
+    const r = await call<{ accepted: number; rejected: string[] }>("/api/sync", userId, signal, { method: "POST", body: JSON.stringify({ records: out.slice(i, i + BATCH) }) });
     pushed += r.accepted;
     rejected.push(...r.rejected);
   }
@@ -68,11 +71,13 @@ export async function syncNow(store: Store, userId: string): Promise<SyncResult>
   let pulled = 0;
   let cursor = st.cursor;
   for (;;) {
-    const page = await call<{ records: Pulled[]; cursor: number; hasMore: boolean }>(`/api/sync?since=${cursor}`);
+    const page = await call<{ records: Pulled[]; cursor: number; hasMore: boolean }>(`/api/sync?since=${cursor}`, userId, signal);
+    signal.throwIfAborted();
     pulled += await store.remote.apply(page.records);
     cursor = page.cursor;
     if (!page.hasMore) break;
   }
+  signal.throwIfAborted();
   save(userId, { cursor, pushedRevision: maxRevision, designs: (await store.designs.list()).map((d) => d.id) });
   return { pushed, pulled, rejected };
 }

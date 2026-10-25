@@ -42,17 +42,17 @@ This repo ships a modified Next.js. Read the relevant guide in `node_modules/nex
 
 ## Branches and deployment
 
-Only two branches exist: `main` (development) and `release` (production). Pushing to `release` runs the whole pipeline in [.github/workflows/ci.yml](.github/workflows/ci.yml):
+The protected branches are `main` (development) and `release` (production). Pull requests and pushes to either run verification. Merge a verified pull request from `main` to `release` to deploy through [.github/workflows/ci.yml](.github/workflows/ci.yml):
 
 ```mermaid
 flowchart LR
-  P["git push origin main:release"] --> V["verify<br/>typecheck, lint, test, build"]
+  P["merge main into release"] --> V["verify<br/>typecheck, lint, test, build"]
   V --> M["migrate<br/>Drizzle on Neon"]
-  M --> D["deploy<br/>Docker image over SSH to EC2"]
+  M --> D["deploy<br/>Docker image over SSM + SSH to EC2"]
   D --> H["health check<br/>/api/health"]
 ```
 
-Nothing else triggers CI or deploys. Repo secrets: `DATABASE_URL_UNPOOLED`, `EC2_SSH_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (the last two belong to an IAM user that can only open and close port 22 on the web security group for the length of a deploy). Host setup, domain and HTTPS: [docs/DEPLOY-AWS.md](docs/DEPLOY-AWS.md). Accounts and sync: [docs/DEPLOY.md](docs/DEPLOY.md).
+Only pushes to `release` migrate and deploy. Secrets: `DATABASE_URL_UNPOOLED` and `EC2_SSH_KEY`; AWS credentials are short-lived GitHub OIDC credentials, with no firewall-editing permission. The `production` environment accepts only `release`. Host setup, IAM policies and HTTPS: [docs/DEPLOY-AWS.md](docs/DEPLOY-AWS.md). Accounts and sync: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Docs
 
