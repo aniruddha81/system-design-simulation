@@ -1,0 +1,34 @@
+[
+  {
+    "concept": "Online schema evolution and expand/contract",
+    "lesson": "schema-evolution",
+    "activities": ["V", "Q"],
+    "assessment": "compatibility choices, backfill race diagnosis, migration ordering and contract gates",
+    "capability": "visual migration protocol and assessed rollout scenarios; no SQL execution",
+    "limitations": "database-specific DDL locks and cross-store write atomicity are not simulated"
+  },
+  {
+    "concept": "Object storage, durability and erasure coding",
+    "lesson": "object-storage",
+    "activities": ["V", "Q"],
+    "assessment": "blob layout choices, durability distinction, replica and coding arithmetic, storage and egress subtotal",
+    "capability": "visual storage layouts and fixed-input capacity and cost questions",
+    "limitations": "ideal equal-sized coding fragments; invented prices; no repair or correlated-failure model"
+  },
+  {
+    "concept": "Inverted indexes, lexical ranking and search fan-out",
+    "lesson": "search",
+    "activities": ["V", "Q"],
+    "assessment": "postings intersection, analyzer mismatch, ranking signals, index lag and partial-result choices",
+    "capability": "visual postings, indexing timeline and sharded query sequence; no search engine execution",
+    "limitations": "qualitative BM25; no semantic retrieval, distributed scoring calculation or measured lag"
+  },
+  {
+    "concept": "Service discovery, health and API front doors",
+    "lesson": "service-discovery",
+    "activities": ["V", "Q"],
+    "assessment": "DNS and registry comparison, endpoint-selection placement, stale-window arithmetic, draining and gateway roles",
+    "capability": "visual DNS and registry discovery paths and health timing scenarios",
+    "limitations": "assumed cache and detection behavior; no registry consensus or live proxy execution"
+  }
+]

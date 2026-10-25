@@ -1,0 +1,145 @@
+{/*
+id: databases
+slug: databases
+track: building-blocks
+title: "Databases: query paths and storage engines"
+description: "Match access patterns to database families, compare scans with indexed lookups, and reason about B-tree and LSM write costs."
+objectives:
+  - id: choose-family
+    text: "Choose a database family from access patterns and constraints"
+  - id: estimate-index-cost
+    text: "Compare full-scan and indexed query work including returned rows"
+  - id: compare-storage
+    text: "Explain B-tree page updates and LSM flush and compaction"
+  - id: calculate-amplification
+    text: "Calculate write amplification and explain its workload dependence"
+requires: ["throughput", "latency-numbers"]
+activities: [C, Q]
+limitations:
+  - "Index costs are illustrative work counts, not wall-clock predictions; cache state and storage layout matter."
+  - "SQL versus NoSQL does not determine transaction, consistency or durability guarantees; inspect the actual engine."
+  - "Write-amplification examples use supplied measurements; logging, compression and compaction policies change results."
+sources:
+  - title: "PostgreSQL: Index Types"
+    url: "https://www.postgresql.org/docs/current/indexes-types.html"
+  - title: "PostgreSQL: Using EXPLAIN"
+    url: "https://www.postgresql.org/docs/current/using-explain.html"
+  - title: "Bigtable: A Distributed Storage System for Structured Data"
+    url: "https://www.usenix.org/conference/osdi-06/bigtable-distributed-storage-system-structured-data"
+  - title: "RocksDB: Overview"
+    url: "https://github.com/facebook/rocksdb/wiki/RocksDB-Overview"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="families" title="Start with the access pattern">
+
+<Compare title="Database families" sides={[{"title": "Relational SQL", "points": ["Relations, joins and constraints", "Flexible indexed queries"]}, {"title": "Key-value / document", "points": ["Key lookups / aggregate documents", "Indexes depend on engine"]}, {"title": "Wide-column / graph", "points": ["Partition-key and range access", "Or relationship traversal"]}]} />
+
+NoSQL covers multiple families, not one feature set. Key-value stores suit keyed access; documents group nested data; wide-column stores organize partitioned rows; graph databases emphasize relationships. SQL systems can also store JSON. Choose from query shape, invariants and operational needs.
+
+<Choice
+  id="families-check"
+  objective="choose-family"
+  prompt="A checkout system needs joins and enforced relational constraints across orders and line items. Which is the clearest starting point?"
+  options={[{"id": "option-3", "text": "A graph database solely because orders have identifiers", "feedback": "Identifiers alone do not create a graph-traversal workload."}, {"id": "option-1", "text": "A relational database with suitable transaction guarantees", "feedback": "Relations and constraints match the stated invariants; verify the actual isolation behavior.", "correct": true}, {"id": "option-2", "text": "Any NoSQL store because all offer the same joins", "feedback": "NoSQL families differ, and joins and constraints are engine-specific."}]}
+/>
+
+</Step>
+
+<Step id="family-boundaries" title="Avoid a label-based guarantee">
+
+<Compare title="Two access patterns" sides={[{"title": "Session lookup", "points": ["Read by opaque session id", "TTL expiration useful"]}, {"title": "Relationship traversal", "points": ["Find paths across many hops", "Edge traversal is central"]}]} />
+
+A key-value store is a natural fit for simple keyed sessions. A graph model may fit multi-hop relationships. Neither label guarantees transactions, scale or speed. Measure the actual workload and verify durability and consistency requirements separately.
+
+<Choice
+  id="family-boundaries-check"
+  objective="choose-family"
+  prompt="Which workload most directly motivates a graph-oriented database?"
+  options={[{"id": "option-3", "text": "Any workload that requires durable writes", "feedback": "Durability is an engine guarantee, not exclusive to graph databases."}, {"id": "option-1", "text": "Repeated variable-depth relationship traversals", "feedback": "The query follows connected edges rather than fetching one known key.", "correct": true}, {"id": "option-2", "text": "One session lookup by its exact id", "feedback": "An indexed key-value lookup already matches this access pattern."}]}
+/>
+
+</Step>
+
+<Step id="scan-index" title="Compare examined rows with returned rows">
+
+<Bars title="Illustrative selective query over 1,000,000 rows" items={[{"label": "Full scan: examined rows", "value": 1000000, "unit": "rows"}, {"label": "Indexed: matching rows fetched", "value": 10, "unit": "rows"}]} />
+
+A full scan examines the table. A suitable B-tree index navigates to a key range, then reads matches. A rough comparison is O(N) versus O(log N + K), where K is returned entries. Index traversal and heap fetches still cost work; this picture is not a latency benchmark.
+
+<Choice
+  id="scan-index-check"
+  objective="estimate-index-cost"
+  prompt="An indexed equality query returns 10 matching rows from one million. Which work estimate is reasonable?"
+  options={[{"id": "option-2", "text": "Exactly one operation regardless of result count", "feedback": "Returning 10 rows requires visiting or retrieving those results."}, {"id": "option-3", "text": "Always scan one million rows even with a selective usable index", "feedback": "A suitable selective index permits a narrower access path."}, {"id": "option-1", "text": "Index navigation plus roughly 10 matching entries and needed row fetches", "feedback": "The index avoids examining every row, but retrieving matches still costs work.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="index-selectivity" title="A usable index can still lose">
+
+<Compare title="Planner choices" sides={[{"title": "Selective predicate", "points": ["Few matches", "Index path often useful"]}, {"title": "Most rows match", "points": ["Many scattered row fetches", "Sequential scan may win"]}]} />
+
+Indexes consume storage and add write work. They help only when their ordering and predicates support the query. If most rows match, sequential I/O can beat many random fetches. EXPLAIN shows the chosen plan; EXPLAIN ANALYZE executes it and measures actual work.
+
+<Choice
+  id="index-selectivity-check"
+  objective="estimate-index-cost"
+  prompt="A query returns 90% of a table. Why might the planner choose a sequential scan?"
+  options={[{"id": "option-3", "text": "Indexes contain no ordering information", "feedback": "B-tree ordering is precisely what enables equality and range navigation."}, {"id": "option-1", "text": "Reading nearly all rows sequentially may cost less than index-driven fetches", "feedback": "Low selectivity can erase the index advantage.", "correct": true}, {"id": "option-2", "text": "The existence of an index forces its use", "feedback": "The planner can choose a scan when its estimated cost is lower."}]}
+/>
+
+</Step>
+
+<Step id="btree" title="Update ordered pages">
+
+<Compare title="B-tree organization" sides={[{"title": "Read path", "points": ["Navigate internal pages", "Read ordered leaf entries"]}, {"title": "Write path", "points": ["Modify affected pages", "Split pages when required"]}]} />
+
+B-tree indexes maintain ordered pages, supporting equality and range scans. Updates modify affected pages and may cause splits; databases typically add logging and buffering. Every additional secondary index adds maintenance. Ordered lookup does not make writes free or define the transaction isolation level.
+
+<Choice
+  id="btree-check"
+  objective="compare-storage"
+  prompt="Why can adding a secondary B-tree index slow inserts?"
+  options={[{"id": "option-3", "text": "An index changes every transaction to serializable isolation", "feedback": "Storage organization and isolation guarantees are separate design decisions."}, {"id": "option-1", "text": "Each insert must also maintain that index and associated storage state", "feedback": "The additional access path requires additional write work.", "correct": true}, {"id": "option-2", "text": "B-trees cannot accept new keys", "feedback": "B-trees support inserts, including page splits when necessary."}]}
+/>
+
+</Step>
+
+<Step id="lsm" title="Buffer, flush and merge">
+
+<Timeline title="Simplified LSM lifecycle" events={[{"at": "Write", "label": "Log for durability; insert into memory table"}, {"at": "Flush", "label": "Write a sorted immutable file"}, {"at": "Compact", "label": "Merge sorted files; discard obsolete versions when safe"}]} />
+
+An LSM engine buffers writes and flushes sorted runs. Compaction merges those runs, rewriting data to control overlap and space. Reads may consult memory and multiple files; Bloom filters and indexes can reduce probes. LSMs trade read, write and space amplification through policy choices.
+
+<Choice
+  id="lsm-check"
+  objective="compare-storage"
+  prompt="Why can a logical value be written to storage more than once in an LSM?"
+  options={[{"id": "option-1", "text": "It can be flushed, then rewritten during later compactions", "feedback": "Compaction reorganizes existing data as well as accepting new writes.", "correct": true}, {"id": "option-2", "text": "Each read must rewrite the whole database", "feedback": "Reads do not inherently require a full rewrite."}, {"id": "option-3", "text": "Immutable files mean data is never copied again", "feedback": "Files stay immutable, but compaction creates new files containing merged data."}]}
+/>
+
+</Step>
+
+<Step id="write-amplification" title="Measure physical work per logical byte">
+
+<Bars title="Illustrative measured amplification for 100 MB logical writes" items={[{"label": "Logical writes", "value": 100, "unit": "MB"}, {"label": "Engine A: 3x", "value": 300, "unit": "MB physical"}, {"label": "Engine B: 8x", "value": 800, "unit": "MB physical"}]} />
+
+**Write amplification = physical bytes written / logical bytes written.** At 8?, 100 MB becomes 800 MB. Compare the same measurement boundary: device writes, engine writes and logged bytes differ. Neither B-tree nor LSM has one universal factor; workload, compaction, page size and compression matter.
+
+<Choice
+  id="write-amplification-check"
+  objective="calculate-amplification"
+  prompt="A measured workload writes 50 MB logically and 200 MB physically using the same accounting boundary. What is write amplification?"
+  options={[{"id": "option-2", "text": "0.25x", "feedback": "50 / 200 reverses physical and logical bytes."}, {"id": "option-3", "text": "150x", "feedback": "Subtracting the two byte counts does not produce an amplification ratio."}, {"id": "option-1", "text": "4x", "feedback": "200 / 50 = 4; this is a measurement for that workload and boundary.", "correct": true}]}
+/>
+
+
+<VariantQuestion template="db.index-work" />
+
+<MasteryCheck templates={["db.index-work", "db.compaction-bytes", "db.amplification"]} count={5} />
+
+</Step>

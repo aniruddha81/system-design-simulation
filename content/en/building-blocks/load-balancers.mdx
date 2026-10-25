@@ -1,0 +1,147 @@
+{/*
+id: load-balancers
+slug: load-balancers
+track: building-blocks
+title: "Load balancers: route, detect and drain"
+description: "Choose a routing layer and algorithm, detect unhealthy targets, and remove instances without abandoning existing work."
+objectives:
+  - id: choose-layer
+    text: "Distinguish L4 connection routing from L7 request routing"
+  - id: choose-algorithm
+    text: "Choose a balancing algorithm for workload and affinity needs"
+  - id: health-routing
+    text: "Explain health-check thresholds and detection delay"
+  - id: sticky-state
+    text: "Explain the availability and balance costs of sticky sessions"
+  - id: drain-connections
+    text: "Sequence connection draining during an instance replacement"
+requires: ["how-the-web-works", "throughput"]
+activities: [C, Q]
+limitations:
+  - "Connection counts approximate work poorly with multiplexing and unequal request costs."
+  - "Health-check timings are illustrative; real detection includes scheduling, timeouts and propagation."
+  - "No packet-level TCP behavior or production proxy configuration is executed here."
+sources:
+  - title: "NGINX HTTP upstream module"
+    url: "https://nginx.org/en/docs/http/ngx_http_upstream_module.html"
+  - title: "Envoy: Load balancing"
+    url: "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancing"
+  - title: "AWS Elastic Load Balancing: Health checks for Application Load Balancer target groups"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html"
+  - title: "AWS Elastic Load Balancing: Edit attributes for Application Load Balancer target groups"
+    url: "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="layers" title="Decide what the balancer can see">
+
+<Compare title="Routing visibility" sides={[{"title": "L4", "points": ["Transport addresses and ports", "Typically routes connections"]}, {"title": "L7", "points": ["HTTP paths, headers and cookies", "Can route individual requests"]}]} />
+
+L4 balances transport flows without needing HTTP semantics. L7 understands the application protocol and can route /images separately from /checkout. Routing encrypted HTTP fields requires terminating or otherwise accessing decrypted traffic.
+
+<Choice
+  id="layers-check"
+  objective="choose-layer"
+  prompt="You must route /checkout to a different service from /images. Which capability is needed?"
+  options={[{"id": "option-1", "text": "L7 HTTP-aware routing", "feedback": "The path belongs to the HTTP request, so the router must inspect HTTP.", "correct": true}, {"id": "option-2", "text": "L4 port routing alone on one shared port", "feedback": "The same port does not distinguish two HTTP paths."}, {"id": "option-3", "text": "Round robin without inspecting the request", "feedback": "Round robin chooses a target, not a service based on path."}]}
+/>
+
+</Step>
+
+<Step id="round-robin" title="Equal turns need comparable work">
+
+<Sequence title="Round-robin cycle" actors={["Balancer", "A", "B"]} messages={[{"from": "Balancer", "to": "A", "label": "Request 1"}, {"from": "Balancer", "to": "B", "label": "Request 2"}, {"from": "Balancer", "to": "A", "label": "Request 3"}, {"from": "Balancer", "to": "B", "label": "Request 4"}]} />
+
+Round robin gives targets turns. It is simple when capacities and request costs are similar. Weighted round robin adjusts shares for unequal capacity; equal request counts still do not guarantee equal CPU time.
+
+<Choice
+  id="round-robin-check"
+  objective="choose-algorithm"
+  prompt="Two equally sized targets serve similarly short requests. Which is a reasonable simple starting point?"
+  options={[{"id": "option-2", "text": "Sticky routing for every request", "feedback": "Affinity adds imbalance and failover costs without a state requirement here."}, {"id": "option-3", "text": "Send everything to the fastest previous response", "feedback": "One noisy measurement can concentrate traffic and overload a target."}, {"id": "option-1", "text": "Round robin", "feedback": "Equal turns are a useful baseline when target capacity and request costs are comparable.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="least-connections" title="Count work still in progress">
+
+<Bars title="Illustrative active connections" items={[{"label": "Target A", "value": 20, "unit": "connections"}, {"label": "Target B", "value": 3, "unit": "connections"}]} />
+
+Least-connections favors the target with fewer active connections. Power-of-two-choices samples two eligible targets and picks the less loaded by a chosen metric. Sampling reduces selection work. With HTTP/2 multiplexing, one connection may contain many requests, so choose the metric carefully.
+
+<Choice
+  id="least-connections-check"
+  objective="choose-algorithm"
+  prompt="Under least-connections, with equal weights, which target receives the next connection?"
+  options={[{"id": "option-3", "text": "Always alternate regardless of counts", "feedback": "That describes round robin, not least-connections."}, {"id": "option-1", "text": "B, with 3 active connections", "feedback": "B has fewer active connections; this does not prove it has lower CPU load.", "correct": true}, {"id": "option-2", "text": "A, with 20 active connections", "feedback": "That reverses the least-connections rule."}]}
+/>
+
+</Step>
+
+<Step id="hash-affinity" title="Balance against key affinity">
+
+<Compare title="Placement policies" sides={[{"title": "Power of two choices", "points": ["Sample two targets", "Pick lower observed load"]}, {"title": "Consistent hash", "points": ["Stable key-to-target mapping", "Membership changes move a subset"]}]} />
+
+Consistent hashing is useful for cache locality and affinity. It does not divide a single hot key across targets. Power-of-two-choices responds to load but may send the same key to different targets. Choose whether locality or dynamic balance matters more.
+
+<Choice
+  id="hash-affinity-check"
+  objective="choose-algorithm"
+  prompt="A cache tier needs stable placement by cache key as nodes change. Which policy fits?"
+  options={[{"id": "option-1", "text": "Consistent hash on the cache key", "feedback": "Most keys retain their owner across a membership change, preserving locality.", "correct": true}, {"id": "option-2", "text": "Power of two choices guarantees stable ownership", "feedback": "Fresh random samples can choose different owners for the same key."}, {"id": "option-3", "text": "Round robin keeps every key on one target", "feedback": "Round robin cycles targets without respecting the key."}]}
+/>
+
+</Step>
+
+<Step id="health" title="Detection takes time">
+
+<Timeline title="Example: 5-second interval, 2 failed checks" events={[{"at": "Just after t0", "label": "Target fails after a successful check"}, {"at": "t5", "label": "First failed check completes"}, {"at": "t10", "label": "Second failed check completes; remove target"}]} />
+
+Active checks probe readiness on a schedule. Thresholds avoid flapping but delay removal. This example assumes negligible probe duration; timeouts and propagation add delay. A shallow health endpoint may pass while real requests fail, so test critical serving dependencies without making checks overload them.
+
+<Choice
+  id="health-check"
+  objective="health-routing"
+  prompt="A target crashes immediately after a passing check. Can this policy stop all failed requests instantly?"
+  options={[{"id": "option-2", "text": "Yes; the threshold predicts failures", "feedback": "Thresholds count observations; they cannot predict a crash."}, {"id": "option-3", "text": "Yes; a TCP-open check proves every dependency works", "feedback": "An open port does not prove the application can serve real requests."}, {"id": "option-1", "text": "No; requests can fail during the detection window", "feedback": "Two failed probes must finish before the routing state changes.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="sticky-sessions" title="Affinity is not durability">
+
+<Compare title="Session placement" sides={[{"title": "Local memory + sticky cookie", "points": ["Repeat requests prefer one target", "Target loss can lose session state"]}, {"title": "Shared durable session store", "points": ["Any target can resume", "Store becomes a dependency"]}]} />
+
+Sticky sessions trade routing freedom for locality. Heavy users can overload one target. If state lives only in that process, affinity cannot save it after a crash. Keep required session state outside disposable instances, or explicitly accept session loss.
+
+<Choice
+  id="sticky-sessions-check"
+  objective="sticky-state"
+  prompt="A sticky target crashes and its session state existed only in memory. What can the balancer recover?"
+  options={[{"id": "option-3", "text": "All state by switching to least-connections", "feedback": "A routing algorithm cannot reconstruct lost process memory."}, {"id": "option-1", "text": "Routing to another target, but not the lost session state", "feedback": "Affinity identifies a destination; it does not replicate memory.", "correct": true}, {"id": "option-2", "text": "The session from the affinity cookie automatically", "feedback": "An affinity cookie normally identifies a target, not the entire application state."}]}
+/>
+
+</Step>
+
+<Step id="draining" title="Retire without abandoning work">
+
+<Timeline title="Graceful target removal" events={[{"at": "Start", "label": "Mark target draining; stop assigning new work"}, {"at": "Wait", "label": "Let in-flight work finish within a deadline"}, {"at": "Finish", "label": "Close remaining connections and terminate"}]} />
+
+Draining separates admission from completion. Stop new assignments before terminating. Bound the wait so stuck requests cannot block deployment forever. Long-lived WebSockets and streams need an explicit reconnect or shutdown policy; they may outlast a normal drain timeout.
+
+<Choice
+  id="draining-check"
+  objective="drain-connections"
+  prompt="An instance has in-flight requests during a rollout. Which sequence minimizes avoidable failures?"
+  options={[{"id": "option-1", "text": "Stop new assignments, wait within a drain deadline, then terminate", "feedback": "Existing work gets time to finish while new work goes to other targets.", "correct": true}, {"id": "option-2", "text": "Terminate first, then remove it from routing", "feedback": "Existing requests are cut off and new ones may still be assigned."}, {"id": "option-3", "text": "Wait indefinitely while continuing new assignments", "feedback": "The instance may never become idle, so replacement cannot finish."}]}
+/>
+
+
+<VariantQuestion template="lb.round-robin-share" />
+
+<MasteryCheck templates={["lb.round-robin-share", "lb.health-delay", "lb.sticky-loss", "lb.drain-remainder"]} count={5} />
+
+</Step>

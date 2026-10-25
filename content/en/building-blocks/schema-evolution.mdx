@@ -1,0 +1,154 @@
+{/*
+id: schema-evolution
+slug: schema-evolution
+track: building-blocks
+title: "Schema evolution: expand, migrate, contract"
+description: "Keep mixed application versions working while a schema changes, a backfill runs, and readers move to the new representation."
+objectives:
+  - id: compatibility-directions
+    text: Distinguish backward and forward compatibility during a mixed-version rollout
+  - id: expand-contract
+    text: Order an expand/contract migration without breaking old instances
+  - id: safe-backfill
+    text: Explain how dual writes and backfills avoid gaps and stale overwrites
+  - id: rollout-gates
+    text: Choose verification and rollback gates before contracting a schema
+requires: [transactions]
+activities: [V, Q]
+limitations:
+  - "Diagrams describe migration protocols; they do not execute SQL or acquire database locks."
+  - "DDL locking, rewrite cost and compatibility depend on the database and exact change."
+  - "Independent stores need durable delivery and reconciliation beyond a local transaction."
+sources:
+  - title: "Parallel Change"
+    url: "https://martinfowler.com/bliki/ParallelChange.html"
+  - title: "PostgreSQL: ALTER TABLE"
+    url: "https://www.postgresql.org/docs/current/sql-altertable.html"
+  - title: "Protocol Buffers: Updating A Message Type"
+    url: "https://protobuf.dev/programming-guides/proto3/#updating"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 18
+*/}
+
+<Step id="mixed-versions" title="Two versions share one database">
+
+<Compare title="A rename is a protocol change" sides={[
+  { title: "Direct rename", points: ["Old app reads full_name", "Column disappears", "Old app fails"] },
+  { title: "Expand first", points: ["Keep full_name", "Add display_name", "Both versions can run"] }
+]} />
+
+An online rollout has mixed versions. Adding a nullable column can preserve old callers; renaming a column they still use cannot. Inventory queries, jobs, exports and rollback binaries, not just the newest service.
+
+<Choice id="rename-risk" objective="expand-contract" prompt="Old instances still SELECT full_name. Which first change preserves them?" options={[
+  { id: "rename", text: "Rename full_name immediately", feedback: "Old SQL still names the removed column and fails." },
+  { id: "add", text: "Add display_name while retaining full_name", correct: true, feedback: "Old reads keep working while new code is prepared." },
+  { id: "drop", text: "Drop full_name after one new instance starts", feedback: "Other instances and background jobs may still depend on it." }
+]} />
+
+</Step>
+
+<Step id="compatibility" title="Name the reader and the writer">
+
+<Compare title="Compatibility directions" sides={[
+  { title: "Backward compatible reader", points: ["New reader accepts old data", "Example: absent optional field"] },
+  { title: "Forward compatible reader", points: ["Old reader accepts new data", "Example: safely ignores unknown field"] }
+]} />
+
+Here, backward compatibility means a new reader accepts old data; forward compatibility means an old reader accepts new data. Both matter during coexistence. Optional fields help only if readers tolerate absence and unknown fields. SQL queries and wire formats have different rules.
+
+<Choice id="reader-direction" objective="compatibility-directions" prompt="A new reader loads records written before display_name existed. Which property is demonstrated?" options={[
+  { id: "backward", text: "Backward compatibility", correct: true, feedback: "The new reader understands old records." },
+  { id: "forward", text: "Forward compatibility", feedback: "That requires showing that an old reader accepts new records." },
+  { id: "both", text: "Both directions automatically", feedback: "New-reader success says nothing about old readers processing new data." }
+]} />
+
+</Step>
+
+<Step id="dual-writes" title="Keep both representations current">
+
+<Sequence title="One database transaction" actors={["App", "Database"]} messages={[
+  { from: "App", to: "Database", label: "BEGIN" },
+  { from: "App", to: "Database", label: "Write full_name and display_name" },
+  { from: "App", to: "Database", label: "COMMIT both or neither" }
+]} />
+
+Deploy writers that maintain both columns before backfilling. A local transaction can keep the pair atomic. Independent stores cannot share that guarantee automatically: use durable change delivery, retry and reconciliation. Two best-effort writes can diverge after the first succeeds.
+
+<Choice id="partial-write" objective="safe-backfill" prompt="A process crashes between updating the old store and the new store. What closes the gap?" options={[
+  { id: "assume", text: "Assume the second write usually succeeds", feedback: "Even rare failures leave permanent gaps without recovery." },
+  { id: "switch", text: "Read only the new store immediately", feedback: "That exposes the missing update instead of repairing it." },
+  { id: "durable", text: "Durable change capture or an outbox, with retry and reconciliation", correct: true, feedback: "A durable record lets missed changes be replayed and checked." }
+]} />
+
+</Step>
+
+<Step id="backfill" title="Do not overwrite a newer value">
+
+<Timeline title="A backfill races with live traffic" events={[
+  { at: "t0", label: "Backfill reads version 7" },
+  { at: "t1", label: "User commits version 8" },
+  { at: "t2", label: "Backfill must not overwrite version 8" }
+]} />
+
+Backfill in resumable, throttled batches with idempotent retries. Use a version check, conditional update, or another database-specific synchronization protocol so a stale snapshot cannot overwrite a live update. A completed scan is not proof of convergence.
+
+<Choice id="backfill-race" objective="safe-backfill" prompt="A backfill read version 7; a live writer committed version 8. What should the backfill do?" options={[
+  { id: "condition", text: "Condition on the observed version; retry or skip if it changed", correct: true, feedback: "The stale write cannot replace version 8; reconciliation can revisit the row." },
+  { id: "overwrite", text: "Overwrite version 8 because the scan started first", feedback: "Start time does not make the stale snapshot authoritative." },
+  { id: "unchecked", text: "Disable version checks to accelerate retries", feedback: "Retries can then repeat a stale overwrite." }
+]} />
+
+</Step>
+
+<Step id="rollout-order" title="Expand before switching readers">
+
+<Timeline title="Migration gates" events={[
+  { at: "1", label: "Add compatible schema" },
+  { at: "2", label: "Deploy writers maintaining both forms" },
+  { at: "3", label: "Backfill and verify convergence" },
+  { at: "4", label: "Switch readers; observe" },
+  { at: "5", label: "Retire old dependencies; contract" }
+]} />
+
+Keep the old representation valid through the rollback window. Reader cutover needs evidence: matching values, acceptable lag and error rates, and no unsupported old writers. Contract only after old consumers and the rollback dependency have been retired.
+
+<Ordering id="migration-phases" objective="expand-contract" prompt="Order the migration, passing each gate before moving on." items={[
+  { id: "expand", text: "Add the new column without removing the old one" },
+  { id: "writers", text: "Deploy writers maintaining both columns everywhere" },
+  { id: "backfill", text: "Backfill historical rows and verify convergence" },
+  { id: "readers", text: "Switch reads and observe through the rollback window" },
+  { id: "contract", text: "Retire old consumers, then remove the old column" }
+]} explanation="Expansion permits coexistence; current writers protect the backfill; verification gates cutover; contraction waits for old dependencies to disappear." />
+
+</Step>
+
+<Step id="contract-gate" title="A green deploy is not the final gate">
+
+<Compare title="Before dropping the old column" sides={[
+  { title: "Insufficient", points: ["New app passes tests", "One canary works"] },
+  { title: "Required evidence", points: ["All consumers inventoried", "Backfill reconciled", "Rollback window closed", "Old access absent"] }
+]} />
+
+A destructive contract step changes rollback options. An old binary that needs a dropped column is no longer a safe rollback. Keep backups and a recovery plan, but restoring data is not an instant online rollback.
+
+<Choice id="drop-gate" objective="rollout-gates" prompt="New readers work, but a nightly export still uses full_name. Is contraction ready?" options={[
+  { id: "yes", text: "Yes; background jobs do not count", feedback: "The export will fail when its column disappears." },
+  { id: "no", text: "No; migrate the export and retire the old rollback dependency first", correct: true, feedback: "A consumer outside the request path still blocks dropping the column." },
+  { id: "backup", text: "Yes; a backup makes old binaries compatible", feedback: "Backups do not make queries against the live schema succeed." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+<Stats title="Practice target" items={[{ label: "Mastery", value: "80%", sub: "4 of 5 fresh questions" }]} />
+
+Try a fresh variant, then score at least 80% on the mastery check. Wrong answers link back to the teaching step.
+
+<VariantQuestion template="schema.backfill-time" />
+
+<MasteryCheck templates={["schema.backfill-time", "schema.backfill-batches", "schema.contract-window"]} count={5} />
+
+</Step>

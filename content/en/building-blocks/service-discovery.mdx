@@ -1,0 +1,155 @@
+{/*
+id: service-discovery
+slug: service-discovery
+track: building-blocks
+title: "Service discovery: names, health and front doors"
+description: "Compare DNS and registries, place endpoint selection, and reason about health checks, stale membership and gateway routing."
+objectives:
+  - id: dns-registry
+    text: Compare DNS discovery with a dynamic service registry
+  - id: discovery-placement
+    text: Distinguish client-side from server-side endpoint selection
+  - id: stale-health
+    text: Reason about health-check detection and cached endpoint staleness
+  - id: front-door
+    text: Explain the roles of reverse proxies and API gateways
+requires: [how-the-web-works, availability]
+activities: [V, Q]
+limitations:
+  - "Timing examples assume stated detection and cache behavior; real resolvers and clients may cache differently."
+  - "Health checks sample reachability or readiness; they cannot guarantee the next request succeeds."
+  - "Diagrams omit registry consensus, connection-pool internals, TLS configuration and gateway policy implementation."
+sources:
+  - title: "RFC 1034: Domain Names - Concepts and Facilities"
+    url: "https://www.rfc-editor.org/rfc/rfc1034"
+  - title: "RFC 2782: A DNS RR for specifying the location of services"
+    url: "https://www.rfc-editor.org/rfc/rfc2782"
+  - title: "Consul: Service discovery"
+    url: "https://developer.hashicorp.com/consul/docs/discover"
+  - title: "NGINX: HTTP load balancing"
+    url: "https://nginx.org/en/docs/http/load_balancing.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 18
+*/}
+
+<Step id="names-and-endpoints" title="A stable name hides changing endpoints">
+
+<Compare title="Two discovery interfaces" sides={[
+  { title: "DNS", points: ["Query a stable service name", "A/AAAA gives addresses", "SRV adds port, priority, weight"] },
+  { title: "Registry API", points: ["Query registered instances", "Can expose metadata and health", "Requires registry-aware integration"] }
+]} />
+
+Discovery maps a logical service to candidate endpoints. DNS offers a common naming interface; a registry offers explicit membership and metadata. They can coexist: a registry may expose DNS. Neither interface makes returned endpoints permanently healthy.
+
+<Choice id="discovery-interface" objective="dns-registry" prompt="Which comparison is accurate?" options={[
+  { id: "accurate", text: "DNS can expose service locations; a registry API can expose richer instance metadata", correct: true, feedback: "A/AAAA supplies addresses, SRV adds ports and weights, and registries can expose health and application metadata." },
+  { id: "impossible", text: "DNS cannot carry a service port, so a registry API is mandatory", feedback: "SRV records include target and port when clients support them." },
+  { id: "exclusive", text: "A registry and DNS can never be used together", feedback: "A registry can publish its registered services through a DNS interface." }
+]} />
+
+</Step>
+
+<Step id="client-selection" title="The caller can choose an instance">
+
+<Sequence title="Client-side discovery" actors={["Client", "Registry", "Service B"]} messages={[
+  { from: "Client", to: "Registry", label: "Fetch candidate endpoints" },
+  { from: "Registry", to: "Client", label: "A, B and health metadata" },
+  { from: "Client", to: "Service B", label: "Select B and send request" }
+]} />
+
+With client-side discovery, the client resolves membership and chooses a destination. Each client library needs selection, refresh and failure handling. Direct calls avoid an extra proxy hop, but client implementations can behave differently.
+
+<Choice id="who-selects" objective="discovery-placement" prompt="A library fetches endpoints and round-robins direct calls across them. Where does selection happen?" options={[
+  { id: "gateway", text: "In an unseen mandatory gateway", feedback: "No gateway selection is described in this path." },
+  { id: "client", text: "In the client", correct: true, feedback: "The caller owns membership refresh and destination choice." },
+  { id: "database", text: "In the database", feedback: "The database is not involved in the endpoint selection shown." }
+]} />
+
+</Step>
+
+<Step id="proxy-selection" title="A proxy can choose for the caller">
+
+<Sequence title="Server-side discovery" actors={["Client", "Proxy", "Registry", "Service A"]} messages={[
+  { from: "Proxy", to: "Registry", label: "Refresh endpoint list" },
+  { from: "Client", to: "Proxy", label: "Request stable front door" },
+  { from: "Proxy", to: "Service A", label: "Choose backend and forward" }
+]} />
+
+With server-side discovery, clients call a stable front door; a proxy or load balancer selects the backend. This centralizes routing behavior but creates another capacity and failure boundary. Run the front door redundantly and monitor its discovery freshness.
+
+<Choice id="proxy-responsibility" objective="discovery-placement" prompt="The client knows only a proxy address. The proxy watches the registry. Who must refresh backend membership?" options={[
+  { id: "user", text: "Every end user manually", feedback: "Clients do not own the backend list in this design." },
+  { id: "nobody", text: "Nobody; a stable proxy makes backends permanent", feedback: "Backend processes still start, stop and fail." },
+  { id: "proxy", text: "The proxy", correct: true, feedback: "It selects backends and needs a current candidate list." }
+]} />
+
+</Step>
+
+<Step id="stale-endpoints" title="Health signals arrive late">
+
+<Timeline title="Illustrative worst-case cached address" events={[
+  { at: "0 s", label: "Endpoint fails just after a successful check" },
+  { at: "Just before 10 s", label: "Client caches old DNS answer for 30 s" },
+  { at: "10 s", label: "One failed check removes endpoint from DNS answers" },
+  { at: "About 40 s", label: "Client cached answer expires" }
+]} />
+
+Here, detection takes up to 10 seconds; a just-refreshed cache retains the endpoint for another 30. About 40 seconds bounds stale discovery only if TTL is honored, one failed check removes the endpoint, publication is immediate, and stale answers are never served. Existing connections have separate lifetimes.
+
+<Choice id="stale-window" objective="stale-health" prompt="Under these assumptions, what approximate worst-case stale-address window follows?" options={[
+  { id: "forty", text: "40 seconds", correct: true, feedback: "Detection takes up to 10 seconds; a cache refreshed just before removal adds nearly 30." },
+  { id: "ten", text: "10 seconds", feedback: "Removing the authoritative answer does not invalidate cached copies instantly." },
+  { id: "thirty", text: "30 seconds exactly in every system", feedback: "This omits detection delay and assumes caching behavior not guaranteed everywhere." }
+]} />
+
+</Step>
+
+<Step id="health-and-draining" title="Ready is different from alive">
+
+<Compare title="Endpoint lifecycle" sides={[
+  { title: "Liveness", points: ["Process can make progress", "Restart policy signal"] },
+  { title: "Readiness", points: ["Can accept new requests", "Membership or routing signal"] },
+  { title: "Draining", points: ["Stop new assignments", "Let in-flight work finish"] }
+]} />
+
+Remove an instance from new routing before terminating it. Allow discovery propagation and drain in-flight requests. A process can be alive but unable to serve because a dependency is unavailable. Timeouts and bounded retries still matter after a healthy lookup.
+
+<Choice id="terminate-order" objective="stale-health" prompt="Which shutdown sequence reduces avoidable request loss?" options={[
+  { id: "kill", text: "Kill immediately, then announce removal", feedback: "Clients may still send requests to a dead endpoint." },
+  { id: "drain", text: "Stop new routing, allow propagation and draining, then terminate", correct: true, feedback: "Cached membership and in-flight work get time to clear." },
+  { id: "advertise", text: "Advertise readiness until after termination", feedback: "Readiness then contradicts the endpoint ability to accept work." }
+]} />
+
+</Step>
+
+<Step id="gateway" title="Give the front door a clear job">
+
+<Compare title="Overlapping roles" sides={[
+  { title: "Reverse proxy", points: ["Accept and forward requests", "Can terminate TLS", "Can balance backends"] },
+  { title: "API gateway", points: ["Reverse-proxy capabilities", "API routing and auth policies", "Quotas or request transformation"] },
+  { title: "Discovery", points: ["Supplies candidate endpoints", "Does not itself authorize requests"] }
+]} />
+
+An API gateway is often a reverse proxy with API policies. These are roles, not necessarily separate boxes. Authenticate and authorize at appropriate trust boundaries; a registry entry is not permission to call a service. Gateway policy and service authorization must agree.
+
+<Choice id="gateway-role" objective="front-door" prompt="Which responsibility belongs at an API front door rather than endpoint lookup alone?" options={[
+  { id: "trust", text: "Treat every registered endpoint as automatically authorized", feedback: "Registration establishes location, not caller permission." },
+  { id: "guarantee", text: "Guarantee every healthy backend request succeeds", feedback: "A gateway cannot eliminate downstream or network failures." },
+  { id: "policy", text: "Apply API authentication and routing policies before forwarding", correct: true, feedback: "A gateway can enforce request policies while discovery supplies locations." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+<Stats title="Practice target" items={[{ label: "Mastery", value: "80%", sub: "4 of 5 fresh questions" }]} />
+
+Try a fresh variant, then score at least 80% on the mastery check. Wrong answers link back to the teaching step.
+
+<VariantQuestion template="discovery.stale-window" />
+
+<MasteryCheck templates={["discovery.stale-window", "discovery.failed-checks", "discovery.drain-window"]} count={5} />
+
+</Step>

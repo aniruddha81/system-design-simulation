@@ -1,0 +1,159 @@
+{/*
+id: search
+slug: search
+track: building-blocks
+title: "Search: tokens, ranking and index lag"
+description: "Follow a query through an inverted index, reason about lexical ranking, and account for delayed indexing and shard fan-out."
+objectives:
+  - id: inverted-index
+    text: Trace tokenisation and postings lookup in an inverted index
+  - id: lexical-ranking
+    text: Explain term frequency, rarity and document-length normalization in ranking
+  - id: index-freshness
+    text: Explain why committed database changes may not yet appear in search
+  - id: search-fanout
+    text: Explain sharded query fan-out, result merging and partial failures
+requires: [partitioning, queues]
+activities: [V, Q]
+limitations:
+  - "Examples cover lexical retrieval, not semantic embeddings, multilingual analysis or learning-to-rank."
+  - "Ranking figures are qualitative; they do not compute full BM25 scores or distributed term statistics."
+  - "Index lag and shard failures are diagrammed, not executed by a search engine in this lesson."
+sources:
+  - title: "Introduction to Information Retrieval: A first take at building an inverted index"
+    url: "https://nlp.stanford.edu/IR-book/html/htmledition/a-first-take-at-building-an-inverted-index-1.html"
+  - title: "The Probabilistic Relevance Framework: BM25 and Beyond"
+    authors: "Stephen Robertson and Hugo Zaragoza"
+    year: 2009
+    url: "https://doi.org/10.1561/1500000019"
+  - title: "Elasticsearch: Near real-time search"
+    url: "https://www.elastic.co/docs/manage-data/data-store/near-real-time-search"
+  - title: "Elasticsearch: Search shard routing"
+    url: "https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-shard-routing"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 18
+*/}
+
+<Step id="postings" title="Turn terms into document lists">
+
+<Compare title="An inverted index" sides={[
+  { title: "Documents", points: ["D1: red bike", "D2: blue bike", "D3: red boat"] },
+  { title: "Postings", points: ["red → D1, D3", "bike → D1, D2", "boat → D3"] }
+]} />
+
+The index maps each term to postings: document IDs, often with term frequencies and positions. For an AND query, intersect term lists. For OR, take their union. This avoids reading every document for each query.
+
+<Choice id="postings-intersection" objective="inverted-index" prompt="Using these postings, which documents match red AND bike?" options={[
+  { id: "union", text: "D1, D2 and D3", feedback: "That is the union for OR, not the intersection for AND." },
+  { id: "intersection", text: "D1 only", correct: true, feedback: "D1 occurs in both red and bike postings." },
+  { id: "red-only", text: "D3 only", feedback: "D3 contains red but has no bike token." }
+]} />
+
+</Step>
+
+<Step id="analysis" title="Queries and documents must agree on tokens">
+
+<Sequence title="One possible analyzer" actors={["Text", "Analyzer", "Index"]} messages={[
+  { from: "Text", to: "Analyzer", label: "Blue-Bikes" },
+  { from: "Analyzer", to: "Index", label: "lowercase + split: blue, bikes" }
+]} />
+
+Tokenisation splits text; filters may lowercase, stem or remove stop words. This analyzer does not stem: bikes and bike remain different terms. Query analysis must be compatible with indexing analysis. Changing an index-time analyzer usually requires rebuilding indexed terms.
+
+<Choice id="token-mismatch" objective="inverted-index" prompt="The index stores bikes; the query produces bike, without stemming or synonyms. What follows?" options={[
+  { id: "literal", text: "That term does not match the bikes posting", correct: true, feedback: "Literal lookup cannot infer a missing linguistic equivalence." },
+  { id: "automatic", text: "It matches because search always understands plurals", feedback: "Plural normalization depends on the configured analyzer." },
+  { id: "shards", text: "Increase shard count to fix the mismatch", feedback: "Partitioning does not change the indexed tokens." }
+]} />
+
+</Step>
+
+<Step id="ranking" title="A match is not yet an ordering">
+
+<Compare title="Lexical scoring signals" sides={[
+  { title: "Term frequency", points: ["More occurrences can help", "BM25 saturates this gain"] },
+  { title: "Inverse document frequency", points: ["Rare terms distinguish documents", "Common terms carry less evidence"] },
+  { title: "Length normalization", points: ["Long documents offer more chances to match", "BM25 adjusts for length"] }
+]} />
+
+TF-IDF combines term occurrence with corpus rarity. BM25 adds a saturating frequency contribution and document-length normalization. Scores estimate lexical relevance, not truth or business value. Repeating one word endlessly should not produce an unbounded BM25 advantage.
+
+<Choice id="bm25-signals" objective="lexical-ranking" multiple prompt="Which statements describe BM25 ranking signals? Select all that apply." options={[
+  { id: "rare", text: "Rare query terms can provide stronger distinguishing evidence", correct: true, feedback: "Inverse document frequency discounts ubiquitous terms." },
+  { id: "saturates", text: "Repeated occurrences have diminishing scoring gains", correct: true, feedback: "BM25 saturates the within-document frequency contribution." },
+  { id: "length", text: "Document length can affect the score", correct: true, feedback: "Length normalization adjusts for differing opportunities to match." },
+  { id: "truth", text: "The highest score proves the document is factually correct", feedback: "Lexical similarity is not a truth assessment." },
+  { id: "unbounded", text: "Repeating one word gives an unlimited frequency contribution", feedback: "Saturation limits the gain from repetition." }
+]} />
+
+</Step>
+
+<Step id="index-lag" title="The database commit comes first">
+
+<Timeline title="An illustrative update path" events={[
+  { at: "t0", label: "Database commits new title" },
+  { at: "t1", label: "Change event reaches indexer" },
+  { at: "t2", label: "Indexer applies document update" },
+  { at: "t3", label: "Refresh makes it searchable" }
+]} />
+
+Search often reads a derived index. Delivery delay and refresh delay both contribute to visibility lag. A successful database write does not imply immediate search visibility. Serve authoritative post-write confirmation from the source, or wait for a supported visibility acknowledgment.
+
+<Choice id="missing-update" objective="index-freshness" prompt="A title update committed, but search still returns the old title. What is a plausible explanation?" options={[
+  { id: "lost", text: "The database necessarily lost the write", feedback: "A stale derived view does not prove source data loss." },
+  { id: "synchronous", text: "Indexes are always transactionally synchronized with the source", feedback: "That guarantee requires an explicit protocol, not an assumption." },
+  { id: "lag", text: "The derived index has not caught up or refreshed", correct: true, feedback: "Commit, event delivery and searchable visibility are separate gates." }
+]} />
+
+</Step>
+
+<Step id="shard-query" title="Fan out, then merge">
+
+<Sequence title="Top results across shards" actors={["Coordinator", "Shard A", "Shard B"]} messages={[
+  { from: "Coordinator", to: "Shard A", label: "Query; return local top 10" },
+  { from: "Coordinator", to: "Shard B", label: "Query; return local top 10" },
+  { from: "Shard A", to: "Coordinator", label: "Candidates and scores" },
+  { from: "Shard B", to: "Coordinator", label: "Candidates and scores; merge global top 10" }
+]} />
+
+A coordinator queries relevant shards and merges candidates. Each shard can search a replica. More shards add coordination and tail-latency exposure; they do not guarantee faster requests. With comparable scores, exact local top-k results suffice for global top-k. Approximate retrieval or inconsistent statistics can change ranking.
+
+<Choice id="fanout-tail" objective="search-fanout" prompt="A query needs every shard. One is slow. What happens without a timeout or partial-results policy?" options={[
+  { id: "wait", text: "The coordinator waits, stretching query latency", correct: true, feedback: "An all-shard dependency inherits the slowest required response." },
+  { id: "cancel", text: "Fast shards automatically cancel the slow shard", feedback: "Cancellation requires a deliberate policy." },
+  { id: "more", text: "Adding shards guarantees a faster query", feedback: "More branches can add coordination and slow-tail exposure." }
+]} />
+
+</Step>
+
+<Step id="partial-results" title="Say when a result set is incomplete">
+
+<Compare title="One shard misses its deadline" sides={[
+  { title: "Fail the request", points: ["Explicit failure", "No claim of completeness"] },
+  { title: "Return partial results", points: ["Mark missing shards", "May omit the best match"] },
+  { title: "Retry within budget", points: ["May recover completeness", "Costs time and work"] }
+]} />
+
+Choose a product policy for shard failures. Partial responses can be useful, but must disclose incompleteness. Source deletions and access-control changes also need careful propagation: a delayed index must not become the authority for permissions.
+
+<Choice id="partial-policy" objective="search-fanout" prompt="One shard is unavailable. The UI silently returns other shards. What is wrong?" options={[
+  { id: "corrupt", text: "Every returned document must be corrupt", feedback: "A missing shard does not imply corruption on healthy shards." },
+  { id: "incomplete", text: "The result appears complete though relevant documents may be missing", correct: true, feedback: "Expose partial status or fail according to the product contract." },
+  { id: "reconstruct", text: "The coordinator forgot to reconstruct missing documents from scores", feedback: "Scores are not copies of the missing documents or postings." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+<Stats title="Practice target" items={[{ label: "Mastery", value: "80%", sub: "4 of 5 fresh questions" }]} />
+
+Try a fresh variant, then score at least 80% on the mastery check. Wrong answers link back to the teaching step.
+
+<VariantQuestion template="search.postings-union" />
+
+<MasteryCheck templates={["search.postings-union", "search.visibility-lag", "search.merge-candidates"]} count={5} />
+
+</Step>

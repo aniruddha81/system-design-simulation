@@ -1,0 +1,147 @@
+{/*
+id: api-design
+slug: api-design
+track: building-blocks
+title: "API design: contracts that survive retries"
+description: "Choose an API shape, a live-update transport and a pagination contract; evolve clients safely and make retries safe."
+objectives:
+  - id: choose-api
+    text: "Choose REST, gRPC or GraphQL for a concrete client contract"
+  - id: choose-transport
+    text: "Choose WebSockets, SSE or long polling for live updates"
+  - id: paginate-safely
+    text: "Explain offset drift and cursor pagination requirements"
+  - id: evolve-contract
+    text: "Preserve compatibility while evolving an API"
+  - id: deduplicate-retries
+    text: "Scope and persist idempotency keys to make retries safe"
+requires: ["how-the-web-works"]
+activities: [C, Q]
+limitations:
+  - "Protocol choices are design exercises; this lesson does not execute HTTP, GraphQL or gRPC."
+  - "Cursor examples assume a stable total order; snapshot consistency needs additional support."
+  - "Idempotency depends on atomic durable state and a documented retention window, not the header alone."
+sources:
+  - title: "HTTP Semantics (RFC 9110)"
+    url: "https://www.rfc-editor.org/rfc/rfc9110"
+  - title: "gRPC core concepts, architecture and lifecycle"
+    url: "https://grpc.io/docs/what-is-grpc/core-concepts/"
+  - title: "GraphQL specification, October 2021"
+    url: "https://spec.graphql.org/October2021/"
+  - title: "HTML Living Standard: Server-sent events"
+    url: "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="api-shapes" title="Choose the contract shape">
+
+<Compare title="Three API contracts" sides={[{"title": "REST", "points": ["Resource identifiers", "HTTP method semantics"]}, {"title": "gRPC", "points": ["Typed service methods", "Generated clients; streaming"]}, {"title": "GraphQL", "points": ["Typed graph schema", "Client selects response fields"]}]} />
+
+REST is an architectural style, not just JSON over HTTP. gRPC exposes typed procedures. GraphQL lets clients select graph fields; the server still owns authorization, query cost and data access.
+
+<Choice
+  id="api-shapes-check"
+  objective="choose-api"
+  prompt="A controlled fleet needs generated, strongly typed service clients and bidirectional RPC streams. Which is the closest fit?"
+  options={[{"id": "option-1", "text": "gRPC", "feedback": "Its service definitions and streaming RPCs match this controlled-client requirement.", "correct": true}, {"id": "option-2", "text": "GraphQL because it always streams bidirectionally", "feedback": "GraphQL field selection does not itself provide bidirectional RPC streams."}, {"id": "option-3", "text": "REST because JSON guarantees generated types", "feedback": "JSON alone supplies neither a service schema nor generated clients."}]}
+/>
+
+</Step>
+
+<Step id="graphql-boundaries" title="Keep flexible queries bounded">
+
+<Compare title="One product screen" sides={[{"title": "REST resources", "points": ["GET product", "GET reviews"]}, {"title": "GraphQL operation", "points": ["Select product and reviews", "Resolvers may still fan out"]}]} />
+
+A single GraphQL request can trigger many backend reads. Field selection can reduce overfetching, but query depth, resolver batching, authorization and cost limits remain server responsibilities.
+
+<Choice
+  id="graphql-boundaries-check"
+  objective="choose-api"
+  prompt="Mobile screens need different field sets. Why might GraphQL help?"
+  options={[{"id": "option-2", "text": "One request guarantees one database query", "feedback": "Resolvers can issue many queries, including an N+1 pattern."}, {"id": "option-3", "text": "The schema replaces field authorization", "feedback": "Authorization must still run for each protected operation and field."}, {"id": "option-1", "text": "Clients select fields through a typed schema", "feedback": "Different screens can request the fields they need; backend work still needs limits.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="live-updates" title="Pick a live-update transport">
+
+<Compare title="Connection direction" sides={[{"title": "WebSocket", "points": ["Two-way messages", "Long-lived connection"]}, {"title": "SSE", "points": ["Server to browser events", "HTTP event stream; reconnect"]}, {"title": "Long polling", "points": ["Hold response until update", "Client issues next request"]}]} />
+
+WebSockets suit two-way interaction. SSE suits server-driven feeds; browser EventSource can reconnect and carry event IDs. Long polling holds an ordinary HTTP request until an event or timeout, then repeats. Every option needs reconnect and overload behavior.
+
+<Choice
+  id="live-updates-check"
+  objective="choose-transport"
+  prompt="A dashboard only receives server alerts and should use the browser EventSource API. Choose a transport."
+  options={[{"id": "option-3", "text": "Long polling because it never repeats requests", "feedback": "Long polling starts another request after each response or timeout."}, {"id": "option-1", "text": "SSE", "feedback": "EventSource consumes server-sent event streams; retained event IDs can support resumption.", "correct": true}, {"id": "option-2", "text": "WebSocket because SSE sends only one event", "feedback": "SSE can deliver many events over one response."}]}
+/>
+
+</Step>
+
+<Step id="pagination" title="Notice offset drift">
+
+<Timeline title="Newest-first list changes between pages" events={[{"at": "Page 1", "label": "Read A, B at offset 0"}, {"at": "Insert", "label": "X arrives before A"}, {"at": "Page 2", "label": "Offset 2 returns B, C: B repeats"}]} />
+
+Offset pagination names a position that can move. A cursor names a boundary in a stable total order, such as (created_at, id). Fetch after that boundary using the same filters and ordering. Cursors avoid this insertion shift, but do not create a snapshot.
+
+<Choice
+  id="pagination-check"
+  objective="paginate-safely"
+  prompt="How should a newest-first feed cursor handle equal timestamps?"
+  options={[{"id": "option-1", "text": "Include a unique tie-breaker such as id", "feedback": "The timestamp plus id defines an unambiguous total order.", "correct": true}, {"id": "option-2", "text": "Store only the timestamp", "feedback": "Equal timestamps leave the next-page boundary ambiguous."}, {"id": "option-3", "text": "Use a larger offset", "feedback": "A larger offset still shifts when earlier rows are inserted."}]}
+/>
+
+</Step>
+
+<Step id="compatibility" title="Evolve without stranding clients">
+
+<Compare title="Response change" sides={[{"title": "Usually additive", "points": ["New optional field", "Old clients tolerate unknown fields"]}, {"title": "Breaking", "points": ["Rename required field", "Change meaning or type"]}]} />
+
+Compatibility includes behavior, not just schemas. Additive fields are safe only when readers tolerate them. New enum values can break exhaustive clients. Use a migration window and explicit version boundary for incompatible changes; retire old versions only after client migration.
+
+<Choice
+  id="compatibility-check"
+  objective="evolve-contract"
+  prompt="An old mobile app requires total_cents. You want a new money object. What preserves it during migration?"
+  options={[{"id": "option-2", "text": "Rename total_cents immediately", "feedback": "Deployed apps still read the old name and can fail."}, {"id": "option-3", "text": "Keep the name but change cents to dollars", "feedback": "The type may stay numeric while the meaning breaks payments."}, {"id": "option-1", "text": "Keep total_cents and add the new representation during migration", "feedback": "Existing readers retain their contract while clients migrate.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="idempotency" title="Retry one logical operation">
+
+<Sequence title="Acknowledgment lost" actors={["Client", "API", "Store"]} messages={[{"from": "Client", "to": "API", "label": "Create order, key K"}, {"from": "API", "to": "Store", "label": "Atomically record effect + result for K"}, {"from": "Client", "to": "API", "label": "Retry same payload, key K"}, {"from": "API", "to": "Client", "label": "Replay stored result; no second order"}]} />
+
+An idempotency key identifies one logical operation. Scope it to the caller and operation, bind it to the request payload, and retain its result. Concurrent requests require atomic deduplication with the effect. Reusing a key with a different payload must be rejected.
+
+<Choice
+  id="idempotency-check"
+  objective="deduplicate-retries"
+  prompt="The order committed but its response was lost. How should the client retry?"
+  options={[{"id": "option-3", "text": "Use the same key for every future order", "feedback": "Distinct orders need distinct keys; payload mismatches must not replay an unrelated result."}, {"id": "option-1", "text": "Send the same payload and the same key within the retention window", "feedback": "The server can return the recorded result without creating another order.", "correct": true}, {"id": "option-2", "text": "Generate a fresh key for each attempt", "feedback": "A fresh key looks like a new logical operation."}]}
+/>
+
+</Step>
+
+<Step id="retention" title="Expose the retry boundary">
+
+<Timeline title="Example documented key retention" events={[{"at": "t0", "label": "K creates one order"}, {"at": "t0 + 1 hour", "label": "Retry K replays result"}, {"at": "t0 + 25 hours", "label": "24-hour retention has expired"}]} />
+
+Deduplication is bounded by retention. After expiry, the same key may be treated as new. Persist a business identifier when duplicate effects must remain impossible beyond that window. A transport retry policy cannot supply permanent exactly-once business behavior.
+
+<Choice
+  id="retention-check"
+  objective="deduplicate-retries"
+  prompt="A client retries after the documented key retention expires. What is safe to assume?"
+  options={[{"id": "option-1", "text": "The key alone no longer guarantees deduplication", "feedback": "Check durable business state or reconcile before risking another effect.", "correct": true}, {"id": "option-2", "text": "The server must remember every key forever", "feedback": "Retention explicitly limits that promise."}, {"id": "option-3", "text": "HTTP POST automatically prevents duplicate effects", "feedback": "POST is not inherently idempotent; the application supplies the guarantee."}]}
+/>
+
+
+<VariantQuestion template="api.offset-overlap" />
+
+<MasteryCheck templates={["api.offset-overlap", "api.poll-rate", "api.dedup-entries"]} count={5} />
+
+</Step>

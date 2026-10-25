@@ -1,0 +1,145 @@
+{/*
+id: cdn
+slug: cdn
+track: building-blocks
+title: "CDNs: edge hits and origin protection"
+description: "Trace edge and shield misses, design safe cache keys, choose freshness controls, and calculate how much traffic reaches the origin."
+objectives:
+  - id: trace-edge
+    text: "Trace cache hits and misses through edge, shield and origin"
+  - id: design-cache-key
+    text: "Choose cache keys and TTLs that preserve representation boundaries"
+  - id: invalidate-content
+    text: "Choose versioned URLs or invalidation for a content update"
+  - id: calculate-offload
+    text: "Calculate request hit ratio and origin offload with and without a shield"
+requires: ["caching", "bandwidth"]
+activities: [C, Q]
+limitations:
+  - "Request-hit and byte-hit ratios differ; examples use equal-size responses unless stated otherwise."
+  - "TTL freshness assumes a correctly configured cache without stale-serving extensions; purge propagation is provider-dependent."
+  - "Shield calculations assume every edge miss reaches one shield; coalescing, revalidation and retries are omitted."
+sources:
+  - title: "HTTP Caching (RFC 9111)"
+    url: "https://www.rfc-editor.org/rfc/rfc9111"
+  - title: "Amazon CloudFront: Control the cache key with a policy"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/controlling-the-cache-key.html"
+  - title: "Amazon CloudFront: Use Origin Shield"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html"
+  - title: "Amazon CloudFront: Invalidate files to remove content"
+    url: "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 20
+*/}
+
+<Step id="edge-path" title="Serve close to the reader">
+
+<Sequence title="Edge hit and miss" actors={["Reader", "Edge", "Origin"]} messages={[{"from": "Reader", "to": "Edge", "label": "GET /logo.v3.png"}, {"from": "Edge", "to": "Reader", "label": "Fresh cached response on hit"}, {"from": "Edge", "to": "Origin", "label": "Fetch on miss"}, {"from": "Origin", "to": "Edge", "label": "Response with cache policy"}]} />
+
+An edge cache serves reusable responses near readers. A hit avoids the origin round trip. A miss still needs an upstream fetch, so proximity alone does not guarantee fast responses or origin protection.
+
+<Choice
+  id="edge-path-check"
+  objective="trace-edge"
+  prompt="Which request can the edge answer without fetching from the origin?"
+  options={[{"id": "option-1", "text": "A request matching a fresh, reusable cached response", "feedback": "The matching representation is already available and fresh.", "correct": true}, {"id": "option-2", "text": "Every request because the edge is nearby", "feedback": "A nearby edge still fetches missing or non-reusable content."}, {"id": "option-3", "text": "Any authenticated response under a URL-only key", "feedback": "Sharing user-specific data under a common key can expose private content."}]}
+/>
+
+</Step>
+
+<Step id="cache-keys" title="Separate representations, not tracking noise">
+
+<Compare title="Cache key inputs" sides={[{"title": "Include when content varies", "points": ["Path and required query fields", "Language or image format"]}, {"title": "Exclude only when irrelevant", "points": ["Tracking parameters", "Unneeded request headers"]}]} />
+
+A cache key identifies a representation. Omitting a meaningful input mixes responses; including irrelevant inputs fragments hits. Respect Vary and the CDN policy. Private or personalized responses generally bypass shared caching; adding a user identifier alone is not a complete privacy policy.
+
+<Choice
+  id="cache-keys-check"
+  objective="design-cache-key"
+  prompt="/menu returns different languages from Accept-Language. What is required for shared caching?"
+  options={[{"id": "option-2", "text": "Ignore the header to maximize hit ratio", "feedback": "That can serve the wrong language from the shared entry."}, {"id": "option-3", "text": "Include every random tracking parameter", "feedback": "Irrelevant variation fragments the cache without separating actual representations."}, {"id": "option-1", "text": "Separate language variants in the effective key and policy", "feedback": "Requests for different representations must not collide.", "correct": true}]}
+/>
+
+</Step>
+
+<Step id="ttl" title="Set an explicit reuse window">
+
+<Timeline title="Example: shared-cache TTL of 60 seconds" events={[{"at": "t0", "label": "Edge stores version A"}, {"at": "t10", "label": "Origin publishes version B"}, {"at": "t59", "label": "Edge may still serve fresh version A"}, {"at": "t60", "label": "Entry becomes stale; validate or refetch"}]} />
+
+TTL controls freshness, not physical deletion. s-maxage targets shared caches; max-age also affects browser caches. Once stale, a response may be revalidated rather than fully downloaded. Stale-serving directives can extend reuse, so TTL alone is not an unconditional end-to-end staleness guarantee.
+
+<Choice
+  id="ttl-check"
+  objective="design-cache-key"
+  prompt="Ignoring stale-serving extensions, what can happen when the origin changes 10 seconds into a 60-second freshness lifetime?"
+  options={[{"id": "option-1", "text": "The edge can reuse the old response for the remaining 50 seconds", "feedback": "Origin updates do not automatically notify caches.", "correct": true}, {"id": "option-2", "text": "Every edge instantly receives the new body", "feedback": "A TTL is a local freshness rule, not a push mechanism."}, {"id": "option-3", "text": "The object must be deleted from storage exactly at expiry", "feedback": "Stale cached data can remain for validation or eviction later."}]}
+/>
+
+</Step>
+
+<Step id="shield" title="Gather misses before the origin">
+
+<Sequence title="Two cold edges, one shield" actors={["Edge A", "Edge B", "Shield", "Origin"]} messages={[{"from": "Edge A", "to": "Shield", "label": "Miss for /logo.v3.png"}, {"from": "Shield", "to": "Origin", "label": "Shield miss: fetch once"}, {"from": "Edge B", "to": "Shield", "label": "Later miss for same object"}, {"from": "Shield", "to": "Edge B", "label": "Shield hit: no origin fetch"}]} />
+
+An origin shield adds a shared cache tier between edges and origin. Repeated edge misses can become shield hits. It adds a hop on a shield miss and another operational dependency. Simultaneous cold misses need request coalescing to avoid duplicate origin fetches.
+
+<Choice
+  id="shield-check"
+  objective="trace-edge"
+  prompt="Both edges are cold, but the shield already holds a fresh matching response. How many origin fetches do these two requests require?"
+  options={[{"id": "option-1", "text": "Zero, under the stated cache policy", "feedback": "Both edge misses can be satisfied by the warm shield.", "correct": true}, {"id": "option-2", "text": "Two because every edge miss reaches origin", "feedback": "The shield can answer before the request reaches the origin."}, {"id": "option-3", "text": "One because a shield always contacts origin", "feedback": "A fresh shield hit needs no origin validation under these assumptions."}]}
+/>
+
+</Step>
+
+<Step id="purge" title="Publish safely under an old URL">
+
+<Compare title="Update strategies" sides={[{"title": "Versioned immutable asset", "points": ["New content gets new URL", "Update references to new version"]}, {"title": "Invalidate existing URL", "points": ["Evict matching shared entries", "Allow propagation; browser copies may remain"]}]} />
+
+Versioned URLs keep immutable assets reusable while new references select new content. Purges remove cached entries for an existing URL, with provider-specific scope and delay. CDN invalidation does not erase browser copies. Neither method prevents a post-purge surge of misses without origin capacity or coalescing.
+
+<Choice
+  id="purge-check"
+  objective="invalidate-content"
+  prompt="A new JavaScript bundle can use a content-hashed filename. Which deployment pattern best preserves long caching?"
+  options={[{"id": "option-3", "text": "Set a year-long TTL and overwrite the same URL without invalidation", "feedback": "Fresh cache entries can serve the previous bytes for a year."}, {"id": "option-1", "text": "Publish the new bundle URL, then update references", "feedback": "Old and new assets can coexist; clients request the intended version.", "correct": true}, {"id": "option-2", "text": "Overwrite the same immutable URL and trust a CDN purge everywhere", "feedback": "Browsers may retain the old body despite the CDN purge."}]}
+/>
+
+</Step>
+
+<Step id="origin-offload" title="Count misses through both tiers">
+
+<Bars title="Illustrative 10,000 requests/s; edge hit 90%; shield hit 80% of edge misses" items={[{"label": "Arrive at edges", "value": 10000, "unit": "requests/s"}, {"label": "Reach shield", "value": 1000, "unit": "requests/s"}, {"label": "Reach origin", "value": 200, "unit": "requests/s"}]} />
+
+**Origin rate = incoming rate ? (1 ? edge hit ratio) ? (1 ? shield hit ratio on edge misses).** Here 10,000 ? 0.1 ? 0.2 = 200 requests/s: 98% request offload. Byte offload can differ when misses are larger than hits.
+
+<Choice
+  id="origin-offload-check"
+  objective="calculate-offload"
+  prompt="At 10,000 requests/s with 90% edge hits and no shield, what origin rate remains?"
+  options={[{"id": "option-3", "text": "9,000 requests/s", "feedback": "9,000 is the hit rate in requests/s, not the miss traffic reaching origin."}, {"id": "option-1", "text": "1,000 requests/s", "feedback": "10,000 ? (1 ? 0.90) = 1,000 requests/s before any revalidation or retry adjustments.", "correct": true}, {"id": "option-2", "text": "100 requests/s", "feedback": "That would require a 99% edge hit ratio."}]}
+/>
+
+</Step>
+
+<Step id="byte-offload" title="Do not confuse hits with saved bytes">
+
+<Bars title="Ten requests: nine 1 KB hits and one 1,000 KB miss" items={[{"label": "Bytes served from cache", "value": 9, "unit": "KB"}, {"label": "Bytes fetched from origin", "value": 1000, "unit": "KB"}]} />
+
+Request hit ratio counts requests. Byte hit ratio weights response sizes. Nine tiny hits and one huge miss give 90% request hits but only 9 / 1,009 ? 0.9% byte hits. Track both when origin bandwidth is the bottleneck.
+
+<Choice
+  id="byte-offload-check"
+  objective="calculate-offload"
+  prompt="With the sizes shown, does 90% request hit ratio imply 90% byte offload?"
+  options={[{"id": "option-1", "text": "No; only about 0.9% of response bytes are cache hits", "feedback": "The single large miss dominates the byte total.", "correct": true}, {"id": "option-2", "text": "Yes; each request has equal byte weight", "feedback": "The example explicitly gives unequal response sizes."}, {"id": "option-3", "text": "No; byte offload must always exceed request offload", "feedback": "Either can be larger depending on which objects hit."}]}
+/>
+
+
+<VariantQuestion template="cdn.origin-rate" />
+
+<MasteryCheck templates={["cdn.origin-rate", "cdn.byte-hits", "cdn.freshness-left", "cdn.shield-fetches"]} count={5} />
+
+</Step>

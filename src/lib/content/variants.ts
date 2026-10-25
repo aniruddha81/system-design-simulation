@@ -1350,4 +1350,10 @@ export const templates: Record<string, Template> = {
   // --- Tracks 3, 4, 6 (reliability, security, interview-craft) templates: append above this line ---
 };
 
+import { templatesA } from "./variants-a";
+import { templatesB } from "./variants-b";
+
+// New-lesson templates live in their own files so authors can add them in parallel.
+Object.assign(templates, templatesA, templatesB);
+
 export const templateIds = Object.keys(templates) as [string, ...string[]];

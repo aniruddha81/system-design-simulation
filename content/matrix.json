@@ -1,133 +1,1491 @@
 {
   "lessons": [
-    { "id": "how-the-web-works", "track": "foundations", "title": "How the web works", "status": "live", "requires": [] },
-    { "id": "latency-numbers", "track": "foundations", "title": "Latency numbers", "status": "live", "requires": [] },
-    { "id": "throughput", "track": "foundations", "title": "Throughput and Little's law", "status": "live", "requires": ["latency-numbers"] },
-    { "id": "percentiles", "track": "foundations", "title": "Percentiles and tail latency", "status": "live", "requires": ["throughput"] },
-    { "id": "bandwidth", "track": "foundations", "title": "Bandwidth, saturation and egress", "status": "live", "requires": ["latency-numbers"] },
-    { "id": "availability", "track": "foundations", "title": "Availability nines", "status": "live", "requires": [] },
-    { "id": "estimation", "track": "foundations", "title": "Back-of-envelope estimation", "status": "live", "requires": ["throughput"] },
-
-    { "id": "caching", "track": "building-blocks", "title": "Caching: cache-aside, eviction, stampede", "status": "live", "requires": ["latency-numbers", "throughput"] },
-    { "id": "queues", "track": "building-blocks", "title": "Queues and delivery guarantees", "status": "live", "requires": ["throughput"] },
-    { "id": "partitioning", "track": "building-blocks", "title": "Partitioning and consistent hashing", "status": "live", "requires": ["estimation"] },
-    { "id": "transactions", "track": "building-blocks", "title": "Transactions and isolation anomalies", "status": "live", "requires": [] },
-    { "id": "replication", "track": "building-blocks", "title": "Replication and quorums", "status": "live", "requires": ["availability"] },
-    { "id": "rate-limiting", "track": "building-blocks", "title": "Rate limiting algorithms", "status": "live", "requires": ["throughput"] },
-    { "id": "streams", "track": "building-blocks", "title": "Stream processing and windows", "status": "live", "requires": ["queues"] },
-
-    { "id": "cap-pacelc", "track": "distributed-systems", "title": "CAP and PACELC", "status": "live", "requires": ["replication"] },
-    { "id": "consistency-models", "track": "distributed-systems", "title": "Consistency models", "status": "live", "requires": ["cap-pacelc"] },
-    { "id": "clocks", "track": "distributed-systems", "title": "Clocks: physical, Lamport, vector and hybrid", "status": "live", "requires": ["consistency-models"] },
-    { "id": "consensus", "track": "distributed-systems", "title": "Consensus with Raft", "status": "live", "requires": ["replication", "consistency-models"] },
-    { "id": "leader-election", "track": "distributed-systems", "title": "Leader election, leases and fencing tokens", "status": "live", "requires": ["consensus", "clocks"] },
-    { "id": "timeouts", "track": "distributed-systems", "title": "Timeouts and deadlines", "status": "live", "requires": ["percentiles"] },
-    { "id": "retries", "track": "distributed-systems", "title": "Retries, backoff and jitter", "status": "live", "requires": ["timeouts", "availability"] },
-    { "id": "idempotency", "track": "distributed-systems", "title": "Idempotency", "status": "live", "requires": ["retries"] },
-    { "id": "circuit-breakers", "track": "distributed-systems", "title": "Circuit breakers and bulkheads", "status": "live", "requires": ["retries", "timeouts"] },
-    { "id": "load-shedding", "track": "distributed-systems", "title": "Load shedding", "status": "live", "requires": ["retries", "throughput"] },
-    { "id": "sagas", "track": "distributed-systems", "title": "Distributed transactions: 2PC, sagas and the outbox", "status": "live", "requires": ["transactions", "queues", "idempotency"] },
-    { "id": "crdts", "track": "distributed-systems", "title": "CRDTs and operational transformation", "status": "live", "requires": ["consistency-models", "clocks"] },
-    { "id": "gossip", "track": "distributed-systems", "title": "Gossip and failure detectors", "status": "live", "requires": ["replication"] },
-
-    { "id": "observability", "track": "reliability", "title": "Metrics, logs and traces", "status": "live", "requires": ["percentiles"] },
-    { "id": "slo-error-budgets", "track": "reliability", "title": "SLIs, SLOs and error budgets", "status": "live", "requires": ["availability", "observability"] },
-    { "id": "failure-modes", "track": "reliability", "title": "Failure modes and metastability", "status": "live", "requires": ["retries", "queues"] },
-    { "id": "disaster-recovery", "track": "reliability", "title": "Disaster recovery: RPO, RTO and backups", "status": "live", "requires": ["replication", "availability"] },
-    { "id": "multi-region", "track": "reliability", "title": "Multi-region: active-passive and active-active", "status": "live", "requires": ["replication", "disaster-recovery"] },
-    { "id": "deployments", "track": "reliability", "title": "Deployments: blue/green, canary, flags and rollback", "status": "live", "requires": ["slo-error-budgets"] },
-    { "id": "capacity-planning", "track": "reliability", "title": "Capacity planning at planet scale", "status": "live", "requires": ["estimation", "partitioning", "failure-modes"] },
-
-    { "id": "authn-authz", "track": "security", "title": "Authentication and authorisation", "status": "live", "requires": ["how-the-web-works"] },
-    { "id": "sessions-jwt", "track": "security", "title": "Sessions vs JWT", "status": "live", "requires": ["authn-authz"] },
-    { "id": "oauth-oidc", "track": "security", "title": "OAuth 2.0 and OpenID Connect", "status": "live", "requires": ["sessions-jwt"] },
-    { "id": "encryption", "track": "security", "title": "Encryption in transit and at rest", "status": "live", "requires": ["how-the-web-works"] },
-    { "id": "key-management", "track": "security", "title": "Key management and secrets", "status": "live", "requires": ["encryption"] },
-    { "id": "ddos-mitigation", "track": "security", "title": "DDoS mitigation", "status": "live", "requires": ["rate-limiting", "bandwidth"] },
-    { "id": "abuse-prevention", "track": "security", "title": "Abuse prevention", "status": "live", "requires": ["rate-limiting", "authn-authz"] },
-    { "id": "multi-tenancy", "track": "security", "title": "Multi-tenancy isolation", "status": "live", "requires": ["authn-authz", "partitioning"] },
-    { "id": "privacy-deletion", "track": "security", "title": "Privacy and data deletion", "status": "live", "requires": ["key-management", "replication"] },
-
-    { "id": "url-shortener", "track": "case-studies", "title": "URL shortener", "status": "live", "requires": ["caching", "partitioning"] },
-    { "id": "pastebin", "track": "case-studies", "title": "Pastebin", "status": "live", "requires": ["caching", "estimation"] },
-    { "id": "rate-limiter", "track": "case-studies", "title": "Distributed rate limiter", "status": "live", "requires": ["rate-limiting", "caching"] },
-    { "id": "key-value-store", "track": "case-studies", "title": "Distributed key-value store", "status": "live", "requires": ["partitioning", "replication", "cap-pacelc"] },
-    { "id": "distributed-cache", "track": "case-studies", "title": "Distributed cache", "status": "live", "requires": ["caching", "partitioning"] },
-    { "id": "news-feed", "track": "case-studies", "title": "News feed", "status": "live", "requires": ["caching", "queues"] },
-    { "id": "chat", "track": "case-studies", "title": "Chat and messaging", "status": "live", "requires": ["queues", "clocks"] },
-    { "id": "notification-system", "track": "case-studies", "title": "Notification system", "status": "live", "requires": ["queues", "idempotency", "retries"] },
-    { "id": "twitter-timeline", "track": "case-studies", "title": "Twitter / X timeline and search", "status": "live", "requires": ["caching", "queues", "partitioning"] },
-    { "id": "instagram", "track": "case-studies", "title": "Photo sharing (Instagram)", "status": "live", "requires": ["caching", "bandwidth"] },
-    { "id": "youtube", "track": "case-studies", "title": "Video streaming (YouTube / Netflix)", "status": "live", "requires": ["bandwidth", "caching", "queues"] },
-    { "id": "uber", "track": "case-studies", "title": "Ride dispatch (Uber)", "status": "live", "requires": ["partitioning", "idempotency"] },
-    { "id": "proximity-service", "track": "case-studies", "title": "Proximity service (Yelp)", "status": "live", "requires": ["caching", "partitioning"] },
-    { "id": "web-crawler", "track": "case-studies", "title": "Web crawler", "status": "live", "requires": ["queues", "partitioning", "rate-limiting"] },
-    { "id": "typeahead", "track": "case-studies", "title": "Search autocomplete (typeahead)", "status": "live", "requires": ["caching", "percentiles", "streams"] },
-    { "id": "search-engine", "track": "case-studies", "title": "Full-text search engine", "status": "live", "requires": ["partitioning", "percentiles", "timeouts"] },
-    { "id": "google-docs", "track": "case-studies", "title": "Collaborative editor (Google Docs)", "status": "live", "requires": ["crdts", "consistency-models", "queues"] },
-    { "id": "dropbox", "track": "case-studies", "title": "File sync (Dropbox / Drive)", "status": "live", "requires": ["bandwidth", "queues", "transactions"] },
-    { "id": "payment-system", "track": "case-studies", "title": "Payment system", "status": "live", "requires": ["idempotency", "sagas", "retries"] },
-    { "id": "ticket-booking", "track": "case-studies", "title": "Ticket booking (Ticketmaster)", "status": "live", "requires": ["transactions", "idempotency", "load-shedding"] },
-    { "id": "hotel-booking", "track": "case-studies", "title": "Hotel booking", "status": "live", "requires": ["transactions", "idempotency"] },
-    { "id": "leaderboard", "track": "case-studies", "title": "Real-time gaming leaderboard", "status": "live", "requires": ["caching", "partitioning"] },
-    { "id": "ad-click-aggregation", "track": "case-studies", "title": "Ad-click stream aggregation", "status": "live", "requires": ["streams", "idempotency"] },
-    { "id": "metrics-monitoring", "track": "case-studies", "title": "Metrics and alerting platform", "status": "live", "requires": ["observability", "slo-error-budgets", "streams"] },
-    { "id": "job-scheduler", "track": "case-studies", "title": "Distributed job scheduler", "status": "live", "requires": ["leader-election", "queues", "idempotency"] },
-    { "id": "stock-exchange", "track": "case-studies", "title": "Stock exchange matching engine", "status": "live", "requires": ["consensus", "queues"] },
-
-    { "id": "interview-framework", "track": "interview", "title": "The interview framework", "status": "live", "requires": ["estimation", "caching"] },
-    { "id": "clarifying-questions", "track": "interview", "title": "Clarifying questions", "status": "live", "requires": ["interview-framework"] },
-    { "id": "communicating-tradeoffs", "track": "interview", "title": "Communicating trade-offs", "status": "live", "requires": ["interview-framework"] },
-    { "id": "interview-mistakes", "track": "interview", "title": "Common interview mistakes", "status": "live", "requires": ["clarifying-questions", "communicating-tradeoffs"] }
+    {
+      "id": "how-the-web-works",
+      "track": "foundations",
+      "title": "How the web works",
+      "status": "live",
+      "requires": []
+    },
+    {
+      "id": "latency-numbers",
+      "track": "foundations",
+      "title": "Latency numbers",
+      "status": "live",
+      "requires": []
+    },
+    {
+      "id": "throughput",
+      "track": "foundations",
+      "title": "Throughput and Little's law",
+      "status": "live",
+      "requires": [
+        "latency-numbers"
+      ]
+    },
+    {
+      "id": "percentiles",
+      "track": "foundations",
+      "title": "Percentiles and tail latency",
+      "status": "live",
+      "requires": [
+        "throughput"
+      ]
+    },
+    {
+      "id": "bandwidth",
+      "track": "foundations",
+      "title": "Bandwidth, saturation and egress",
+      "status": "live",
+      "requires": [
+        "latency-numbers"
+      ]
+    },
+    {
+      "id": "availability",
+      "track": "foundations",
+      "title": "Availability nines",
+      "status": "live",
+      "requires": []
+    },
+    {
+      "id": "estimation",
+      "track": "foundations",
+      "title": "Back-of-envelope estimation",
+      "status": "live",
+      "requires": [
+        "throughput"
+      ]
+    },
+    {
+      "id": "caching",
+      "track": "building-blocks",
+      "title": "Caching: cache-aside, eviction, stampede",
+      "status": "live",
+      "requires": [
+        "latency-numbers",
+        "throughput"
+      ]
+    },
+    {
+      "id": "queues",
+      "track": "building-blocks",
+      "title": "Queues and delivery guarantees",
+      "status": "live",
+      "requires": [
+        "throughput"
+      ]
+    },
+    {
+      "id": "partitioning",
+      "track": "building-blocks",
+      "title": "Partitioning and consistent hashing",
+      "status": "live",
+      "requires": [
+        "estimation"
+      ]
+    },
+    {
+      "id": "transactions",
+      "track": "building-blocks",
+      "title": "Transactions and isolation anomalies",
+      "status": "live",
+      "requires": []
+    },
+    {
+      "id": "replication",
+      "track": "building-blocks",
+      "title": "Replication and quorums",
+      "status": "live",
+      "requires": [
+        "availability"
+      ]
+    },
+    {
+      "id": "rate-limiting",
+      "track": "building-blocks",
+      "title": "Rate limiting algorithms",
+      "status": "live",
+      "requires": [
+        "throughput"
+      ]
+    },
+    {
+      "id": "streams",
+      "track": "building-blocks",
+      "title": "Stream processing and windows",
+      "status": "live",
+      "requires": [
+        "queues"
+      ]
+    },
+    {
+      "id": "cap-pacelc",
+      "track": "distributed-systems",
+      "title": "CAP and PACELC",
+      "status": "live",
+      "requires": [
+        "replication"
+      ]
+    },
+    {
+      "id": "consistency-models",
+      "track": "distributed-systems",
+      "title": "Consistency models",
+      "status": "live",
+      "requires": [
+        "cap-pacelc"
+      ]
+    },
+    {
+      "id": "clocks",
+      "track": "distributed-systems",
+      "title": "Clocks: physical, Lamport, vector and hybrid",
+      "status": "live",
+      "requires": [
+        "consistency-models"
+      ]
+    },
+    {
+      "id": "consensus",
+      "track": "distributed-systems",
+      "title": "Consensus with Raft",
+      "status": "live",
+      "requires": [
+        "replication",
+        "consistency-models"
+      ]
+    },
+    {
+      "id": "leader-election",
+      "track": "distributed-systems",
+      "title": "Leader election, leases and fencing tokens",
+      "status": "live",
+      "requires": [
+        "consensus",
+        "clocks"
+      ]
+    },
+    {
+      "id": "timeouts",
+      "track": "distributed-systems",
+      "title": "Timeouts and deadlines",
+      "status": "live",
+      "requires": [
+        "percentiles"
+      ]
+    },
+    {
+      "id": "retries",
+      "track": "distributed-systems",
+      "title": "Retries, backoff and jitter",
+      "status": "live",
+      "requires": [
+        "timeouts",
+        "availability"
+      ]
+    },
+    {
+      "id": "idempotency",
+      "track": "distributed-systems",
+      "title": "Idempotency",
+      "status": "live",
+      "requires": [
+        "retries"
+      ]
+    },
+    {
+      "id": "circuit-breakers",
+      "track": "distributed-systems",
+      "title": "Circuit breakers and bulkheads",
+      "status": "live",
+      "requires": [
+        "retries",
+        "timeouts"
+      ]
+    },
+    {
+      "id": "load-shedding",
+      "track": "distributed-systems",
+      "title": "Load shedding",
+      "status": "live",
+      "requires": [
+        "retries",
+        "throughput"
+      ]
+    },
+    {
+      "id": "sagas",
+      "track": "distributed-systems",
+      "title": "Distributed transactions: 2PC, sagas and the outbox",
+      "status": "live",
+      "requires": [
+        "transactions",
+        "queues",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "crdts",
+      "track": "distributed-systems",
+      "title": "CRDTs and operational transformation",
+      "status": "live",
+      "requires": [
+        "consistency-models",
+        "clocks"
+      ]
+    },
+    {
+      "id": "gossip",
+      "track": "distributed-systems",
+      "title": "Gossip and failure detectors",
+      "status": "live",
+      "requires": [
+        "replication"
+      ]
+    },
+    {
+      "id": "observability",
+      "track": "reliability",
+      "title": "Metrics, logs and traces",
+      "status": "live",
+      "requires": [
+        "percentiles"
+      ]
+    },
+    {
+      "id": "slo-error-budgets",
+      "track": "reliability",
+      "title": "SLIs, SLOs and error budgets",
+      "status": "live",
+      "requires": [
+        "availability",
+        "observability"
+      ]
+    },
+    {
+      "id": "failure-modes",
+      "track": "reliability",
+      "title": "Failure modes and metastability",
+      "status": "live",
+      "requires": [
+        "retries",
+        "queues"
+      ]
+    },
+    {
+      "id": "disaster-recovery",
+      "track": "reliability",
+      "title": "Disaster recovery: RPO, RTO and backups",
+      "status": "live",
+      "requires": [
+        "replication",
+        "availability"
+      ]
+    },
+    {
+      "id": "multi-region",
+      "track": "reliability",
+      "title": "Multi-region: active-passive and active-active",
+      "status": "live",
+      "requires": [
+        "replication",
+        "disaster-recovery"
+      ]
+    },
+    {
+      "id": "deployments",
+      "track": "reliability",
+      "title": "Deployments: blue/green, canary, flags and rollback",
+      "status": "live",
+      "requires": [
+        "slo-error-budgets"
+      ]
+    },
+    {
+      "id": "capacity-planning",
+      "track": "reliability",
+      "title": "Capacity planning at planet scale",
+      "status": "live",
+      "requires": [
+        "estimation",
+        "partitioning",
+        "failure-modes"
+      ]
+    },
+    {
+      "id": "authn-authz",
+      "track": "security",
+      "title": "Authentication and authorisation",
+      "status": "live",
+      "requires": [
+        "how-the-web-works"
+      ]
+    },
+    {
+      "id": "sessions-jwt",
+      "track": "security",
+      "title": "Sessions vs JWT",
+      "status": "live",
+      "requires": [
+        "authn-authz"
+      ]
+    },
+    {
+      "id": "oauth-oidc",
+      "track": "security",
+      "title": "OAuth 2.0 and OpenID Connect",
+      "status": "live",
+      "requires": [
+        "sessions-jwt"
+      ]
+    },
+    {
+      "id": "encryption",
+      "track": "security",
+      "title": "Encryption in transit and at rest",
+      "status": "live",
+      "requires": [
+        "how-the-web-works"
+      ]
+    },
+    {
+      "id": "key-management",
+      "track": "security",
+      "title": "Key management and secrets",
+      "status": "live",
+      "requires": [
+        "encryption"
+      ]
+    },
+    {
+      "id": "ddos-mitigation",
+      "track": "security",
+      "title": "DDoS mitigation",
+      "status": "live",
+      "requires": [
+        "rate-limiting",
+        "bandwidth"
+      ]
+    },
+    {
+      "id": "abuse-prevention",
+      "track": "security",
+      "title": "Abuse prevention",
+      "status": "live",
+      "requires": [
+        "rate-limiting",
+        "authn-authz"
+      ]
+    },
+    {
+      "id": "multi-tenancy",
+      "track": "security",
+      "title": "Multi-tenancy isolation",
+      "status": "live",
+      "requires": [
+        "authn-authz",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "privacy-deletion",
+      "track": "security",
+      "title": "Privacy and data deletion",
+      "status": "live",
+      "requires": [
+        "key-management",
+        "replication"
+      ]
+    },
+    {
+      "id": "url-shortener",
+      "track": "case-studies",
+      "title": "URL shortener",
+      "status": "live",
+      "requires": [
+        "caching",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "pastebin",
+      "track": "case-studies",
+      "title": "Pastebin",
+      "status": "live",
+      "requires": [
+        "caching",
+        "estimation"
+      ]
+    },
+    {
+      "id": "rate-limiter",
+      "track": "case-studies",
+      "title": "Distributed rate limiter",
+      "status": "live",
+      "requires": [
+        "rate-limiting",
+        "caching"
+      ]
+    },
+    {
+      "id": "key-value-store",
+      "track": "case-studies",
+      "title": "Distributed key-value store",
+      "status": "live",
+      "requires": [
+        "partitioning",
+        "replication",
+        "cap-pacelc"
+      ]
+    },
+    {
+      "id": "distributed-cache",
+      "track": "case-studies",
+      "title": "Distributed cache",
+      "status": "live",
+      "requires": [
+        "caching",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "news-feed",
+      "track": "case-studies",
+      "title": "News feed",
+      "status": "live",
+      "requires": [
+        "caching",
+        "queues"
+      ]
+    },
+    {
+      "id": "chat",
+      "track": "case-studies",
+      "title": "Chat and messaging",
+      "status": "live",
+      "requires": [
+        "queues",
+        "clocks"
+      ]
+    },
+    {
+      "id": "notification-system",
+      "track": "case-studies",
+      "title": "Notification system",
+      "status": "live",
+      "requires": [
+        "queues",
+        "idempotency",
+        "retries"
+      ]
+    },
+    {
+      "id": "twitter-timeline",
+      "track": "case-studies",
+      "title": "Twitter / X timeline and search",
+      "status": "live",
+      "requires": [
+        "caching",
+        "queues",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "instagram",
+      "track": "case-studies",
+      "title": "Photo sharing (Instagram)",
+      "status": "live",
+      "requires": [
+        "caching",
+        "bandwidth"
+      ]
+    },
+    {
+      "id": "youtube",
+      "track": "case-studies",
+      "title": "Video streaming (YouTube / Netflix)",
+      "status": "live",
+      "requires": [
+        "bandwidth",
+        "caching",
+        "queues"
+      ]
+    },
+    {
+      "id": "uber",
+      "track": "case-studies",
+      "title": "Ride dispatch (Uber)",
+      "status": "live",
+      "requires": [
+        "partitioning",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "proximity-service",
+      "track": "case-studies",
+      "title": "Proximity service (Yelp)",
+      "status": "live",
+      "requires": [
+        "caching",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "web-crawler",
+      "track": "case-studies",
+      "title": "Web crawler",
+      "status": "live",
+      "requires": [
+        "queues",
+        "partitioning",
+        "rate-limiting"
+      ]
+    },
+    {
+      "id": "typeahead",
+      "track": "case-studies",
+      "title": "Search autocomplete (typeahead)",
+      "status": "live",
+      "requires": [
+        "caching",
+        "percentiles",
+        "streams"
+      ]
+    },
+    {
+      "id": "search-engine",
+      "track": "case-studies",
+      "title": "Full-text search engine",
+      "status": "live",
+      "requires": [
+        "partitioning",
+        "percentiles",
+        "timeouts"
+      ]
+    },
+    {
+      "id": "google-docs",
+      "track": "case-studies",
+      "title": "Collaborative editor (Google Docs)",
+      "status": "live",
+      "requires": [
+        "crdts",
+        "consistency-models",
+        "queues"
+      ]
+    },
+    {
+      "id": "dropbox",
+      "track": "case-studies",
+      "title": "File sync (Dropbox / Drive)",
+      "status": "live",
+      "requires": [
+        "bandwidth",
+        "queues",
+        "transactions"
+      ]
+    },
+    {
+      "id": "payment-system",
+      "track": "case-studies",
+      "title": "Payment system",
+      "status": "live",
+      "requires": [
+        "idempotency",
+        "sagas",
+        "retries"
+      ]
+    },
+    {
+      "id": "ticket-booking",
+      "track": "case-studies",
+      "title": "Ticket booking (Ticketmaster)",
+      "status": "live",
+      "requires": [
+        "transactions",
+        "idempotency",
+        "load-shedding"
+      ]
+    },
+    {
+      "id": "hotel-booking",
+      "track": "case-studies",
+      "title": "Hotel booking",
+      "status": "live",
+      "requires": [
+        "transactions",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "leaderboard",
+      "track": "case-studies",
+      "title": "Real-time gaming leaderboard",
+      "status": "live",
+      "requires": [
+        "caching",
+        "partitioning"
+      ]
+    },
+    {
+      "id": "ad-click-aggregation",
+      "track": "case-studies",
+      "title": "Ad-click stream aggregation",
+      "status": "live",
+      "requires": [
+        "streams",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "metrics-monitoring",
+      "track": "case-studies",
+      "title": "Metrics and alerting platform",
+      "status": "live",
+      "requires": [
+        "observability",
+        "slo-error-budgets",
+        "streams"
+      ]
+    },
+    {
+      "id": "job-scheduler",
+      "track": "case-studies",
+      "title": "Distributed job scheduler",
+      "status": "live",
+      "requires": [
+        "leader-election",
+        "queues",
+        "idempotency"
+      ]
+    },
+    {
+      "id": "stock-exchange",
+      "track": "case-studies",
+      "title": "Stock exchange matching engine",
+      "status": "live",
+      "requires": [
+        "consensus",
+        "queues"
+      ]
+    },
+    {
+      "id": "interview-framework",
+      "track": "interview",
+      "title": "The interview framework",
+      "status": "live",
+      "requires": [
+        "estimation",
+        "caching"
+      ]
+    },
+    {
+      "id": "clarifying-questions",
+      "track": "interview",
+      "title": "Clarifying questions",
+      "status": "live",
+      "requires": [
+        "interview-framework"
+      ]
+    },
+    {
+      "id": "communicating-tradeoffs",
+      "track": "interview",
+      "title": "Communicating trade-offs",
+      "status": "live",
+      "requires": [
+        "interview-framework"
+      ]
+    },
+    {
+      "id": "interview-mistakes",
+      "track": "interview",
+      "title": "Common interview mistakes",
+      "status": "live",
+      "requires": [
+        "clarifying-questions",
+        "communicating-tradeoffs"
+      ]
+    },
+    {
+      "id": "api-design",
+      "track": "building-blocks",
+      "title": "API design: contracts that survive retries",
+      "status": "live",
+      "requires": [
+        "how-the-web-works"
+      ]
+    },
+    {
+      "id": "load-balancers",
+      "track": "building-blocks",
+      "title": "Load balancers: route, detect and drain",
+      "status": "live",
+      "requires": [
+        "how-the-web-works",
+        "throughput"
+      ]
+    },
+    {
+      "id": "cdn",
+      "track": "building-blocks",
+      "title": "CDNs: edge hits and origin protection",
+      "status": "live",
+      "requires": [
+        "caching",
+        "bandwidth"
+      ]
+    },
+    {
+      "id": "databases",
+      "track": "building-blocks",
+      "title": "Databases: query paths and storage engines",
+      "status": "live",
+      "requires": [
+        "throughput",
+        "latency-numbers"
+      ]
+    },
+    {
+      "id": "schema-evolution",
+      "track": "building-blocks",
+      "title": "Schema evolution: expand, migrate, contract",
+      "status": "live",
+      "requires": [
+        "transactions"
+      ]
+    },
+    {
+      "id": "object-storage",
+      "track": "building-blocks",
+      "title": "Object storage: blobs, durability and cost",
+      "status": "live",
+      "requires": [
+        "replication",
+        "bandwidth"
+      ]
+    },
+    {
+      "id": "search",
+      "track": "building-blocks",
+      "title": "Search: tokens, ranking and index lag",
+      "status": "live",
+      "requires": [
+        "partitioning",
+        "queues"
+      ]
+    },
+    {
+      "id": "service-discovery",
+      "track": "building-blocks",
+      "title": "Service discovery: names, health and front doors",
+      "status": "live",
+      "requires": [
+        "how-the-web-works",
+        "availability"
+      ]
+    }
   ],
   "rows": [
-    { "concept": "Little's law", "lesson": "throughput", "activities": ["R", "C", "Q"], "assessment": "in-flight and capacity variants, boundary choices, mastery check", "capability": "queues, metrics; manual sandbox experiment", "limitations": "stable long-run averages and matching system boundaries" },
-    { "concept": "Tail latency and fan-out", "lesson": "percentiles", "activities": ["R", "C", "Q"], "assessment": "percentile rank and slow-parent probability variants, correlation choices, mastery check", "capability": "parallel(all); manual sandbox experiment", "limitations": "numeric fan-out assumes independent identical branch tails; does not derive an exact parent p99" },
-    { "concept": "Cache-aside and stampede", "lesson": "caching", "activities": ["R", "C", "Q"], "assessment": "numeric variants, mastery check, tune-to-SLO challenge", "capability": "cache, coalescing", "limitations": "no memory fragmentation" },
-    { "concept": "Consistent hashing", "lesson": "partitioning", "activities": ["M", "R", "C", "Q"], "assessment": "key-movement variants, ring routing choice, mastery check", "capability": "HashRingPlayer; manual partitioned-storage sandbox experiment", "limitations": "ideal movement assumes equal nodes and uniform hashes; focused model does not copy data" },
-    { "concept": "Isolation anomalies", "lesson": "transactions", "activities": ["M", "Q"], "assessment": "identify anomalies, choose reservation constraints and conflict handling", "capability": "IsolationPlayer", "limitations": "simplified focused scheduler, not SQL isolation in the operational engine" },
-    { "concept": "Async replication loss", "lesson": "replication", "activities": ["R", "C", "Q"], "assessment": "acknowledged-write-loss variants, acknowledgement policy choice, mastery check", "capability": "replication, failover; manual sandbox experiment", "limitations": "constant write rate and specified lag, not a bound from average lag" },
-    { "concept": "Quorums and read repair", "lesson": "replication", "activities": ["C", "Q", "R"], "assessment": "minimum R and majority failure variants, cold-key repair choice, mastery check", "capability": "quorum KV; numeric set model and manual sandbox", "limitations": "fixed replica sets only; intersection is not linearizability; no Merkle-tree detail" },
-    { "concept": "CAP and PACELC", "lesson": "cap-pacelc", "activities": ["M", "C", "Q"], "assessment": "minority-side unavailability and majority-latency variants, AP/CP and PACELC classification choices, mastery check", "capability": "QuorumPlayer: fixed quorum overlap, sloppy quorum and hinted handoff; numeric models", "limitations": "Gilbert-Lynch definitions; round trips only, no disk or queuing; classifications are per configuration" },
-    { "concept": "Consistency models", "lesson": "consistency-models", "activities": ["M", "C", "Q"], "assessment": "session-wait and stale-read variants, model ordering, history violation choices, mastery check", "capability": "QuorumPlayer: read repair, quorum overlap and hinted handoff; numeric models", "limitations": "single-object histories; uniform random replica choice; one log-position session token" },
-    { "concept": "Clocks", "lesson": "clocks", "activities": ["M", "C", "Q"], "assessment": "drift, Lamport receive and commit-wait variants, vector comparison and clock choice, mastery check", "capability": "ClocksPlayer: physical skew, Lamport, vector and HLC; numeric models", "limitations": "constant worst-case drift; sync error and smearing not simulated; HLC backwards-step example; constant TrueTime bound" },
-    { "concept": "Raft", "lesson": "consensus", "activities": ["M", "C", "Q"], "assessment": "fault-tolerance, election-time and commit-index variants, model-generated commit prediction, term and minority-leader choices, mastery check", "capability": "RaftPlayer and model-generated commit prediction; numeric models (election delay in R)", "limitations": "no membership changes, snapshots or split-vote timing" },
-    { "concept": "Leases and fencing", "lesson": "leader-election", "activities": ["M", "C", "Q", "R"], "assessment": "quorum-size, lease drift-margin and pause-overrun variants, fencing choices, mastery check", "capability": "RaftPlayer minority partition; database failover with fencing toggle and split-brain invariant; manual sandbox experiment", "limitations": "drift only in lease margin; fencing at a single resource; failover modelled as a database setting" },
-    { "concept": "Timeouts and deadlines", "lesson": "timeouts", "activities": ["C", "Q", "R"], "assessment": "held-thread, retry-window and remaining-deadline variants, timeout and propagation choices, mastery check", "capability": "per-call timeouts and retries; manual sandbox experiment", "limitations": "fixed hop costs; steady-state Little's law" },
-    { "concept": "Retry storm", "lesson": "retries", "activities": ["C", "Q", "R"], "assessment": "amplification, capped-backoff, jitter and retry-budget variants, fix-the-storm choice, mastery check", "capability": "retries, amplification, circuit breaker; retry-storm fixture; manual sandbox experiment", "limitations": "every attempt fails; attempt duration ignored in backoff; budget as fixed fraction" },
-    { "concept": "Idempotency", "lesson": "idempotency", "activities": ["C", "Q", "R"], "assessment": "lost-ack duplicate and key-storage variants, check-then-act race and consumer dedup choices, mastery check", "capability": "dedup store, lost-ack partition, duplicate-effect invariant; manual sandbox experiment", "limitations": "one retry per lost ack; storage excludes indexes and replication" },
-    { "concept": "Circuit breakers and bulkheads", "lesson": "circuit-breakers", "activities": ["C", "Q", "R"], "assessment": "trip-count, bulkhead size and throughput variants, breaker scope choices, mastery check", "capability": "circuit breaker with bulkhead limit; manual sandbox experiment", "limitations": "count-based window in lessons, time-based in sandbox; steady-state sizing" },
-    { "concept": "Load shedding", "lesson": "load-shedding", "activities": ["C", "Q", "R"], "assessment": "collapse-time, shed-fraction and queue-depth variants, shedding policy choices, mastery check", "capability": "bounded queues and traffic spikes; manual sandbox experiment", "limitations": "constant rates and FIFO; free rejection" },
-    { "concept": "Sagas and outbox", "lesson": "sagas", "activities": ["M", "C", "Q", "R"], "assessment": "2PC message and decision-latency variants, compensation count and order, outbox choice, mastery check", "capability": "TwoPhasePlayer: coordinator failure, saga compensation and outbox; queue redelivery and dedup", "limitations": "equal participant round trips; saga isolation anomalies not simulated; polling relay only" },
-    { "concept": "CRDTs and OT", "lesson": "crdts", "activities": ["M", "C", "Q"], "assessment": "G-Counter merge and OT index variants, OR-Set and OT-versus-CRDT choices, mastery check", "capability": "CrdtPlayer: duplicate-safe counters, OR-Set, RGA and server-ordered OT; numeric models", "limitations": "written state merges, player uses unique operations; server-ordered OT with one outstanding edit per client; metadata growth qualitative" },
-    { "concept": "Gossip and failure detection", "lesson": "gossip", "activities": ["M", "C", "Q"], "assessment": "gossip-round, phi and phi-threshold variants, accuracy and SWIM choices, mastery check", "capability": "GossipPlayer: push, pull and push-pull spread, phi false positives and failure detection; numeric models", "limitations": "numeric rounds assume push fanout 1 without loss; numeric phi exponential, player normal; SWIM summarised" },
-    { "concept": "Metrics, logs and traces", "lesson": "observability", "activities": ["C", "Q"], "assessment": "cardinality and trace-volume variants, signal and symptom-alert choices, safe-label choice, propagation ordering, mastery check", "capability": "Trace tab single-request spans; no telemetry-pipeline model", "limitations": "storage ignores compression, indexing and replication; head and tail sampling only" },
-    { "concept": "SLIs, SLOs and error budgets", "lesson": "slo-error-budgets", "activities": ["C", "Q"], "assessment": "error-budget-minutes and burn-rate variants, SLI, target, multiwindow-alert and budget-policy choices, mastery check", "capability": "numeric models; timely-success ratio in Scale mode", "limitations": "uniform traffic assumed; burn thresholds follow 30-day workbook examples" },
-    { "concept": "Cascading failure", "lesson": "failure-modes", "activities": ["C", "Q"], "assessment": "cascade ordering and stop-the-cascade choice", "capability": "Scale-mode failure ladder", "limitations": "every attempt fails or times out in numeric models" },
-    { "concept": "Metastable failure", "lesson": "failure-modes", "activities": ["R", "C", "Q"], "assessment": "retry-amplification, sustained-load and herd-jitter variants, recovery choices, mastery check, cache restart challenge", "capability": "retries and queues; continuous-ramp sweep", "limitations": "all-attempts-fail extreme; uniform jitter" },
-    { "concept": "Split brain and gray failure", "lesson": "failure-modes", "activities": ["C", "Q"], "assessment": "fencing-token and outlier-detection choices", "capability": "Scale mode capacity effect only; correctness unsupported", "limitations": "conceptual only in this lesson" },
-    { "concept": "RPO, RTO and backups", "lesson": "disaster-recovery", "activities": ["C", "Q"], "assessment": "worst-case-loss and restore-time variants, RPO/RTO, logical-loss and DR-strategy choices, PITR ordering, mastery check", "capability": "numeric models", "limitations": "single sustained restore throughput; periodic log shipping" },
-    { "concept": "Multi-region topologies", "lesson": "multi-region", "activities": ["C", "Q"], "assessment": "N+1 region capacity and majority-commit latency variants, topology, conflict and shared-fate choices, mastery check", "capability": "chaos timeline crash plus Scale run; numeric models", "limitations": "regions as independent failure domains; RTT only; instant traffic shift" },
-    { "concept": "Deployments and rollback", "lesson": "deployments", "activities": ["C", "Q"], "assessment": "canary blast-radius and rolling-batch variants, strategy, config-rollout and rollback choices, expand/contract ordering, mastery check", "capability": "numeric models", "limitations": "constant failure fraction; identical instances; canary statistics out of scope" },
-    { "concept": "Rate limiting", "lesson": "rate-limiting", "activities": ["R", "C", "Q"], "assessment": "token refill, wait and boundary-burst variants, algorithm and atomicity choices, mastery check", "capability": "limiter; manual sandbox experiment", "limitations": "atomic deterministic refill in numeric model; centralized-store latency omitted" },
-    { "concept": "Stream windows", "lesson": "streams", "activities": ["C", "Q"], "assessment": "window assignment, lateness cleanup and dedup-state variants, correction choices, mastery check", "capability": "numeric event-time model; no registered windowing player", "limitations": "watermarks are estimates; explicit cleanup policy; runner-specific triggers and checkpointing omitted" },
-    { "concept": "Payment system", "lesson": "payment-system", "activities": ["R", "M"], "assessment": "rubric and invariants", "capability": "dedup, invariants", "limitations": "no fraud model" },
-    { "concept": "Stock exchange", "lesson": "stock-exchange", "activities": ["M", "R"], "assessment": "rubric", "capability": "ordering invariant", "limitations": "single-venue only" },
-    { "concept": "Capacity at planet scale", "lesson": "capacity-planning", "activities": ["R", "C", "Q"], "assessment": "compounding-growth and first-saturation variants, peak and headroom choices, sweep-kind choice, find the breaking point in Scale mode, mastery check", "capability": "fluid model, breaking-point sweep (independent levels and continuous ramp), failure ladder, what-if", "limitations": "fluid approximations; constant growth; linear utilisation scaling" },
-    { "concept": "Authentication and authorisation", "lesson": "authn-authz", "activities": ["C", "Q"], "assessment": "salted-hash cracking variants, 401/403, phishing-resistant factor, BOLA and authz-model choices, check ordering, mastery check", "capability": "numeric models", "limitations": "fixed guess rate; policy engines not simulated" },
-    { "concept": "Sessions vs JWT", "lesson": "sessions-jwt", "activities": ["C", "Q"], "assessment": "denylist-size and refresh-load variants, design, validation and cookie choices, mastery check", "capability": "numeric models", "limitations": "steady revocation and refresh rates; same-site browser apps only" },
-    { "concept": "OAuth 2.0 and OIDC", "lesson": "oauth-oidc", "activities": ["C", "Q"], "assessment": "authorization code + PKCE ordering, verifier-entropy variants, grant and token-audience choices, mastery check", "capability": "numeric model", "limitations": "code flow only; DPoP and mTLS not taught" },
-    { "concept": "Encryption in transit and at rest", "lesson": "encryption", "activities": ["C", "Q"], "assessment": "full-handshake and AES-GCM key-lifetime variants, TLS scope, mTLS and at-rest layer choices, mastery check", "capability": "numeric models", "limitations": "signature cost only; NIST random-IV bound only" },
-    { "concept": "Key management and secrets", "lesson": "key-management", "activities": ["C", "Q"], "assessment": "envelope KMS-rate and rewrap-time variants, envelope and leaked-DEK choices, secret-leak ordering, mastery check", "capability": "numeric models", "limitations": "illustrative KMS rates; HSM internals out of scope" },
-    { "concept": "DDoS mitigation", "lesson": "ddos-mitigation", "activities": ["C", "Q"], "assessment": "amplification and anycast variants, attack classification, SYN cookie and application-layer defence choices, mastery check", "capability": "Scale sweep as request-load margin; no packet model", "limitations": "even anycast split; illustrative amplification factors" },
-    { "concept": "Abuse prevention", "lesson": "abuse-prevention", "activities": ["C", "Q"], "assessment": "credential-stuffing pace and base-rate variants, abuse, layered-signal and friction choices, mastery check", "capability": "numeric models", "limitations": "attacker uses full per-IP limit; two-rate classifier" },
-    { "concept": "Multi-tenancy isolation", "lesson": "multi-tenancy", "activities": ["C", "Q"], "assessment": "shuffle-shard count variants, tenancy model, scoping, noisy-neighbour and cell choices, mastery check", "capability": "numeric model", "limitations": "uniform random shard assignment; no hypervisor isolation" },
-    { "concept": "Privacy and data deletion", "lesson": "privacy-deletion", "activities": ["C", "Q"], "assessment": "erasure-timing variants, minimisation, data-copy and crypto-shredding choices, deletion pipeline ordering, mastery check", "capability": "numeric model", "limitations": "not legal advice; legal holds ignored" },
-    { "concept": "Interview framework", "lesson": "interview-framework", "activities": ["C", "Q"], "assessment": "time-budget and storage variants, stage ordering, opening, evolution and deep-dive choices, mastery check", "capability": "interview mode", "limitations": "self-assessed rubric; no automated interviewer" },
-    { "concept": "Clarifying questions", "lesson": "clarifying-questions", "activities": ["C", "Q"], "assessment": "fan-out and celebrity variants, question priority, requirement classification and assumption choices, mastery check", "capability": "interview mode requirements checklist", "limitations": "average followers plus one celebrity, not a full heavy-tailed graph" },
-    { "concept": "Communicating trade-offs", "lesson": "communicating-tradeoffs", "activities": ["C", "Q"], "assessment": "synchronous-replication latency variants, trade-off form, requirement tie-back and pushback choices, mastery check", "capability": "interview mode rubric", "limitations": "sequential writes and fixed round trip" },
-    { "concept": "Common interview mistakes", "lesson": "interview-mistakes", "activities": ["C", "Q"], "assessment": "QPS unit-error variants, premature-detail, buzzword, failure and check-in choices, mastery check", "capability": "interview mode", "limitations": "15% estimation margin; rubric-based, no published standard" },
-    { "concept": "Hot shard and bad shard key", "lesson": "partitioning", "activities": ["R", "C", "Q"], "assessment": "hot-key load-floor variants and shard-key choices", "capability": "key to shard mapping; manual sandbox experiment", "limitations": "scaled keyspace; virtual nodes do not divide one hot key" },
-    { "concept": "Link saturation and egress", "lesson": "bandwidth", "activities": ["R", "C", "Q"], "assessment": "transfer, aggregate link and egress variants; CDN/compression choices; mastery check", "capability": "contended links; manual sandbox experiment", "limitations": "no TCP dynamics or protocol overhead; hypothetical egress price" }
+    {
+      "concept": "Little's law",
+      "lesson": "throughput",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "in-flight and capacity variants, boundary choices, mastery check",
+      "capability": "queues, metrics; manual sandbox experiment",
+      "limitations": "stable long-run averages and matching system boundaries"
+    },
+    {
+      "concept": "Tail latency and fan-out",
+      "lesson": "percentiles",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "percentile rank and slow-parent probability variants, correlation choices, mastery check",
+      "capability": "parallel(all); manual sandbox experiment",
+      "limitations": "numeric fan-out assumes independent identical branch tails; does not derive an exact parent p99"
+    },
+    {
+      "concept": "Cache-aside and stampede",
+      "lesson": "caching",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "numeric variants, mastery check, tune-to-SLO challenge",
+      "capability": "cache, coalescing",
+      "limitations": "no memory fragmentation"
+    },
+    {
+      "concept": "Consistent hashing",
+      "lesson": "partitioning",
+      "activities": [
+        "M",
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "key-movement variants, ring routing choice, mastery check",
+      "capability": "HashRingPlayer; manual partitioned-storage sandbox experiment",
+      "limitations": "ideal movement assumes equal nodes and uniform hashes; focused model does not copy data"
+    },
+    {
+      "concept": "Isolation anomalies",
+      "lesson": "transactions",
+      "activities": [
+        "M",
+        "Q"
+      ],
+      "assessment": "identify anomalies, choose reservation constraints and conflict handling",
+      "capability": "IsolationPlayer",
+      "limitations": "simplified focused scheduler, not SQL isolation in the operational engine"
+    },
+    {
+      "concept": "Async replication loss",
+      "lesson": "replication",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "acknowledged-write-loss variants, acknowledgement policy choice, mastery check",
+      "capability": "replication, failover; manual sandbox experiment",
+      "limitations": "constant write rate and specified lag, not a bound from average lag"
+    },
+    {
+      "concept": "Quorums and read repair",
+      "lesson": "replication",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "minimum R and majority failure variants, cold-key repair choice, mastery check",
+      "capability": "quorum KV; numeric set model and manual sandbox",
+      "limitations": "fixed replica sets only; intersection is not linearizability; no Merkle-tree detail"
+    },
+    {
+      "concept": "CAP and PACELC",
+      "lesson": "cap-pacelc",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "minority-side unavailability and majority-latency variants, AP/CP and PACELC classification choices, mastery check",
+      "capability": "QuorumPlayer: fixed quorum overlap, sloppy quorum and hinted handoff; numeric models",
+      "limitations": "Gilbert-Lynch definitions; round trips only, no disk or queuing; classifications are per configuration"
+    },
+    {
+      "concept": "Consistency models",
+      "lesson": "consistency-models",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "session-wait and stale-read variants, model ordering, history violation choices, mastery check",
+      "capability": "QuorumPlayer: read repair, quorum overlap and hinted handoff; numeric models",
+      "limitations": "single-object histories; uniform random replica choice; one log-position session token"
+    },
+    {
+      "concept": "Clocks",
+      "lesson": "clocks",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "drift, Lamport receive and commit-wait variants, vector comparison and clock choice, mastery check",
+      "capability": "ClocksPlayer: physical skew, Lamport, vector and HLC; numeric models",
+      "limitations": "constant worst-case drift; sync error and smearing not simulated; HLC backwards-step example; constant TrueTime bound"
+    },
+    {
+      "concept": "Raft",
+      "lesson": "consensus",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "fault-tolerance, election-time and commit-index variants, model-generated commit prediction, term and minority-leader choices, mastery check",
+      "capability": "RaftPlayer and model-generated commit prediction; numeric models (election delay in R)",
+      "limitations": "no membership changes, snapshots or split-vote timing"
+    },
+    {
+      "concept": "Leases and fencing",
+      "lesson": "leader-election",
+      "activities": [
+        "M",
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "quorum-size, lease drift-margin and pause-overrun variants, fencing choices, mastery check",
+      "capability": "RaftPlayer minority partition; database failover with fencing toggle and split-brain invariant; manual sandbox experiment",
+      "limitations": "drift only in lease margin; fencing at a single resource; failover modelled as a database setting"
+    },
+    {
+      "concept": "Timeouts and deadlines",
+      "lesson": "timeouts",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "held-thread, retry-window and remaining-deadline variants, timeout and propagation choices, mastery check",
+      "capability": "per-call timeouts and retries; manual sandbox experiment",
+      "limitations": "fixed hop costs; steady-state Little's law"
+    },
+    {
+      "concept": "Retry storm",
+      "lesson": "retries",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "amplification, capped-backoff, jitter and retry-budget variants, fix-the-storm choice, mastery check",
+      "capability": "retries, amplification, circuit breaker; retry-storm fixture; manual sandbox experiment",
+      "limitations": "every attempt fails; attempt duration ignored in backoff; budget as fixed fraction"
+    },
+    {
+      "concept": "Idempotency",
+      "lesson": "idempotency",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "lost-ack duplicate and key-storage variants, check-then-act race and consumer dedup choices, mastery check",
+      "capability": "dedup store, lost-ack partition, duplicate-effect invariant; manual sandbox experiment",
+      "limitations": "one retry per lost ack; storage excludes indexes and replication"
+    },
+    {
+      "concept": "Circuit breakers and bulkheads",
+      "lesson": "circuit-breakers",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "trip-count, bulkhead size and throughput variants, breaker scope choices, mastery check",
+      "capability": "circuit breaker with bulkhead limit; manual sandbox experiment",
+      "limitations": "count-based window in lessons, time-based in sandbox; steady-state sizing"
+    },
+    {
+      "concept": "Load shedding",
+      "lesson": "load-shedding",
+      "activities": [
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "collapse-time, shed-fraction and queue-depth variants, shedding policy choices, mastery check",
+      "capability": "bounded queues and traffic spikes; manual sandbox experiment",
+      "limitations": "constant rates and FIFO; free rejection"
+    },
+    {
+      "concept": "Sagas and outbox",
+      "lesson": "sagas",
+      "activities": [
+        "M",
+        "C",
+        "Q",
+        "R"
+      ],
+      "assessment": "2PC message and decision-latency variants, compensation count and order, outbox choice, mastery check",
+      "capability": "TwoPhasePlayer: coordinator failure, saga compensation and outbox; queue redelivery and dedup",
+      "limitations": "equal participant round trips; saga isolation anomalies not simulated; polling relay only"
+    },
+    {
+      "concept": "CRDTs and OT",
+      "lesson": "crdts",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "G-Counter merge and OT index variants, OR-Set and OT-versus-CRDT choices, mastery check",
+      "capability": "CrdtPlayer: duplicate-safe counters, OR-Set, RGA and server-ordered OT; numeric models",
+      "limitations": "written state merges, player uses unique operations; server-ordered OT with one outstanding edit per client; metadata growth qualitative"
+    },
+    {
+      "concept": "Gossip and failure detection",
+      "lesson": "gossip",
+      "activities": [
+        "M",
+        "C",
+        "Q"
+      ],
+      "assessment": "gossip-round, phi and phi-threshold variants, accuracy and SWIM choices, mastery check",
+      "capability": "GossipPlayer: push, pull and push-pull spread, phi false positives and failure detection; numeric models",
+      "limitations": "numeric rounds assume push fanout 1 without loss; numeric phi exponential, player normal; SWIM summarised"
+    },
+    {
+      "concept": "Metrics, logs and traces",
+      "lesson": "observability",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "cardinality and trace-volume variants, signal and symptom-alert choices, safe-label choice, propagation ordering, mastery check",
+      "capability": "Trace tab single-request spans; no telemetry-pipeline model",
+      "limitations": "storage ignores compression, indexing and replication; head and tail sampling only"
+    },
+    {
+      "concept": "SLIs, SLOs and error budgets",
+      "lesson": "slo-error-budgets",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "error-budget-minutes and burn-rate variants, SLI, target, multiwindow-alert and budget-policy choices, mastery check",
+      "capability": "numeric models; timely-success ratio in Scale mode",
+      "limitations": "uniform traffic assumed; burn thresholds follow 30-day workbook examples"
+    },
+    {
+      "concept": "Cascading failure",
+      "lesson": "failure-modes",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "cascade ordering and stop-the-cascade choice",
+      "capability": "Scale-mode failure ladder",
+      "limitations": "every attempt fails or times out in numeric models"
+    },
+    {
+      "concept": "Metastable failure",
+      "lesson": "failure-modes",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "retry-amplification, sustained-load and herd-jitter variants, recovery choices, mastery check, cache restart challenge",
+      "capability": "retries and queues; continuous-ramp sweep",
+      "limitations": "all-attempts-fail extreme; uniform jitter"
+    },
+    {
+      "concept": "Split brain and gray failure",
+      "lesson": "failure-modes",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "fencing-token and outlier-detection choices",
+      "capability": "Scale mode capacity effect only; correctness unsupported",
+      "limitations": "conceptual only in this lesson"
+    },
+    {
+      "concept": "RPO, RTO and backups",
+      "lesson": "disaster-recovery",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "worst-case-loss and restore-time variants, RPO/RTO, logical-loss and DR-strategy choices, PITR ordering, mastery check",
+      "capability": "numeric models",
+      "limitations": "single sustained restore throughput; periodic log shipping"
+    },
+    {
+      "concept": "Multi-region topologies",
+      "lesson": "multi-region",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "N+1 region capacity and majority-commit latency variants, topology, conflict and shared-fate choices, mastery check",
+      "capability": "chaos timeline crash plus Scale run; numeric models",
+      "limitations": "regions as independent failure domains; RTT only; instant traffic shift"
+    },
+    {
+      "concept": "Deployments and rollback",
+      "lesson": "deployments",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "canary blast-radius and rolling-batch variants, strategy, config-rollout and rollback choices, expand/contract ordering, mastery check",
+      "capability": "numeric models",
+      "limitations": "constant failure fraction; identical instances; canary statistics out of scope"
+    },
+    {
+      "concept": "Rate limiting",
+      "lesson": "rate-limiting",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "token refill, wait and boundary-burst variants, algorithm and atomicity choices, mastery check",
+      "capability": "limiter; manual sandbox experiment",
+      "limitations": "atomic deterministic refill in numeric model; centralized-store latency omitted"
+    },
+    {
+      "concept": "Stream windows",
+      "lesson": "streams",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "window assignment, lateness cleanup and dedup-state variants, correction choices, mastery check",
+      "capability": "numeric event-time model; no registered windowing player",
+      "limitations": "watermarks are estimates; explicit cleanup policy; runner-specific triggers and checkpointing omitted"
+    },
+    {
+      "concept": "Payment system",
+      "lesson": "payment-system",
+      "activities": [
+        "R",
+        "M"
+      ],
+      "assessment": "rubric and invariants",
+      "capability": "dedup, invariants",
+      "limitations": "no fraud model"
+    },
+    {
+      "concept": "Stock exchange",
+      "lesson": "stock-exchange",
+      "activities": [
+        "M",
+        "R"
+      ],
+      "assessment": "rubric",
+      "capability": "ordering invariant",
+      "limitations": "single-venue only"
+    },
+    {
+      "concept": "Capacity at planet scale",
+      "lesson": "capacity-planning",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "compounding-growth and first-saturation variants, peak and headroom choices, sweep-kind choice, find the breaking point in Scale mode, mastery check",
+      "capability": "fluid model, breaking-point sweep (independent levels and continuous ramp), failure ladder, what-if",
+      "limitations": "fluid approximations; constant growth; linear utilisation scaling"
+    },
+    {
+      "concept": "Authentication and authorisation",
+      "lesson": "authn-authz",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "salted-hash cracking variants, 401/403, phishing-resistant factor, BOLA and authz-model choices, check ordering, mastery check",
+      "capability": "numeric models",
+      "limitations": "fixed guess rate; policy engines not simulated"
+    },
+    {
+      "concept": "Sessions vs JWT",
+      "lesson": "sessions-jwt",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "denylist-size and refresh-load variants, design, validation and cookie choices, mastery check",
+      "capability": "numeric models",
+      "limitations": "steady revocation and refresh rates; same-site browser apps only"
+    },
+    {
+      "concept": "OAuth 2.0 and OIDC",
+      "lesson": "oauth-oidc",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "authorization code + PKCE ordering, verifier-entropy variants, grant and token-audience choices, mastery check",
+      "capability": "numeric model",
+      "limitations": "code flow only; DPoP and mTLS not taught"
+    },
+    {
+      "concept": "Encryption in transit and at rest",
+      "lesson": "encryption",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "full-handshake and AES-GCM key-lifetime variants, TLS scope, mTLS and at-rest layer choices, mastery check",
+      "capability": "numeric models",
+      "limitations": "signature cost only; NIST random-IV bound only"
+    },
+    {
+      "concept": "Key management and secrets",
+      "lesson": "key-management",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "envelope KMS-rate and rewrap-time variants, envelope and leaked-DEK choices, secret-leak ordering, mastery check",
+      "capability": "numeric models",
+      "limitations": "illustrative KMS rates; HSM internals out of scope"
+    },
+    {
+      "concept": "DDoS mitigation",
+      "lesson": "ddos-mitigation",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "amplification and anycast variants, attack classification, SYN cookie and application-layer defence choices, mastery check",
+      "capability": "Scale sweep as request-load margin; no packet model",
+      "limitations": "even anycast split; illustrative amplification factors"
+    },
+    {
+      "concept": "Abuse prevention",
+      "lesson": "abuse-prevention",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "credential-stuffing pace and base-rate variants, abuse, layered-signal and friction choices, mastery check",
+      "capability": "numeric models",
+      "limitations": "attacker uses full per-IP limit; two-rate classifier"
+    },
+    {
+      "concept": "Multi-tenancy isolation",
+      "lesson": "multi-tenancy",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "shuffle-shard count variants, tenancy model, scoping, noisy-neighbour and cell choices, mastery check",
+      "capability": "numeric model",
+      "limitations": "uniform random shard assignment; no hypervisor isolation"
+    },
+    {
+      "concept": "Privacy and data deletion",
+      "lesson": "privacy-deletion",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "erasure-timing variants, minimisation, data-copy and crypto-shredding choices, deletion pipeline ordering, mastery check",
+      "capability": "numeric model",
+      "limitations": "not legal advice; legal holds ignored"
+    },
+    {
+      "concept": "Interview framework",
+      "lesson": "interview-framework",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "time-budget and storage variants, stage ordering, opening, evolution and deep-dive choices, mastery check",
+      "capability": "interview mode",
+      "limitations": "self-assessed rubric; no automated interviewer"
+    },
+    {
+      "concept": "Clarifying questions",
+      "lesson": "clarifying-questions",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "fan-out and celebrity variants, question priority, requirement classification and assumption choices, mastery check",
+      "capability": "interview mode requirements checklist",
+      "limitations": "average followers plus one celebrity, not a full heavy-tailed graph"
+    },
+    {
+      "concept": "Communicating trade-offs",
+      "lesson": "communicating-tradeoffs",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "synchronous-replication latency variants, trade-off form, requirement tie-back and pushback choices, mastery check",
+      "capability": "interview mode rubric",
+      "limitations": "sequential writes and fixed round trip"
+    },
+    {
+      "concept": "Common interview mistakes",
+      "lesson": "interview-mistakes",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "QPS unit-error variants, premature-detail, buzzword, failure and check-in choices, mastery check",
+      "capability": "interview mode",
+      "limitations": "15% estimation margin; rubric-based, no published standard"
+    },
+    {
+      "concept": "Hot shard and bad shard key",
+      "lesson": "partitioning",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "hot-key load-floor variants and shard-key choices",
+      "capability": "key to shard mapping; manual sandbox experiment",
+      "limitations": "scaled keyspace; virtual nodes do not divide one hot key"
+    },
+    {
+      "concept": "Link saturation and egress",
+      "lesson": "bandwidth",
+      "activities": [
+        "R",
+        "C",
+        "Q"
+      ],
+      "assessment": "transfer, aggregate link and egress variants; CDN/compression choices; mastery check",
+      "capability": "contended links; manual sandbox experiment",
+      "limitations": "no TCP dynamics or protocol overhead; hypothetical egress price"
+    },
+    {
+      "concept": "API styles and live-update transports",
+      "lesson": "api-design",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "REST/gRPC/GraphQL and SSE/WebSocket/long-poll choices",
+      "capability": "visual contract and message-flow exercises",
+      "limitations": "no executed protocol stack"
+    },
+    {
+      "concept": "Pagination and API compatibility",
+      "lesson": "api-design",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "cursor tie-breaker and backward-compatible migration choices",
+      "capability": "list-change timeline; contract comparison",
+      "limitations": "cursor is not a snapshot; reader tolerance required"
+    },
+    {
+      "concept": "API idempotency keys",
+      "lesson": "api-design",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "lost-response retry and retention-boundary choices",
+      "capability": "deduplication message flow",
+      "limitations": "atomic durable effect and dedup state required; bounded retention"
+    },
+    {
+      "concept": "Load balancing layers and algorithms",
+      "lesson": "load-balancers",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "L4/L7, round-robin, least-connections and consistent-hash choices",
+      "capability": "routing sequence; connection-count exercise; power-of-two comparison",
+      "limitations": "connection counts may not reflect request work"
+    },
+    {
+      "concept": "Health checks, sticky sessions and draining",
+      "lesson": "load-balancers",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "failure-detection, session-loss and graceful-removal choices",
+      "capability": "health and drain timelines",
+      "limitations": "illustrative probe timing; no TCP model"
+    },
+    {
+      "concept": "CDN edge caching and origin shielding",
+      "lesson": "cdn",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "hit-path, representation-key, TTL and shield choices",
+      "capability": "edge and shield message flows",
+      "limitations": "simplified freshness; shield calculations omit coalescing and retries"
+    },
+    {
+      "concept": "CDN invalidation and origin offload",
+      "lesson": "cdn",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "versioned-asset, origin-rate and byte-hit choices",
+      "capability": "two-tier miss arithmetic and byte comparison",
+      "limitations": "purge propagation varies; byte and request hits differ"
+    },
+    {
+      "concept": "Database families and indexes",
+      "lesson": "databases",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "access-pattern, graph, selective-index and scan choices",
+      "capability": "family comparison; examined-row work model",
+      "limitations": "engine guarantees vary; work counts are not latency predictions"
+    },
+    {
+      "concept": "B-tree, LSM and write amplification",
+      "lesson": "databases",
+      "activities": [
+        "C",
+        "Q"
+      ],
+      "assessment": "index-maintenance, compaction and physical-write calculation choices",
+      "capability": "page-update comparison; LSM timeline; measured amplification",
+      "limitations": "factors are workload measurements; accounting boundaries must match"
+    },
+    {
+      "concept": "Online schema evolution and expand/contract",
+      "lesson": "schema-evolution",
+      "activities": [
+        "V",
+        "Q"
+      ],
+      "assessment": "compatibility choices, backfill race diagnosis, migration ordering and contract gates",
+      "capability": "visual migration protocol and assessed rollout scenarios; no SQL execution",
+      "limitations": "database-specific DDL locks and cross-store write atomicity are not simulated"
+    },
+    {
+      "concept": "Object storage, durability and erasure coding",
+      "lesson": "object-storage",
+      "activities": [
+        "V",
+        "Q"
+      ],
+      "assessment": "blob layout choices, durability distinction, replica and coding arithmetic, storage and egress subtotal",
+      "capability": "visual storage layouts and fixed-input capacity and cost questions",
+      "limitations": "ideal equal-sized coding fragments; invented prices; no repair or correlated-failure model"
+    },
+    {
+      "concept": "Inverted indexes, lexical ranking and search fan-out",
+      "lesson": "search",
+      "activities": [
+        "V",
+        "Q"
+      ],
+      "assessment": "postings intersection, analyzer mismatch, ranking signals, index lag and partial-result choices",
+      "capability": "visual postings, indexing timeline and sharded query sequence; no search engine execution",
+      "limitations": "qualitative BM25; no semantic retrieval, distributed scoring calculation or measured lag"
+    },
+    {
+      "concept": "Service discovery, health and API front doors",
+      "lesson": "service-discovery",
+      "activities": [
+        "V",
+        "Q"
+      ],
+      "assessment": "DNS and registry comparison, endpoint-selection placement, stale-window arithmetic, draining and gateway roles",
+      "capability": "visual DNS and registry discovery paths and health timing scenarios",
+      "limitations": "assumed cache and detection behavior; no registry consensus or live proxy execution"
+    }
   ]
 }

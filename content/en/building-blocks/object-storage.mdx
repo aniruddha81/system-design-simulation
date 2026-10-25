@@ -1,0 +1,154 @@
+{/*
+id: object-storage
+slug: object-storage
+track: building-blocks
+title: "Object storage: blobs, durability and cost"
+description: "Choose a blob layout, distinguish durability from availability, calculate erasure-coding overhead, and budget storage and egress."
+objectives:
+  - id: blob-model
+    text: Choose an object key and metadata pattern for immutable blobs
+  - id: durability-availability
+    text: Distinguish durability from request availability
+  - id: coding-overhead
+    text: Calculate replication and k+m erasure-coding storage overhead
+  - id: storage-egress
+    text: Estimate storage and egress costs with explicit units and assumptions
+requires: [replication, bandwidth]
+activities: [V, Q]
+limitations:
+  - "Coding arithmetic assumes equal-sized fragments and an ideal maximum-distance-separable code."
+  - "Prices are invented inputs, not vendor quotes; requests, retrieval, minimum duration and taxes are excluded."
+  - "Figures do not model repair bandwidth, correlated failures or provider durability probabilities."
+sources:
+  - title: "Amazon S3: What is Amazon S3?"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html"
+  - title: "Amazon S3: Data protection"
+    url: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html"
+  - title: "Ceph: Erasure code"
+    url: "https://docs.ceph.com/en/latest/rados/operations/erasure-code/"
+  - title: "Amazon S3 pricing"
+    url: "https://aws.amazon.com/s3/pricing/"
+reviewedBy: "Content lead"
+lastReviewed: "2026-10-25"
+revision: 1
+estimatedMinutes: 18
+*/}
+
+<Step id="blob-and-metadata" title="Store bytes by key">
+
+<Sequence title="Upload a photo" actors={["Client", "Object store", "Database"]} messages={[
+  { from: "Client", to: "Object store", label: "PUT photos/42/v3: image bytes" },
+  { from: "Object store", to: "Client", label: "Upload accepted" },
+  { from: "Client", to: "Database", label: "Record key, owner and content type" }
+]} />
+
+An object holds bytes plus metadata under a key in a bucket. Keep searchable application metadata in a database. Prefer a new key for each blob version. Uploading bytes and publishing a database pointer are separate operations: reconcile orphan uploads and dangling pointers.
+
+<Choice id="photo-layout" objective="blob-model" prompt="Which layout fits a photo service that searches by owner?" options={[
+  { id: "scan", text: "Scan image bytes for every owner query", feedback: "Blob storage does not replace a queryable metadata index." },
+  { id: "split", text: "Image bytes in object storage; owner and object key in the database", correct: true, feedback: "The database serves metadata queries while the object store serves bytes." },
+  { id: "early", text: "Publish pointers before upload succeeds, without repair", feedback: "Readers can receive pointers to bytes that do not exist." }
+]} />
+
+</Step>
+
+<Step id="two-promises" title="Kept safely does not mean reachable now">
+
+<Compare title="Two separate questions" sides={[
+  { title: "Durability", points: ["Will the stored object survive?", "Loss is permanent"] },
+  { title: "Availability", points: ["Can a request succeed now?", "An outage may be temporary"] }
+]} />
+
+A network outage can make intact objects unavailable. Permanent loss harms durability even if other requests succeed. Durability estimates, availability targets and request measurements have different denominators and time horizons; do not convert one into the other.
+
+<Choice id="outage-or-loss" objective="durability-availability" prompt="All fragments remain intact, but an outage blocks reads for ten minutes. What is demonstrated?" options={[
+  { id: "unavailable", text: "An availability failure without demonstrated permanent data loss", correct: true, feedback: "Objects can survive while requests cannot reach them." },
+  { id: "lost", text: "Permanent object loss", feedback: "Unreachable bytes have not necessarily been destroyed." },
+  { id: "equal", text: "Durability equals the request success rate", feedback: "These metrics measure different events over different horizons." }
+]} />
+
+</Step>
+
+<Step id="replicas" title="Three copies cost three times the bytes">
+
+<Stats title="Ideal three-way replication" items={[
+  { label: "Logical data", value: "100 GB", sub: "Before replication" },
+  { label: "Stored bytes", value: "300 GB", sub: "3 complete copies" },
+  { label: "Ideal tolerance", value: "2 copy losses", sub: "One intact reachable copy remains" }
+]} />
+
+Replication stores complete copies. Three copies have 3x raw storage overhead. Placement matters: three copies on one rack do not survive a rack loss. Repair must restore redundancy before further failures exhaust it.
+
+<Choice id="replica-size" objective="coding-overhead" prompt="Ignoring metadata, how much raw capacity holds 200 GB with three complete replicas?" options={[
+  { id: "one", text: "200 GB", feedback: "This counts only one copy." },
+  { id: "two", text: "400 GB", feedback: "This counts two copies, not three." },
+  { id: "three", text: "600 GB", correct: true, feedback: "200 GB times three copies is 600 GB." }
+]} />
+
+</Step>
+
+<Step id="erasure-coding" title="Recover from a subset of fragments">
+
+<Stats title="Example: k=6 data, m=3 parity" items={[
+  { label: "Fragments", value: "9", sub: "Any 6 suffice for this ideal code" },
+  { label: "Overhead", value: "1.5x", sub: "(6 + 3) / 6" },
+  { label: "100 GB logical", value: "150 GB raw", sub: "Up to 3 fragment erasures per group" }
+]} />
+
+An ideal maximum-distance-separable code reconstructs from any k of k+m fragments. Raw overhead is (k+m)/k. It tolerates m fragment erasures per group, not arbitrary failures of m regions. Reconstruction and repair consume compute and bandwidth. Placement still determines which failures destroy too many fragments together.
+
+<Choice id="coding-math" objective="coding-overhead" prompt="For k=8 and m=4, what stores 400 GB logically, ignoring metadata?" options={[
+  { id: "coded", text: "600 GB raw; tolerate up to 4 fragment erasures per group", correct: true, feedback: "The multiplier is 12/8 = 1.5; any 8 surviving fragments reconstruct." },
+  { id: "copies", text: "4800 GB raw; tolerate 8 erasures", feedback: "Fragments are portions, not 12 complete copies; the erasure budget is m=4." },
+  { id: "regions", text: "400 GB raw; tolerate any 4 regional outages", feedback: "Parity adds capacity, and fragment placement determines regional tolerance." }
+]} />
+
+</Step>
+
+<Step id="cost-model" title="Delivery can cost more than retention">
+
+<Stats title="Invented monthly rates; decimal GB" items={[
+  { label: "Storage", value: "USD 20", sub: "1,000 GB-month x USD 0.02" },
+  { label: "Egress", value: "USD 450", sub: "5,000 GB x USD 0.09" },
+  { label: "Subtotal", value: "USD 470", sub: "Requests and retrieval excluded" }
+]} />
+
+Separate stored GB-month from transferred GB. Use provider-billed storage: do not multiply by internal redundancy again when included in the rate. Download frequency and cache misses drive egress. These prices are teaching inputs, not current market rates.
+
+<Choice id="monthly-cost" objective="storage-egress" prompt="At these invented rates, what subtotal covers 2,000 GB-month stored and 1,000 GB egress?" options={[
+  { id: "same-rate", text: "USD 60", feedback: "This incorrectly prices egress at the storage rate." },
+  { id: "subtotal", text: "USD 130", correct: true, feedback: "2,000 x 0.02 + 1,000 x 0.09 = 40 + 90." },
+  { id: "redundancy", text: "USD 210", feedback: "This triples the USD 40 storage charge even though redundancy is already included." }
+]} />
+
+</Step>
+
+<Step id="choose-a-layout" title="Choose a layout for the workload">
+
+<Compare title="Illustrative trade-offs" sides={[
+  { title: "Full replicas", points: ["Read from a complete copy", "Higher raw byte overhead"] },
+  { title: "Erasure coding", points: ["Lower raw byte overhead", "Reconstruction when fragments are missing"] },
+  { title: "Both need", points: ["Failure-domain placement", "Repair capacity", "Measured availability"] }
+]} />
+
+A cold archive may favor coding efficiency; a small hot object may favor simpler reads. Neither choice alone proves a durability target. Test degraded reads, repair load and failure-domain placement against the workload.
+
+<Choice id="layout-evidence" objective="durability-availability" prompt="Two layouts advertise equal durability. What else matters for a strict read SLO?" options={[
+  { id: "nothing", text: "Nothing; equal durability guarantees equal availability", feedback: "Permanent-loss probability does not specify request behavior." },
+  { id: "parity", text: "Only the number of parity fragments", feedback: "Placement, network paths and workload also affect reads." },
+  { id: "measure", text: "Degraded-read latency, reachability and repair behavior", correct: true, feedback: "Durability alone does not determine successful timely reads." }
+]} />
+
+</Step>
+
+<Step id="practice" title="Check your mastery">
+
+<Stats title="Practice target" items={[{ label: "Mastery", value: "80%", sub: "4 of 5 fresh questions" }]} />
+
+Try a fresh variant, then score at least 80% on the mastery check. Wrong answers link back to the teaching step.
+
+<VariantQuestion template="object.replica-bytes" />
+
+<MasteryCheck templates={["object.replica-bytes", "object.coded-bytes", "object.monthly-cost", "object.egress-volume"]} count={5} />
+
+</Step>
