@@ -23,22 +23,24 @@ flowchart LR
 | `DATABASE_URL_UNPOOLED` | Direct Neon URL. Migrations only. |
 | `BETTER_AUTH_SECRET` | 32+ random bytes. Rotate to invalidate all sessions. |
 | `BETTER_AUTH_URL` | Public origin, e.g. `https://your-domain`. Also the allowed `Origin` for `/api/sync`. |
-| `RESEND_API_KEY` / `EMAIL_FROM` | Optional. When both are set, sign-up requires email verification and password-reset emails are sent (Resend REST API). When unset, nobody is locked out and emails are not sent. |
+| `BREVO_CLIENT_ID` / `BREVO_CLIENT_SECRET` / `EMAIL_FROM` | Optional. When all three are set, sign-up requires email verification and password-reset emails are sent through Brevo's transactional API. `EMAIL_FROM` is `Name <address>` and the address must be authenticated in Brevo. When unset, nobody is locked out and emails are not sent. |
 | `CRON_SECRET` | Bearer token for `/api/cron/prune` (daily retention job in `vercel.json`). Vercel sends it automatically. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Optional. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional. |
 
 Copy `.env.example` to `.env.local` for development. Never commit real values.
 
-## Email (Resend)
+## Email (Brevo)
 
-Development uses the sandbox sender `onboarding@resend.dev`, which Resend delivers only to the account owner. The app detects it (`emailSandbox()` in `src/server/email.ts`) and never requires verification while it is in use, so no user can be locked out.
+Mail goes through Brevo's transactional API using a private machine-to-machine OAuth app limited to the `transactional.email:write` scope (`BREVO_CLIENT_ID` / `BREVO_CLIENT_SECRET`). The server mints a one-hour bearer token from `https://oauth.brevo.com/realms/partner/oauth/token` and caches it; no long-lived API key exists.
 
-To email real users:
+Set up (already done for `aniruddha81.tech`; sender `noreply@aniruddha81.tech`):
 
-1. `resend domains create --name your-domain.com --region ap-northeast-1` (closest sending region to Bangladesh), add the DNS records it prints, then `resend domains verify <id>` until it reports verified.
-2. Set `EMAIL_FROM="System Design Simulator <noreply@your-domain.com>"` and a send-only key (`resend api-keys create --name production --permission sending_access`) as `RESEND_API_KEY` in the host's environment.
-3. From then on sign-up requires a verified email and password-reset mails go out. Users who signed up earlier must verify before their next sign-in.
+1. `brevo app create --name <name> --distribution private --m2m --scopes transactional.email:write --json`, then `brevo app secret rotate --app-id <id> --yes --json` to obtain a client secret (it is shown once).
+2. In Brevo, authenticate the sending domain (Senders, domains & dedicated IPs): add the DKIM, SPF and DMARC records it lists to DNS.
+3. Put the three variables in the host environment and restart.
+
+Rotate the secret with the same `secret rotate` command; the old one keeps working for a short grace period.
 
 ## Release steps
 
@@ -59,7 +61,7 @@ Runs sync as RunKey + summary (never raw events); deleting a design deletes its 
 
 ## Known limits
 
-- Email verification and password reset are implemented but stay off until `RESEND_API_KEY` and `EMAIL_FROM` are set. Verify the sending domain in Resend first; once enabled, existing unverified users must verify before signing in.
+- Email verification and password reset are on when the three Brevo variables are set. Existing unverified users must verify before their next sign-in. Brevo's free plan allows 300 emails a day.
 - See `docs/OPERATIONS.md` for the runbook (restore, secret rotation, retention).
 - Conflict rule: designs and reviews are last-write-wins by `updatedAt`; progress is max-merged on the client.
 - Quotas: 5,000 synced records per user, 2 MB per design, 200 records per request.

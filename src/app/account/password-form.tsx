@@ -45,7 +45,7 @@ export function PasswordForm({ mode, token }: { mode: "forgot" | "reset" | "chan
       <label className="grid gap-1">New password<input className={field} name="password" type="password" autoComplete="new-password" minLength={10} maxLength={128} required /><span className="text-sm text-muted">10?128 characters</span></label>
     </>}
     {error && <p role="alert" className="text-danger"><span aria-hidden>! </span>{error} {mode === "reset" && <Link className="inline-flex min-h-6 underline" href="/account/forgot">Request a new link</Link>}</p>}
-    <button className="btn btn-primary" disabled={busy}>{busy ? "Please wait?" : mode === "forgot" ? "Send reset link" : "Update password"}</button>
+    <button className="btn btn-primary" disabled={busy}>{busy ? "Please wait…" : mode === "forgot" ? "Send reset link" : "Update password"}</button>
   </form>;
 }
 
@@ -70,7 +70,7 @@ export function VerificationNotice({ email }: { email: string }) {
   return <section className="grid gap-2 rounded-md border border-rule p-4" aria-label="Email verification">
     <h2 className="font-display text-2xl">Verify your email</h2>
     <p className="text-muted">Open the link in your inbox.</p>
-    <button className="btn" disabled={busy} onClick={resend}>{busy ? "Sending?" : "Resend email"}</button>
+    <button className="btn" disabled={busy} onClick={resend}>{busy ? "Sending…" : "Resend email"}</button>
     {sent && <p role="status">Verification email sent.</p>}
     {error && <p role="alert" className="text-danger"><span aria-hidden>! </span>{error}</p>}
   </section>;

@@ -1,17 +1,42 @@
 import "server-only";
 
+// Brevo transactional email (https://developers.brevo.com). A private machine-to-machine OAuth app
+// (scope transactional.email:write) mints 1-hour bearer tokens; the sender address must be authenticated in Brevo.
+const TOKEN_URL = "https://oauth.brevo.com/realms/partner/oauth/token";
+const SEND_URL = "https://api.brevo.com/v3/smtp/email";
+
 export function emailConfigured() {
-  return Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
+  return Boolean(process.env.BREVO_CLIENT_ID && process.env.BREVO_CLIENT_SECRET && process.env.EMAIL_FROM);
 }
 
-/** Resend's shared test sender only delivers to the account owner, so it must never gate sign-in. */
-export function emailSandbox() {
-  return /@resend\.dev>?\s*$/i.test(process.env.EMAIL_FROM ?? "");
+/** When mail can be delivered, sign-up requires a verified email. Without a provider nobody is locked out. */
+export const emailEnforced = emailConfigured;
+
+/** "Name <a@b.c>" or "a@b.c" -> {name?, email}. */
+export function parseSender(from: string) {
+  const match = /^\s*(?:"?([^"<]*?)"?\s*)?<([^<>\s]+)>\s*$/.exec(from);
+  return match ? { ...(match[1] ? { name: match[1] } : {}), email: match[2] } : { email: from.trim() };
 }
 
-/** True when real users can receive mail: a verified-domain sender is configured. Only then is verification required. */
-export function emailEnforced() {
-  return emailConfigured() && !emailSandbox();
+let cached: { token: string; expiresAt: number } | undefined;
+
+async function accessToken(): Promise<string> {
+  if (cached && cached.expiresAt - Date.now() > 5 * 60_000) return cached.token;
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: process.env.BREVO_CLIENT_ID!,
+      client_secret: process.env.BREVO_CLIENT_SECRET!,
+      scope: "transactional.email:write",
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error("Email provider authentication failed");
+  const body = (await response.json()) as { access_token: string; expires_in: number };
+  cached = { token: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 };
+  return cached.token;
 }
 
 function escape(value: string) {
@@ -34,16 +59,21 @@ export async function sendEmail(message: { to: string; subject: string; text: st
     if (process.env.NODE_ENV === "development") console.info(message.text);
     return;
   }
-  const response = await fetch("https://api.resend.com/emails", {
+  const response = await fetch(SEND_URL, {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM, ...message }),
+    headers: { Authorization: `Bearer ${await accessToken()}`, "Content-Type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      sender: parseSender(process.env.EMAIL_FROM!),
+      to: [{ email: message.to }],
+      subject: message.subject,
+      htmlContent: message.html,
+      textContent: message.text,
+    }),
     signal: AbortSignal.timeout(10_000),
   });
   // Provider responses may contain message contents; never include them in errors.
   if (!response.ok) {
-    // Sandbox sender rejects everyone but the account owner; log and carry on instead of failing the request.
-    if (emailSandbox()) return void console.warn(JSON.stringify({ message: "email not delivered: sandbox sender only reaches the Resend account owner", status: response.status }));
+    if (response.status === 401) cached = undefined; // token revoked or rotated: mint a new one next time
     throw new Error("Email delivery failed");
   }
 }
