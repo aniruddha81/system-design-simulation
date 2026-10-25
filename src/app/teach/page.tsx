@@ -44,16 +44,27 @@ export default function TeachPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 pb-20 pt-12">
       <div className="max-w-3xl">
-        <p className="font-mono text-xs uppercase tracking-widest text-accent">Instructor &amp; Classroom Mode</p>
+        <p className="font-mono text-xs uppercase tracking-widest text-accent">
+          Instructor &amp; Classroom Mode
+        </p>
         <h1 className="mt-2 font-display text-4xl leading-tight tracking-tight sm:text-5xl">
           Teach system design with live simulations.
         </h1>
         <p className="mt-4 text-lg leading-relaxed text-ink-2">
-          Built for university courses, engineering bootcamps, and study groups. Present interactive failure modes on a lecture hall projector, share zero-backend assignment links, and verify student completion receipts locally in your browser.
+          Built for university courses, engineering bootcamps, and study groups.
+          Present interactive failure modes on a lecture hall projector, share
+          zero-backend assignment links, and verify student completion receipts
+          locally in your browser.
         </p>
       </div>
 
-      <Suspense fallback={<p className="mt-10 text-muted" role="status">Loading classroom studio…</p>}>
+      <Suspense
+        fallback={
+          <p className="mt-10 text-muted" role="status">
+            Loading classroom studio…
+          </p>
+        }
+      >
         <TeachStudio catalog={catalog} />
       </Suspense>
     </div>

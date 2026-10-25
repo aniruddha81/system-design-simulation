@@ -40,7 +40,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Drag a Cache node onto both Service → Database edges (auto-wires cache-aside) and re-run with coalesce OFF vs ON through the 7s cache kill.",
       "Inspect the time-series chart at t = 7s: show how singleflight coalescing prevents the cold-cache stampede from saturating the 5 DB workers.",
     ],
-    question: "Ask the class: Why does adding a cache without request coalescing still fail when a hot key expires or a cache node restarts?",
+    question:
+      "Ask the class: Why does adding a cache without request coalescing still fail when a hot key expires or a cache node restarts?",
   },
   {
     id: "oversell",
@@ -54,7 +55,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Step through the Request Trace debugger to show two concurrent buyers reading remaining = 1 before either writes remaining = 0.",
       "Replace the separate get + update steps with a single atomic decrementIfPositive step and show clean 409 Conflict responses once 100 seats sell.",
     ],
-    question: "Ask the class: Would increasing database worker concurrency make the read-then-write race better or worse?",
+    question:
+      "Ask the class: Would increasing database worker concurrency make the read-then-write race better or worse?",
   },
   {
     id: "lost-ack",
@@ -68,7 +70,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Point out the duplicateEffect violation when the gateway's timeout retry increments the customer's ledger a second time.",
       "Wire the Payment Service PUT handler to check the atomic, durable Dedup Store first and branch on dedupHit → 200 OK.",
     ],
-    question: "Ask the class: What happens if the idempotency store is non-atomic or loses state on restart before the client retry arrives?",
+    question:
+      "Ask the class: What happens if the idempotency store is non-atomic or loses state on restart before the client retry arrives?",
   },
   {
     id: "failover",
@@ -82,7 +85,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Explain why async writes acknowledged before the crash vanish when a lagging follower is promoted, and why the recovering old leader accepts stale-term writes.",
       "Switch replication to sync/semiSync and enable failover fencing (fencing: true) so stale-term writes are rejected and committed writes survive promotion.",
     ],
-    question: "Ask the class: In a 3-node cluster where 1 node crashes, what is the availability trade-off between full sync (all 3) and semi-sync (quorum of 2)?",
+    question:
+      "Ask the class: In a 3-node cluster where 1 node crashes, what is the availability trade-off between full sync (all 3) and semi-sync (quorum of 2)?",
   },
   {
     id: "quorum",
@@ -96,7 +100,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Use the Pigeonhole Principle on the board: with N = 3, R = 1, W = 1, R + W = 2 ≤ 3, so a reader can contact a replica outside the write set.",
       "Raise readQuorum to 2 and writeQuorum to 2 (R + W = 4 > 3) and verify that every read intersects at least one replica with the latest version.",
     ],
-    question: "Ask the class: If latency-sensitive reads require R = 1 on N = 3, what must W be to preserve strict quorum intersection?",
+    question:
+      "Ask the class: If latency-sensitive reads require R = 1 on N = 3, what must W be to preserve strict quorum intersection?",
   },
   {
     id: "breaking-point",
@@ -110,7 +115,8 @@ const CLASSROOM_DEMOS: ClassroomDemo[] = [
       "Watch the binary-search load multiplier sweep offered RPS until goodput or p99 crosses the SLO cliff.",
       "Identify the bottleneck component in the breakdown table, double its concurrency or enable Origin Shield, and re-run the sweep to measure the new ceiling.",
     ],
-    question: "Ask the class: Why does p99 latency spike sharply around 80–85% utilisation even before throughput completely flattens?",
+    question:
+      "Ask the class: Why does p99 latency spike sharply around 80–85% utilisation even before throughput completely flattens?",
   },
 ];
 
@@ -125,7 +131,8 @@ const SYLLABUS_PRESETS: SyllabusPreset[] = [
   {
     id: "week-1",
     title: "Module 1: Queueing, Latency & Caching Fundamentals",
-    description: "Little's Law, tail latency math, cache-aside mechanics, and the cold-cache recovery challenge.",
+    description:
+      "Little's Law, tail latency math, cache-aside mechanics, and the cold-cache recovery challenge.",
     items: [
       "lesson:foundations/performance-metrics-littles-law",
       "lesson:foundations/queueing-tail-latency",
@@ -136,7 +143,8 @@ const SYLLABUS_PRESETS: SyllabusPreset[] = [
   {
     id: "week-2",
     title: "Module 2: Concurrency, Idempotency & Queues",
-    description: "Atomic conditional updates, idempotency keys under lost acks, and partitioned queue visibility timeouts.",
+    description:
+      "Atomic conditional updates, idempotency keys under lost acks, and partitioned queue visibility timeouts.",
     items: [
       "lesson:building-blocks/queues-streams",
       "challenge:flash-sale-no-oversell",
@@ -147,7 +155,8 @@ const SYLLABUS_PRESETS: SyllabusPreset[] = [
   {
     id: "week-3",
     title: "Module 3: Replication, Quorums & Split-Brain",
-    description: "Leader–follower failover, fencing tokens, and Dynamo quorum intersection.",
+    description:
+      "Leader–follower failover, fencing tokens, and Dynamo quorum intersection.",
     items: [
       "lesson:distributed-systems/replication",
       "lesson:distributed-systems/consistency-quorums",
@@ -158,7 +167,8 @@ const SYLLABUS_PRESETS: SyllabusPreset[] = [
   {
     id: "week-4",
     title: "Module 4: Production Case Studies & Mock Interview",
-    description: "Analyze Stripe Ledger, Ticketmaster Virtual Waiting Room, and Uber Geo-Dispatch.",
+    description:
+      "Analyze Stripe Ledger, Ticketmaster Virtual Waiting Room, and Uber Geo-Dispatch.",
     items: [
       "case-study:stripe-ledger",
       "case-study:ticketmaster-waiting-room",
@@ -198,7 +208,10 @@ function computeReceiptFingerprint(
   items: StudentReceiptItem[],
 ): string {
   const payload = `${assignmentTitle}|${studentId}|${items
-    .map((i) => `${i.key}:${i.completed ? 1 : 0}:${i.mastery ?? -1}:${i.stars ?? 0}`)
+    .map(
+      (i) =>
+        `${i.key}:${i.completed ? 1 : 0}:${i.mastery ?? -1}:${i.stars ?? 0}`,
+    )
     .join(",")}`;
   let h = 2166136261;
   for (let i = 0; i < payload.length; i++) {
@@ -209,7 +222,10 @@ function computeReceiptFingerprint(
 
 function subscribeProjector(cb: () => void) {
   const mo = new MutationObserver(cb);
-  mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-projector"] });
+  mo.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-projector"],
+  });
   return () => mo.disconnect();
 }
 
@@ -230,7 +246,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
     }
     return SYLLABUS_PRESETS[0].items;
   });
-  const [filterKind, setFilterKind] = useState<"all" | "lesson" | "challenge" | "case-study">("all");
+  const [filterKind, setFilterKind] = useState<
+    "all" | "lesson" | "challenge" | "case-study"
+  >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -301,7 +319,13 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
     tone: string;
   } {
     if (!progress) {
-      return { completed: false, mastery: null, stars: null, badge: "Loading…", tone: "text-muted" };
+      return {
+        completed: false,
+        mastery: null,
+        stars: null,
+        badge: "Loading…",
+        tone: "text-muted",
+      };
     }
     const rec = progress.get(item.key);
     if (item.kind === "challenge") {
@@ -322,7 +346,11 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       mastery,
       stars: null,
       badge: mastered ? "★ Mastered" : completed ? "✓ Completed" : "○ To do",
-      tone: mastered ? "text-success" : completed ? "text-accent-2" : "text-muted",
+      tone: mastered
+        ? "text-success"
+        : completed
+          ? "text-accent-2"
+          : "text-muted",
     };
   }
 
@@ -339,9 +367,13 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       };
     });
     const completedItems = items.filter((i) => i.completed).length;
-    const masteries = items.map((i) => i.mastery).filter((m): m is number => m !== null);
+    const masteries = items
+      .map((i) => i.mastery)
+      .filter((m): m is number => m !== null);
     const meanMastery =
-      masteries.length > 0 ? masteries.reduce((a, b) => a + b, 0) / masteries.length : 0;
+      masteries.length > 0
+        ? masteries.reduce((a, b) => a + b, 0) / masteries.length
+        : 0;
     const totalStars = items.reduce((sum, i) => sum + (i.stars ?? 0), 0);
     const cleanName = studentName.trim() || "Anonymous Student";
     const cleanId = studentId.trim() || "unassigned";
@@ -360,7 +392,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       },
       fingerprint: computeReceiptFingerprint(assignmentTitle, cleanId, items),
     };
-    const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(receipt, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const slug = cleanId.replace(/[^a-zA-Z0-9_-]/g, "-") || "student";
     const a = Object.assign(document.createElement("a"), {
@@ -374,13 +408,22 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
   async function handleReceiptFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setVerifyError(null);
-    const loaded: Array<{ receipt: StudentReceipt; valid: boolean; fileName: string }> = [];
+    const loaded: Array<{
+      receipt: StudentReceipt;
+      valid: boolean;
+      fileName: string;
+    }> = [];
     for (const file of Array.from(files)) {
       try {
         const text = await file.text();
         const parsed = JSON.parse(text) as StudentReceipt;
-        if (parsed.schema !== "sds-assignment-receipt-v1" || !Array.isArray(parsed.items)) {
-          setVerifyError(`"${file.name}" is not a valid System Design Simulator assignment receipt.`);
+        if (
+          parsed.schema !== "sds-assignment-receipt-v1" ||
+          !Array.isArray(parsed.items)
+        ) {
+          setVerifyError(
+            `"${file.name}" is not a valid System Design Simulator assignment receipt.`,
+          );
           continue;
         }
         const expected = computeReceiptFingerprint(
@@ -404,7 +447,8 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
 
   function exportGradebookCsv() {
     if (verifiedReceipts.length === 0) return;
-    const header = "Student Name,Student ID,Assignment,Completed,Total,Mean Mastery %,Challenge Stars,Verified,Exported At\n";
+    const header =
+      "Student Name,Student ID,Assignment,Completed,Total,Mean Mastery %,Challenge Stars,Verified,Exported At\n";
     const rows = verifiedReceipts
       .map(({ receipt, valid }) => {
         const cols = [
@@ -435,10 +479,15 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
     if (filterKind !== "all" && item.kind !== filterKind) return false;
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    return item.title.toLowerCase().includes(q) || item.subtitle.toLowerCase().includes(q);
+    return (
+      item.title.toLowerCase().includes(q) ||
+      item.subtitle.toLowerCase().includes(q)
+    );
   });
 
-  const completedAssignedCount = assignedItems.filter((item) => getItemStatus(item).completed).length;
+  const completedAssignedCount = assignedItems.filter(
+    (item) => getItemStatus(item).completed,
+  ).length;
 
   return (
     <div className="mt-10 grid gap-14">
@@ -457,7 +506,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             </span>
           </div>
           <p className="mt-1 text-sm text-ink-2">
-            Scales typography and diagram rules across the Sandbox, Challenges, and Lessons so back-row students can read queue depths, p99 numbers, and invariant traces clearly.
+            Scales typography and diagram rules across the Sandbox, Challenges,
+            and Lessons so back-row students can read queue depths, p99 numbers,
+            and invariant traces clearly.
           </p>
         </div>
         <button
@@ -471,17 +522,27 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       </section>
 
       {/* 2. Active Assignment / Student Checklist */}
-      <section aria-labelledby="assignment-checklist" className="rounded-lg border border-rule bg-surface p-6">
+      <section
+        aria-labelledby="assignment-checklist"
+        className="rounded-lg border border-rule bg-surface p-6"
+      >
         <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-wider text-accent">
-              {urlItemsParam ? "Shared Course Assignment" : "Active Assignment Preview"}
+              {urlItemsParam
+                ? "Shared Course Assignment"
+                : "Active Assignment Preview"}
             </p>
-            <h2 id="assignment-checklist" className="mt-1 font-display text-2xl text-fg">
+            <h2
+              id="assignment-checklist"
+              className="mt-1 font-display text-2xl text-fg"
+            >
               {assignmentTitle}
             </h2>
             <p className="mt-1 text-sm text-muted">
-              Complete each assigned module below. Progress is tracked automatically in your browser; export a signed JSON receipt when finished to submit to your instructor.
+              Complete each assigned module below. Progress is tracked
+              automatically in your browser; export a signed JSON receipt when
+              finished to submit to your instructor.
             </p>
           </div>
           <div className="text-right">
@@ -493,17 +554,28 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         </div>
 
         {assignedItems.length === 0 ? (
-          <p className="py-6 text-sm text-muted">No items selected yet. Choose a module preset or check items in the syllabus builder below.</p>
+          <p className="py-6 text-sm text-muted">
+            No items selected yet. Choose a module preset or check items in the
+            syllabus builder below.
+          </p>
         ) : (
           <ul className="divide-y divide-border">
             {assignedItems.map((item, idx) => {
               const st = getItemStatus(item);
               return (
-                <li key={item.key} className="flex flex-wrap items-center justify-between gap-3 py-3.5">
+                <li
+                  key={item.key}
+                  className="flex flex-wrap items-center justify-between gap-3 py-3.5"
+                >
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-muted num">{idx + 1}.</span>
-                      <Link href={item.href} className="font-medium text-fg underline-offset-4 hover:underline">
+                      <span className="font-mono text-xs text-muted num">
+                        {idx + 1}.
+                      </span>
+                      <Link
+                        href={item.href}
+                        className="font-medium text-fg underline-offset-4 hover:underline"
+                      >
                         {item.title}
                       </Link>
                     </div>
@@ -511,7 +583,11 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
                       {item.subtitle}
                       {st.mastery !== null && (
                         <>
-                          {" "}· Mastery check: <span className="num">{formatPercent(st.mastery, 0)}</span>
+                          {" "}
+                          · Mastery check:{" "}
+                          <span className="num">
+                            {formatPercent(st.mastery, 0)}
+                          </span>
                         </>
                       )}
                     </p>
@@ -525,7 +601,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
                     <Link href={item.href} className="btn text-xs">
                       Open
                     </Link>
-                    <span className={`min-w-28 text-right text-sm font-medium ${st.tone}`}>
+                    <span
+                      className={`min-w-28 text-right text-sm font-medium ${st.tone}`}
+                    >
                       {st.badge}
                     </span>
                   </div>
@@ -576,7 +654,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             6 Live Classroom Demonstrations
           </h2>
           <p className="mt-2 text-sm text-ink-2">
-            Each demo pairs a concrete distributed systems failure mode with step-by-step lecture choreography and a Socratic question to pose to your students before revealing the fix.
+            Each demo pairs a concrete distributed systems failure mode with
+            step-by-step lecture choreography and a Socratic question to pose to
+            your students before revealing the fix.
           </p>
         </div>
         <div className="mt-6 grid gap-5 md:grid-cols-2">
@@ -590,17 +670,22 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
                   <span className="font-mono text-accent">{demo.concept}</span>
                   <span className="font-mono">{demo.duration}</span>
                 </div>
-                <h3 className="mt-1.5 font-display text-xl text-fg">{demo.title}</h3>
+                <h3 className="mt-1.5 font-display text-xl text-fg">
+                  {demo.title}
+                </h3>
                 <ol className="mt-3 grid gap-2 text-sm text-ink-2">
                   {demo.steps.map((step, i) => (
                     <li key={i} className="flex gap-2">
-                      <span className="font-mono text-xs text-muted num mt-0.5">{i + 1}.</span>
+                      <span className="font-mono text-xs text-muted num mt-0.5">
+                        {i + 1}.
+                      </span>
                       <span>{step}</span>
                     </li>
                   ))}
                 </ol>
                 <p className="mt-3 rounded border border-border bg-surface-2 px-3 py-2 text-xs text-ink-2">
-                  <strong className="text-fg">Discussion prompt:</strong> {demo.question}
+                  <strong className="text-fg">Discussion prompt:</strong>{" "}
+                  {demo.question}
                 </p>
               </div>
               <div className="mt-4 flex justify-end border-t border-border pt-3">
@@ -614,13 +699,18 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       </section>
 
       {/* 4. Zero-Backend Syllabus & Homework Link Builder */}
-      <section aria-labelledby="syllabus-builder" className="rounded-lg border border-border bg-surface p-6">
+      <section
+        aria-labelledby="syllabus-builder"
+        className="rounded-lg border border-border bg-surface p-6"
+      >
         <div className="max-w-3xl">
           <h2 id="syllabus-builder" className="font-display text-3xl text-fg">
             Syllabus &amp; Homework Link Builder
           </h2>
           <p className="mt-2 text-sm text-ink-2">
-            Start from a ready-made weekly module or pick any combination of lessons, graded challenges, and case studies. The generated URL encodes the assignment with zero backend setup.
+            Start from a ready-made weekly module or pick any combination of
+            lessons, graded challenges, and case studies. The generated URL
+            encodes the assignment with zero backend setup.
           </p>
         </div>
 
@@ -632,8 +722,12 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
               onClick={() => applyPreset(preset)}
               className="flex flex-col items-start rounded-md border border-border bg-surface-2 p-3.5 text-left transition-colors hover:border-fg"
             >
-              <span className="font-medium text-fg text-sm">{preset.title}</span>
-              <span className="mt-1 text-xs text-muted">{preset.description}</span>
+              <span className="font-medium text-fg text-sm">
+                {preset.title}
+              </span>
+              <span className="mt-1 text-xs text-muted">
+                {preset.description}
+              </span>
             </button>
           ))}
         </div>
@@ -652,8 +746,14 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             />
           </label>
           <div className="flex items-end gap-2">
-            <button type="button" onClick={() => void copyAssignmentLink()} className="btn btn-primary">
-              {copiedLink ? "✓ Link copied to clipboard" : "Copy shareable assignment URL"}
+            <button
+              type="button"
+              onClick={() => void copyAssignmentLink()}
+              className="btn btn-primary"
+            >
+              {copiedLink
+                ? "✓ Link copied to clipboard"
+                : "Copy shareable assignment URL"}
             </button>
           </div>
         </div>
@@ -663,24 +763,30 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
         </div>
 
         <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter catalog by type">
-            {(["all", "lesson", "challenge", "case-study"] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                aria-pressed={filterKind === k}
-                onClick={() => setFilterKind(k)}
-                className="btn text-xs"
-              >
-                {k === "all"
-                  ? `All (${catalog.length})`
-                  : k === "lesson"
-                    ? "Lessons"
-                    : k === "challenge"
-                      ? "Challenges"
-                      : "Case studies"}
-              </button>
-            ))}
+          <div
+            className="flex flex-wrap gap-1.5"
+            role="group"
+            aria-label="Filter catalog by type"
+          >
+            {(["all", "lesson", "challenge", "case-study"] as const).map(
+              (k) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={filterKind === k}
+                  onClick={() => setFilterKind(k)}
+                  className="btn text-xs"
+                >
+                  {k === "all"
+                    ? `All (${catalog.length})`
+                    : k === "lesson"
+                      ? "Lessons"
+                      : k === "challenge"
+                        ? "Challenges"
+                        : "Case studies"}
+                </button>
+              ),
+            )}
           </div>
           <input
             type="search"
@@ -708,10 +814,14 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
                   />
                   <div>
                     <span className="font-medium text-fg">{item.title}</span>
-                    <span className="ml-2 text-xs text-muted">{item.subtitle}</span>
+                    <span className="ml-2 text-xs text-muted">
+                      {item.subtitle}
+                    </span>
                   </div>
                 </div>
-                <span className="font-mono text-xs text-muted uppercase">{item.kind}</span>
+                <span className="font-mono text-xs text-muted uppercase">
+                  {item.kind}
+                </span>
               </label>
             );
           })}
@@ -719,14 +829,21 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
       </section>
 
       {/* 5. Instructor Receipt Verifier & Gradebook Export */}
-      <section aria-labelledby="receipt-verifier" className="rounded-lg border border-border bg-surface p-6">
+      <section
+        aria-labelledby="receipt-verifier"
+        className="rounded-lg border border-border bg-surface p-6"
+      >
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-2xl">
             <h2 id="receipt-verifier" className="font-display text-3xl text-fg">
               Instructor Receipt Verifier &amp; Gradebook
             </h2>
             <p className="mt-2 text-sm text-ink-2">
-              Upload one or more student <code className="font-mono text-xs">.json</code> completion receipts to verify their FNV-1a integrity fingerprint, inspect per-student mastery and challenge stars, and export a CSV gradebook.
+              Upload one or more student{" "}
+              <code className="font-mono text-xs">.json</code> completion
+              receipts to verify their FNV-1a integrity fingerprint, inspect
+              per-student mastery and challenge stars, and export a CSV
+              gradebook.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -742,7 +859,11 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
             </label>
             {verifiedReceipts.length > 0 && (
               <>
-                <button type="button" onClick={exportGradebookCsv} className="btn text-xs">
+                <button
+                  type="button"
+                  onClick={exportGradebookCsv}
+                  className="btn text-xs"
+                >
                   Export CSV gradebook
                 </button>
                 <button
@@ -765,7 +886,8 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
 
         {verifiedReceipts.length === 0 ? (
           <p className="mt-6 rounded border border-dashed border-border py-8 text-center text-sm text-muted">
-            No student receipts loaded yet. Select one or more <code>sds-receipt-*.json</code> files above to grade.
+            No student receipts loaded yet. Select one or more{" "}
+            <code>sds-receipt-*.json</code> files above to grade.
           </p>
         ) : (
           <div className="mt-6 overflow-x-auto">
@@ -784,23 +906,34 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
               <tbody className="divide-y divide-border">
                 {verifiedReceipts.map(({ receipt, valid, fileName }, i) => (
                   <tr key={`${fileName}-${i}`}>
-                    <td className="py-2.5 pr-4 font-medium text-fg">{receipt.studentName}</td>
-                    <td className="py-2.5 pr-4 font-mono text-xs text-muted">{receipt.studentId}</td>
-                    <td className="py-2.5 pr-4 text-ink-2">{receipt.assignmentTitle}</td>
+                    <td className="py-2.5 pr-4 font-medium text-fg">
+                      {receipt.studentName}
+                    </td>
+                    <td className="py-2.5 pr-4 font-mono text-xs text-muted">
+                      {receipt.studentId}
+                    </td>
+                    <td className="py-2.5 pr-4 text-ink-2">
+                      {receipt.assignmentTitle}
+                    </td>
                     <td className="py-2.5 pr-4 font-mono num">
-                      {receipt.summary.completedItems} / {receipt.summary.totalItems}
+                      {receipt.summary.completedItems} /{" "}
+                      {receipt.summary.totalItems}
                     </td>
                     <td className="py-2.5 pr-4 font-mono num">
                       {formatPercent(receipt.summary.meanMastery, 0)}
                     </td>
-                    <td className="py-2.5 pr-4 font-mono num">★ {receipt.summary.totalStars}</td>
+                    <td className="py-2.5 pr-4 font-mono num">
+                      ★ {receipt.summary.totalStars}
+                    </td>
                     <td className="py-2.5">
                       <span
                         className={`font-mono text-xs font-medium ${
                           valid ? "text-success" : "text-danger"
                         }`}
                       >
-                        {valid ? `✓ Verified (${receipt.fingerprint})` : "✗ Fingerprint mismatch"}
+                        {valid
+                          ? `✓ Verified (${receipt.fingerprint})`
+                          : "✗ Fingerprint mismatch"}
                       </span>
                     </td>
                   </tr>
