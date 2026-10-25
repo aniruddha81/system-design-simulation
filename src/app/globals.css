@@ -635,3 +635,9 @@
   font-size: 112.5%;
   --rule: var(--text-2);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-packet {
+    display: none;
+  }
+}

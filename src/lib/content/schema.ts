@@ -72,6 +72,10 @@ const children = z.any().optional();
 const objective = stableId;
 const choiceOption = z.strictObject({ id: stableId, text: z.string(), correct: z.boolean().optional(), feedback: z.string().min(5) });
 
+const kind = z.enum(["client", "loadBalancer", "service", "cache", "database", "rateLimiter", "dns", "cdn", "apiGateway", "kvStore", "queue", "worker", "objectStore", "searchIndex", "dedupStore", "autoscaler", "circuitBreaker"]);
+const tone = z.enum(["ok", "warn", "bad", "info", "muted"]);
+const vTitle = z.string().min(3);
+
 export const widgetSchemas = {
   Step: z.strictObject({ id: stableId, title: z.string(), children }),
   Choice: z
@@ -93,6 +97,20 @@ export const widgetSchemas = {
   }),
   VariantQuestion: z.strictObject({ template: z.enum(templateIds) }),
   HitRateCalculator: z.strictObject({}),
+  Flow: z.strictObject({
+    title: vTitle,
+    nodes: z.array(z.strictObject({ id: z.string(), label: z.string(), kind, x: z.number().min(0).max(100), y: z.number().min(0).max(100), note: z.string().optional() })).min(2),
+    edges: z.array(z.strictObject({ from: z.string(), to: z.string(), label: z.string().optional(), dashed: z.boolean().optional() })),
+    failed: z.array(z.string()).optional(),
+    hot: z.array(z.string()).optional(),
+    height: z.number().min(120).max(520).optional(),
+    caption: z.string().optional(),
+  }),
+  Bars: z.strictObject({ title: vTitle, items: z.array(z.strictObject({ label: z.string(), value: z.number().positive(), unit: z.string().optional(), tone: tone.optional() })).min(2), log: z.boolean().optional(), caption: z.string().optional() }),
+  Stats: z.strictObject({ title: vTitle, items: z.array(z.strictObject({ label: z.string(), value: z.string(), sub: z.string().optional(), tone: tone.optional() })).min(1), caption: z.string().optional() }),
+  Sequence: z.strictObject({ title: vTitle, actors: z.array(z.string()).min(2), messages: z.array(z.strictObject({ from: z.string(), to: z.string(), label: z.string(), lost: z.boolean().optional(), tone: tone.optional() })).min(1), caption: z.string().optional() }),
+  Timeline: z.strictObject({ title: vTitle, events: z.array(z.strictObject({ at: z.string(), label: z.string(), tone: tone.optional() })).min(2), caption: z.string().optional() }),
+  Compare: z.strictObject({ title: vTitle, sides: z.array(z.strictObject({ title: z.string(), points: z.array(z.string()).min(1), tone: tone.optional() })).min(2).max(4), caption: z.string().optional() }),
   MasteryCheck: z.strictObject({ templates: z.array(z.enum(templateIds)).min(1), count: z.number().int().min(3).max(10) }),
   HashRingPlayer: z.strictObject({ seed: z.number().int().optional() }),
   IsolationPlayer: z.strictObject({ anomaly: z.enum(anomalyNames).optional(), level: z.enum(isolationLevels).optional(), seed: z.number().int().optional() }),

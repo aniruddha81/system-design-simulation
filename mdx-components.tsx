@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ComponentProps, ComponentType } from "react";
 import { HitRateCalculator } from "@/components/lesson/calculator";
 import { Choice, MasteryCheck, Ordering, VariantQuestion } from "@/components/lesson/questions";
+import { Bars, Compare, Flow, Sequence, Stats, Timeline } from "@/components/visual/kit";
 import { Step } from "@/components/lesson/stepper";
 import { HashRingPlayer, IsolationPlayer, ModelQuestion, RaftPlayer, ClocksPlayer, TwoPhasePlayer, GossipPlayer, QuorumPlayer, CrdtPlayer, MatchingPlayer, SpatialPlayer, SketchesPlayer, WindowingPlayer } from "@/components/models/lazy";
 import { widgetSchemas, type WidgetName } from "@/lib/content/schema";
@@ -15,6 +16,12 @@ const implementations = {
   Ordering,
   VariantQuestion,
   HitRateCalculator,
+  Flow,
+  Bars,
+  Stats,
+  Sequence,
+  Timeline,
+  Compare,
   MasteryCheck,
   HashRingPlayer,
   IsolationPlayer,
