@@ -12,9 +12,25 @@ node scripts/check-bundle.mjs
 Playwright owns `next start` on `127.0.0.1:3100`. It refuses to reuse an existing
 server so a dev server cannot accidentally satisfy the production test gate.
 Each test gets clean browser storage. Sharing opens a separate browser context.
-The suite has 32 Chromium tests: eight functional cases and 24 axe scans across
-12 route representatives in Paper and Slate. Axe includes WCAG 2.2 AA tags,
+The suite has 82 Chromium tests: eight existing functional cases, eight production
+smoke checks, seven Pixel 5 overflow checks, three signed-out account checks, and
+56 axe scans across 28 route representatives in Paper and Slate. Axe includes WCAG 2.2 AA tags,
 including colour contrast; no rules or elements are excluded.
+
+The added scans cover legal/offline/account pages, the tokenless reset invalid-link
+state, eight Track 1 lessons, URL shortener case study and interview. Account
+validation checks browser validity and blocks credential requests; forgot-password
+intercepts the reset endpoint with a 503 to verify neutral confirmation without
+database writes. Production API checks use real endpoints: health accepts either
+database state, while a valid error report must succeed. Configure the auth origin
+to match the test server. Robots allows legal pages through `Allow: /`; the sitemap
+must explicitly list both legal URLs.
+
+For the lead's next production run, prioritize `production.spec.ts` (error-report
+storage and origin configuration), `account-flow.spec.ts` (native validation and
+the auth client's response handling), and `mobile.spec.ts` (lesson/case-study SVG
+layout after fonts load). Inspect mobile notebook diagrams and both axe themes.
+These additions have not been executed in a browser by the worker.
 
 Cache insertion dispatches HTML5 dragstart/dragover/drop/dragend with a browser
 `DataTransfer`, using the library's kind MIME and coordinates between the service
