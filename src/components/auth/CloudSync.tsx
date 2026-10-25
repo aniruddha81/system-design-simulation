@@ -47,12 +47,15 @@ export function CloudSync() {
     const interval = setInterval(() => soon(0), 60_000);
     const online = () => soon(0);
     addEventListener("online", online);
+    const hide = () => document.visibilityState === "hidden" && soon(0);
+    document.addEventListener("visibilitychange", hide);
     return () => {
       dead = true;
       clearTimeout(timer);
       clearInterval(interval);
       off();
       removeEventListener("online", online);
+      document.removeEventListener("visibilitychange", hide);
     };
   }, [userId]);
 

@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { keyPaths, recordSchemas } from "../lib/persistence/schemas";
 
-export const SYNC_STORES = ["designs", "progress", "reviews"] as const;
+export const SYNC_STORES = ["designs", "progress", "reviews", "runs"] as const;
 export const MAX_BATCH = 200;
 export const MAX_PAGE = 500;
 export const MAX_RECORDS_PER_USER = 5000;
-const MAX_BYTES = { designs: 2 * 1024 * 1024, progress: 4096, reviews: 4096 } as const;
+const MAX_BYTES = { designs: 2 * 1024 * 1024, progress: 4096, reviews: 4096, runs: 32 * 1024 } as const;
 
 export const pushSchema = z.object({
   records: z

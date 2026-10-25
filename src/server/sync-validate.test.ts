@@ -18,7 +18,7 @@ describe("sync record validation", () => {
     expect(check({ store: "designs", key: "d1", updatedAt: 5, deleted: true })).toMatchObject({ deleted: true, data: null });
   });
   it("bounds batch size and store names", () => {
-    expect(pushSchema.safeParse({ records: [{ store: "runs", key: "a", updatedAt: 1 }] }).success).toBe(false);
+    expect(pushSchema.safeParse({ records: [{ store: "settings", key: "a", updatedAt: 1 }] }).success).toBe(false);
     expect(pushSchema.safeParse({ records: Array.from({ length: 201 }, (_, i) => ({ store: "progress", key: String(i), updatedAt: 1 })) }).success).toBe(false);
   });
 });

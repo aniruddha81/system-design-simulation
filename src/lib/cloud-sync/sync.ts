@@ -1,9 +1,9 @@
 import type { Store } from "../persistence";
 
 // Local-first: IndexedDB stays the source of truth and works signed out. Signed in, this mirrors
-// designs, progress and reviews to Postgres. Runs stay local (large, re-creatable from a RunKey).
+// designs, progress, reviews and run history (RunKey + summary, never raw events) to Postgres.
 
-type Wire = { store: "designs" | "progress" | "reviews"; key: string; data?: unknown; updatedAt: number; deleted?: boolean };
+type Wire = { store: "designs" | "progress" | "reviews" | "runs"; key: string; data?: unknown; updatedAt: number; deleted?: boolean };
 type Pulled = Wire & { seq: number };
 type State = { cursor: number; pushedRevision: number; designs: string[] };
 export type SyncResult = { pushed: number; pulled: number; rejected: string[] };
@@ -34,7 +34,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 
 export async function syncNow(store: Store, userId: string): Promise<SyncResult> {
   const st = load(userId);
-  const [designs, progress, reviews] = await Promise.all([store.designs.list(), store.progress.all(), store.reviews.all()]);
+  const [designs, progress, reviews, runs] = await Promise.all([store.designs.list(), store.progress.all(), store.reviews.all(), store.runs.all()]);
   const now = Date.now();
 
   const out: Wire[] = [];
@@ -42,7 +42,8 @@ export async function syncNow(store: Store, userId: string): Promise<SyncResult>
   for (const d of designs) if (d.revision > st.pushedRevision) out.push({ store: "designs", key: d.id, data: d, updatedAt: d.updatedAt });
   for (const p of progress) if (p.revision > st.pushedRevision) out.push({ store: "progress", key: p.itemId, data: p, updatedAt: now });
   for (const r of reviews) if (r.revision > st.pushedRevision) out.push({ store: "reviews", key: r.itemId, data: r, updatedAt: r.updatedAt });
-  for (const r of [...designs, ...progress, ...reviews]) maxRevision = Math.max(maxRevision, r.revision);
+  for (const r of runs) if (r.revision > st.pushedRevision) out.push({ store: "runs", key: r.id, data: r, updatedAt: r.createdAt });
+  for (const r of [...designs, ...progress, ...reviews, ...runs]) maxRevision = Math.max(maxRevision, r.revision);
   // A design that was synced before and is gone locally was deleted here: send a tombstone.
   const live = new Set(designs.map((d) => d.id));
   for (const id of st.designs) if (!live.has(id)) out.push({ store: "designs", key: id, deleted: true, updatedAt: now });

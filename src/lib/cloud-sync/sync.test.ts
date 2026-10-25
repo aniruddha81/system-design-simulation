@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { check, type PushRecord } from "../../server/sync-validate";
-import { openStore, type DesignRecord, type Store } from "../persistence";
+import { openStore, type DesignRecord, type RunRecord, type Store } from "../persistence";
 import { syncNow } from "./sync";
 
 // In-memory stand-in for /api/sync with the same rules as the SQL: last-write-wins, no-op pushes keep their seq.
@@ -36,6 +36,13 @@ const design = (id: string, updatedAt = 1): DesignRecord => ({
   design: { schemaVersion: 1, id, name: id, nodes: [{ id: "c", kind: "client", label: "Client", position: { x: 0, y: 0 }, params: { entry: "s" } }], edges: [], endpoints: [] },
 });
 
+const pct = { p50: 1, p90: 2, p99: 3, p999: null };
+const run = (designId: string): RunRecord => ({
+  schemaVersion: 1, revision: 0, id: "run1", designId, createdAt: 1, replayCompatId: "v1",
+  runKey: { engineVersion: "1", scenarioVersion: 1, designHash: "h", seed: 1, settings: { traceSampleRate: 0.1 }, chaosTimeline: [], liveEditLog: [] },
+  summary: { outcome: "finished", invariantCounts: {}, metrics: { offered: 10, admitted: 10, succeeded: 9, failed: 1, attempts: 10, unfinished: 0, retryAmplification: 1, goodput: 0.9, availability: 0.9, successLatency: pct, allLatency: pct, throughput: { offeredPerSec: 10, admittedPerSec: 10, completedPerSec: 10 }, costPerMonth: 1, statusCounts: { "200": 9, "503": 1 } } },
+});
+
 const stores: Store[] = [];
 // Each device has its own IndexedDB and its own localStorage (sync cursor).
 const local = new Map<Store, Map<string, string>>();
@@ -64,10 +71,12 @@ describe("cloud sync", () => {
 
     await a.progress.upsert({ schemaVersion: 1, revision: 0, itemId: "lesson:caching", kind: "lesson", mastery: 0.9 });
     await a.designs.put(design("d1"), 0);
+    await a.runs.add(run("d1"));
     await sync(a);
     await sync(b);
     expect((await b.progress.get("lesson:caching"))?.mastery).toBe(0.9);
     expect((await b.designs.get("d1"))?.design.name).toBe("d1");
+    expect((await b.runs.listForDesign("d1")).map((r) => r.id)).toEqual(["run1"]);
 
     // Settled: more rounds on both devices change nothing on the server (no ping-pong).
     await sync(b);
@@ -88,5 +97,6 @@ describe("cloud sync", () => {
     await sync(b);
     await sync(a);
     expect(await a.designs.get("d1")).toBeUndefined();
+    expect(await a.runs.listForDesign("d1")).toEqual([]);
   });
 });

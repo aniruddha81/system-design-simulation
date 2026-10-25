@@ -43,7 +43,7 @@ Copy `.env.example` to `.env.local` for development. Never commit real values.
 | `rate_limit` | Better Auth rate-limit counters |
 | `sync_records` | One row per synced record: `(user_id, store, key)`, JSON `data`, `updated_at`, tombstone flag, global `seq` cursor |
 
-Deleting an account cascades to every session, account and sync record.
+Runs sync as RunKey + summary (never raw events); deleting a design deletes its runs in the cloud too. Deleting an account cascades to every session, account and sync record.
 
 ## Known limits
 

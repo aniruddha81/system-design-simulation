@@ -269,6 +269,7 @@ export class Store {
     },
   };
   runs = {
+    all: () => this.list("runs"),
     add: (record: RunRecord) => this.save("runs", record, 0),
     listForDesign: async (designId: string, limit = 10) => (await this.list("runs")).filter(run => run.designId === designId).sort((a, b) => b.createdAt - a.createdAt).slice(0, Math.max(0, limit)),
   };
@@ -312,7 +313,7 @@ export class Store {
   };
   /** Cloud sync entry point: applies pulled records. Progress max-merges; designs and reviews are last-write-wins by `updatedAt`. Invalid records are skipped. */
   remote = {
-    apply: async (incoming: { store: "designs" | "progress" | "reviews"; key: string; data?: unknown; deleted?: boolean }[]) => {
+    apply: async (incoming: { store: "designs" | "progress" | "reviews" | "runs"; key: string; data?: unknown; deleted?: boolean }[]) => {
       let applied = 0;
       await this.transaction(async tx => {
         await this.assertGeneration(tx);
@@ -326,7 +327,11 @@ export class Store {
           const parsed = recordSchemas[r.store].safeParse({ revision: 0, ...(r.data as object) });
           if (!parsed.success) continue;
           const old = await readRecord(tx, r.store, r.key);
-          if (r.store === "progress") {
+          if (r.store === "runs") {
+            // Runs are immutable: first copy wins.
+            if (old) continue;
+            await tx.put("runs", { ...(parsed.data as RunRecord), revision: await this.nextRevision(tx, 0) });
+          } else if (r.store === "progress") {
             const merged = mergeProgress(old as ProgressRecord | undefined, parsed.data as ProgressRecord);
             merged.revision = await this.nextRevision(tx, old?.revision ?? 0);
             await tx.put("progress", merged);

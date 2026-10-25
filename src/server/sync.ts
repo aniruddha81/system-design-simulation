@@ -26,6 +26,10 @@ export async function pushRecords(userId: string, records: PushRecord[]) {
       set: { data: sql`excluded.data`, updatedAt: sql`excluded.updated_at`, deleted: sql`excluded.deleted`, bytes: sql`excluded.bytes`, seq: sql`nextval('sync_seq')`, serverTime: sql`now()` },
       setWhere: sql`excluded.updated_at >= ${syncRecords.updatedAt} and (excluded.data is distinct from ${syncRecords.data} or excluded.deleted <> ${syncRecords.deleted})`,
     });
+  // A deleted design takes its run history with it, so no orphaned runs linger in the cloud copy.
+  for (const r of ok) {
+    if (r.store === "designs" && r.deleted) await db.delete(syncRecords).where(and(eq(syncRecords.userId, userId), eq(syncRecords.store, "runs"), sql`${syncRecords.data}->>'designId' = ${r.key}`));
+  }
   return { accepted: ok.length, rejected };
 }
 

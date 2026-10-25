@@ -6,7 +6,7 @@ export * from "./auth-schema";
 export const syncSeq = pgSequence("sync_seq");
 
 /**
- * One row per synced record (designs, progress, reviews). `data` is validated against the
+ * One row per synced record (designs, progress, reviews, runs). `data` is validated against the
  * client persistence schemas on write. Last write wins by `updatedAt`; `deleted` is a tombstone.
  */
 export const syncRecords = pgTable(
