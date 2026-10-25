@@ -23,6 +23,8 @@ flowchart LR
 | `DATABASE_URL_UNPOOLED` | Direct Neon URL. Migrations only. |
 | `BETTER_AUTH_SECRET` | 32+ random bytes. Rotate to invalidate all sessions. |
 | `BETTER_AUTH_URL` | Public origin, e.g. `https://your-domain`. Also the allowed `Origin` for `/api/sync`. |
+| `RESEND_API_KEY` / `EMAIL_FROM` | Optional. When both are set, sign-up requires email verification and password-reset emails are sent (Resend REST API). When unset, nobody is locked out and emails are not sent. |
+| `CRON_SECRET` | Bearer token for `/api/cron/prune` (daily retention job in `vercel.json`). Vercel sends it automatically. |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Optional. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional. |
 
@@ -47,6 +49,7 @@ Runs sync as RunKey + summary (never raw events); deleting a design deletes its 
 
 ## Known limits
 
-- Email verification and password reset need an email provider; none is configured yet. Add one with Better Auth's `sendResetPassword` / `sendVerificationEmail` hooks before opening sign-ups widely.
+- Email verification and password reset are implemented but stay off until `RESEND_API_KEY` and `EMAIL_FROM` are set. Verify the sending domain in Resend first; once enabled, existing unverified users must verify before signing in.
+- See `docs/OPERATIONS.md` for the runbook (restore, secret rotation, retention).
 - Conflict rule: designs and reviews are last-write-wins by `updatedAt`; progress is max-merged on the client.
 - Quotas: 5,000 synced records per user, 2 MB per design, 200 records per request.

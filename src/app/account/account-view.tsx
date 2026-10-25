@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
+import { PasswordForm, VerificationNotice } from "./password-form";
 import { syncRequest } from "@/components/auth/CloudSync";
 import { useSyncState } from "@/components/auth/sync-status";
 import { Stats } from "@/components/visual/kit";
@@ -8,13 +10,14 @@ import { signIn, signOut, signUp, authClient, useSession } from "@/lib/auth-clie
 
 const field = "min-h-11 w-full rounded-md border border-rule bg-bg px-3 focus-visible:outline-2 focus-visible:outline-accent";
 
-export function AccountView({ providers }: { providers: ("github" | "google")[] }) {
+export function AccountView({ providers, emailEnabled }: { providers: ("github" | "google")[]; emailEnabled: boolean }) {
   const { data, isPending } = useSession();
   if (isPending) return <p aria-busy className="text-muted">Loading…</p>;
-  return data ? <Signed name={data.user.name} email={data.user.email} /> : <Form providers={providers} />;
+  return data ? <Signed name={data.user.name} email={data.user.email} verify={emailEnabled && !data.user.emailVerified} /> : <Form providers={providers} emailEnabled={emailEnabled} />;
 }
 
-function Form({ providers }: { providers: ("github" | "google")[] }) {
+function Form({ providers, emailEnabled }: { providers: ("github" | "google")[]; emailEnabled: boolean }) {
+  const [verificationEmail, setVerificationEmail] = useState("");
   const [mode, setMode] = useState<"in" | "up">("in");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,9 +29,17 @@ function Form({ providers }: { providers: ("github" | "google")[] }) {
     const password = String(f.get("password"));
     setBusy(true);
     setError("");
-    const { error } = mode === "in" ? await signIn.email({ email, password }) : await signUp.email({ email, password, name: String(f.get("name")) });
-    setBusy(false);
-    if (error) setError(error.message ?? "Something went wrong. Try again.");
+    try {
+      const { error } = mode === "in" ? await signIn.email({ email, password }) : await signUp.email({ email, password, name: String(f.get("name")), callbackURL: "/account" });
+      if (error) {
+        setError(error.message ?? "Something went wrong. Try again.");
+        if (error.code === "EMAIL_NOT_VERIFIED" && emailEnabled) setVerificationEmail(email);
+      } else if (mode === "up" && emailEnabled) setVerificationEmail(email);
+    } catch {
+      setError("Could not connect. Try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -52,6 +63,8 @@ function Form({ providers }: { providers: ("github" | "google")[] }) {
         {error && <p role="alert" className="text-danger"><span aria-hidden>✕ </span>{error}</p>}
         <button className="btn btn-primary" disabled={busy}>{busy ? "…" : mode === "in" ? "Sign in" : "Create account"}</button>
       </form>
+      <Link className="inline-flex min-h-6 items-center underline" href="/account/forgot">Forgot password?</Link>
+      {verificationEmail && <VerificationNotice email={verificationEmail} />}
       {providers.map((p) => (
         <button key={p} className="btn" onClick={() => signIn.social({ provider: p, callbackURL: "/account" })}>Continue with {p === "github" ? "GitHub" : "Google"}</button>
       ))}
@@ -59,7 +72,7 @@ function Form({ providers }: { providers: ("github" | "google")[] }) {
   );
 }
 
-function Signed({ name, email }: { name: string; email: string }) {
+function Signed({ name, email, verify }: { name: string; email: string; verify: boolean }) {
   const sync = useSyncState();
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -80,6 +93,7 @@ function Signed({ name, email }: { name: string; email: string }) {
           <p className="text-muted">{email}</p>
         </div>
       </div>
+      {verify && <VerificationNotice email={email} />}
       <Stats
         title="Sync status"
         items={[
@@ -94,11 +108,12 @@ function Signed({ name, email }: { name: string; email: string }) {
         <button className="btn" onClick={() => syncRequest()} disabled={sync.phase === "syncing"}>Sync now</button>
         <button className="btn" onClick={() => signOut()}>Sign out</button>
       </div>
+      <section className="grid gap-4 border-t border-rule pt-4" aria-labelledby="change-password"><h2 id="change-password" className="font-display text-2xl">Change password</h2><PasswordForm mode="change" /></section>
       <details className="rounded-md border border-rule p-4">
         <summary className="cursor-pointer font-medium text-danger">Delete account</summary>
         <p className="mt-2 text-sm text-muted">Erases your account and every synced record. Local data stays on this device.</p>
         <label className="mt-3 grid gap-1 text-sm">Type DELETE<input value={confirm} onChange={(e) => setConfirm(e.target.value)} className={field} /></label>
-        {error && <p role="alert" className="mt-2 text-danger">{error}</p>}
+        {error && <p role="alert" className="mt-2 text-danger"><span aria-hidden>! </span>{error}</p>}
         <button className="btn mt-3" disabled={confirm !== "DELETE"} onClick={erase}>Delete my account</button>
       </details>
     </section>

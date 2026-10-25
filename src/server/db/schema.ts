@@ -1,6 +1,24 @@
-import { bigint, boolean, index, integer, jsonb, pgSequence, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgSequence, pgTable, primaryKey, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { user } from "./auth-schema";
 export * from "./auth-schema";
+
+export const apiRateLimit = pgTable("api_rate_limit", {
+  key: text("key").primaryKey(),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  requests: integer("requests").notNull(),
+  bytes: bigint("bytes", { mode: "number" }).notNull(),
+}, (t) => [index("api_rate_limit_window").on(t.windowStart)]);
+
+export const clientErrors = pgTable("client_errors", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+  message: varchar("message", { length: 500 }).notNull(),
+  stack: varchar("stack", { length: 4096 }),
+  url: text("url").notNull(),
+  userAgent: varchar("user_agent", { length: 200 }),
+  release: varchar("release", { length: 100 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("client_errors_created").on(t.createdAt)]);
 
 /** Global monotonic cursor: clients pull "everything after seq N". */
 export const syncSeq = pgSequence("sync_seq");

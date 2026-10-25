@@ -4,6 +4,9 @@ import { auth } from "@/server/auth";
 import { env } from "@/server/env";
 import { MAX_PAGE, pullRecords, pushRecords, pushSchema } from "@/server/sync";
 
+import { rateLimit } from "@/server/rate-limit";
+import { readBody } from "../body";
+
 const MAX_BODY = 4 * 1024 * 1024;
 const noStore = { "Cache-Control": "no-store" };
 
@@ -20,6 +23,8 @@ export async function GET(req: Request) {
       { error: "unauthorized" },
       { status: 401, headers: noStore },
     );
+  const limit = await rateLimit(`sync:${uid}`);
+  if (!limit.allowed) return NextResponse.json({ error: "rate limited" }, { status: 429, headers: { ...noStore, "Retry-After": String(limit.retryAfter) } });
   const url = new URL(req.url);
   const since = Number(url.searchParams.get("since") ?? 0);
   if (!Number.isSafeInteger(since) || since < 0)
@@ -56,7 +61,14 @@ export async function POST(req: Request) {
       { error: "too large" },
       { status: 413, headers: noStore },
     );
-  const body = pushSchema.safeParse(await req.json().catch(() => null));
+  let raw: string;
+  try { raw = await readBody(req, MAX_BODY); }
+  catch { return NextResponse.json({ error: "too large" }, { status: 413, headers: noStore }); }
+  const limit = await rateLimit(`sync:${uid}`, Buffer.byteLength(raw));
+  if (!limit.allowed) return NextResponse.json({ error: "rate limited" }, { status: 429, headers: { ...noStore, "Retry-After": String(limit.retryAfter) } });
+  let json: unknown;
+  try { json = JSON.parse(raw); } catch { json = null; }
+  const body = pushSchema.safeParse(json);
   if (!body.success)
     return NextResponse.json(
       { error: "invalid body" },

@@ -26,8 +26,17 @@ const save = (userId: string, s: State) => {
   }
 };
 
+let retryAt = 0;
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
+  if (Date.now() < retryAt) throw new Error("sync 429: backing off");
   const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json" }, credentials: "same-origin" });
+  if (res.status === 429) {
+    const retry = res.headers.get("Retry-After");
+    const seconds = Number(retry);
+    const delay = retry && Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retry ?? "") - Date.now();
+    retryAt = Date.now() + (Number.isFinite(delay) ? Math.max(1000, delay) : 60_000);
+  }
   if (!res.ok) throw new Error(`sync ${res.status}`);
   return res.json() as Promise<T>;
 }
