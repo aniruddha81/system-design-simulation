@@ -35,11 +35,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-When a major concert or championship game goes on sale at 10:00:00 AM, **2 million fans** compete for **50,000 seats** at the exact same second. Two people must **never** walk away with a confirmed ticket for Section 101, Row A, Seat 1 (`oversell` must be strictly zero), and a user who selects a seat needs a fair window (e.g. **5 minutes**) to enter payment details without someone else stealing the seat mid-checkout.
-
-**Functional**: browse the interactive seat map; place a temporary **5-minute hold** on specific seats; confirm the booking upon payment (or release the seat automatically if the hold expires or is cancelled); queue excess users fairly in a virtual waiting room.
-
-**Non-functional**: **zero overselling** (`oversell` invariant); fast seat-map reads (< 100 ms, eventual consistency of 2–5 s is fine); survive 100× flash-crowd spikes at on-sale time.
+<Compare title="ticket-booking / requirements" sides={[{"title": "2M fans / 50k seats", "points": ["Browse maps; fair waiting room; five-minute holds; payment confirmation"]}, {"title": "Zero oversell", "points": ["Map <100ms; 2-5s staleness allowed; survive 100x spikes"]}]} />
 
 <Choice
   id="why-two-phase-hold"
@@ -56,12 +52,7 @@ When a major concert or championship game goes on sale at 10:00:00 AM, **2 milli
 
 <Step id="estimates" title="Work out the numbers">
 
-Look closely at the **size of the data** vs the **size of the traffic** for a major stadium on-sale:
-
-- **Seats per stadium event**: **50,000 seats** × ~128 bytes/row (`seatId, section, row, status, holdToken, holdExpiresAt`) ≈ **6.4 MB**!
-- **Key insight**: an entire stadium's seat inventory is **6.4 megabytes** — it fits inside a single CPU's L3 cache! Ticket booking is **never** a big-data storage problem; it is a **high-contention concurrency and traffic-shaping** problem.
-- **Seat-map reads**: 500k active browsers refreshing sections every 5 s ≈ **100,000 reads/s** (absorbed by a 2–5 s cache).
-- **Hold writes**: 50,000 seats × ~3 hold attempts/seat over 300 s ≈ **500–2,000 atomic writes/s** once shaped by the waiting room.
+<Stats title="ticket-booking / estimates" items={[{"label": "Seat inventory", "value": "6.4 MB", "sub": "50k / 128 B"}, {"label": "Seat-map reads/s", "value": "100k", "sub": "500k browsers / 5s"}, {"label": "Hold attempts/s", "value": "~500", "sub": "50k / 3 / 300s; provision 500-2,000/s"}]} />
 
 <Choice
   id="stadium-data-size"
@@ -78,10 +69,7 @@ Look closely at the **size of the data** vs the **size of the traffic** for a ma
 
 <Step id="api" title="Design the API">
 
-- `GET /v1/events/{eventId}/seats?section={sec}` → `200 { seats: [{ seatId, status, priceCents }] }` (cached 2–5 s in `seatcache`).
-- `POST /v1/seats/{seatId}/hold` → `200 { holdId, holdToken, expiresAt }` if the seat was available, or **`409 Conflict`** if another fan claimed it first.
-- `POST /v1/holds/{holdId}/confirm` (`{ holdToken, paymentId }`) → verifies `holdToken` still matches the seat row, charges payment, and transitions `HELD → SOLD`.
-- `POST /v1/seats/{seatId}/release` (`{ holdToken }`) → releases an abandoned or expired hold back to `AVAILABLE`.
+<Compare title="ticket-booking / api" sides={[{"title": "GET /v1/events/{eventId}/seats; POST /v1/seats/{seatId}/hold", "points": ["Cached map; hold returns token/expiry or 409"]}, {"title": "POST /v1/holds/{holdId}/confirm; POST /v1/seats/{seatId}/release", "points": ["Require current holdToken; confirm payment or release"]}]} />
 
 <Choice
   id="map-staleness-ok"
@@ -98,22 +86,7 @@ Look closely at the **size of the data** vs the **size of the traffic** for a ma
 
 <Step id="data-model" title="Model the seat state machine and atomic transitions">
 
-Each seat row in `bookingdb` is a state machine:
-
-`AVAILABLE (remaining = 1) → HELD (remaining = 0, holdToken = t, expiresAt) → SOLD`
-
-The hold transition **must** execute as a single **atomic conditional update** (`decrementIfPositive` in the simulator, or `UPDATE ... WHERE` in SQL):
-```sql
-UPDATE seats
-SET status = 'HELD',
-    remaining = 0,
-    hold_token = hold_token + 1,
-    hold_expires_at = NOW() + INTERVAL '5 minutes'
-WHERE seat_id = :seatId
-  AND (status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW()))
-RETURNING hold_token, hold_expires_at;
-```
-If 50 fans click Seat 1 at the same millisecond, the database serialises the conditional `UPDATE` on that row: **exactly 1 fan gets 1 row updated (`200 OK`)** and **49 fans get 0 rows updated (`409 Conflict`)**.
+<Compare title="ticket-booking / data-model" sides={[{"title": "AVAILABLE / HELD / SOLD", "points": ["Conditional UPDATE claims one seat; holdToken increases; expiry stored"]}, {"title": "Concurrent claims", "points": ["One updated row / 200; other contenders / 409; never read-then-write"]}]} />
 
 <Choice
   id="read-then-write-bug"
@@ -130,11 +103,7 @@ If 50 fans click Seat 1 at the same millisecond, the database serialises the con
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-In the reference design:
-
-1. **Booking API servers** (`api1`, `api2`) serve `seatmap` reads via **cache-aside** through the **Seat-map cache** (`seatcache`).
-2. On `reserve`, the API executes an atomic `decrementIfPositive` on the `seats` entity in **Seat inventory DB** (`bookingdb`), invalidates `seatcache`, and publishes a delayed expiration job to the **Hold TTL expiry queue** (`holdexpirer`).
-3. **Hold expiry workers** (`reaper`) consume `holdexpirer` and release unconfirmed holds once their TTL elapses.
+<Flow title="ticket-booking / high-level" nodes={[{"id": "0", "label": "Waiting room", "kind": "rateLimiter", "x": 10, "y": 18}, {"id": "1", "label": "Booking API", "kind": "service", "x": 50, "y": 18}, {"id": "2", "label": "Seat cache", "kind": "cache", "x": 90, "y": 18}, {"id": "3", "label": "Inventory", "kind": "database", "x": 10, "y": 82}, {"id": "4", "label": "Expiry queue", "kind": "queue", "x": 50, "y": 82}, {"id": "5", "label": "Reaper", "kind": "worker", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "admission"}, {"from": "1", "to": "2", "label": "seat map"}, {"from": "1", "to": "3", "label": "atomic claim"}, {"from": "1", "to": "4", "label": "expiry job"}, {"from": "4", "to": "5", "label": "delayed"}, {"from": "5", "to": "3", "label": "token-checked release"}]} height={300} caption={"Map reads use cache-aside. Claims update inventory atomically, invalidate the map, and schedule bounded hold expiry."} />
 
 <Ordering
   id="two-phase-booking-flow"
@@ -154,21 +123,7 @@ In the reference design:
 
 <Step id="deep-dive" title="Deep dive: Fencing tokens, Lazy + Active Expiry, and Waiting Rooms">
 
-### 1. The late-payment race and fencing tokens (`holdToken`)
-Suppose Alice holds Seat 1 at $t = 0:00$ with a 5-minute TTL (`holdToken = 101`). At $t = 4:59$, Alice clicks "Pay", and her request enters a slow card-network call that takes 4 seconds:
-- At $t = 5:00$, Alice's hold expires!
-- At $t = 5:01$, Bob clicks Seat 1 and acquires a new hold (`holdToken = 102`).
-- At $t = 5:03$, Alice's payment call returns `SUCCESS` and tries to mark Seat 1 `SOLD`!
-
-If the confirmation query only checked `WHERE seat_id = 1`, Alice would overwrite Bob's hold (or Bob would overwrite Alice's sale). By requiring **`WHERE seat_id = 1 AND status = 'HELD' AND hold_token = 101`**, Alice's stale `holdToken = 101` is rejected (`0 rows updated`), and the system automatically refunds Alice's payment. **`holdToken` is a classic Kleppmann fencing token.**
-
-### 2. Active + lazy hold expiration
-What if the background `reaper` worker lags by 30 seconds during a spike? Combining two mechanisms makes expiry bulletproof:
-- **Lazy expiry in the hold `UPDATE` predicate**: `WHERE status = 'AVAILABLE' OR (status = 'HELD' AND hold_expires_at < NOW())` lets the next buyer claim an expired seat **immediately** without waiting for the reaper.
-- **Active reaper queue**: still needed so expired seats flip back to green on the cached seat map even if nobody clicks them right away.
-
-### 3. Virtual waiting room at the edge
-When 2M fans arrive for 50k seats, edge workers place arrivals into a signed FIFO/randomised queue and issue short-lived admission JWTs at the exact rate checkout can process (~5,000 users/min), shielding the core database from 98% of the flash crowd.
+<Compare title="ticket-booking / deep-dive" sides={[{"title": "Stale payment fencing", "points": ["101 expires; 102 acquires; reject late confirmation 101 and refund"]}, {"title": "Expiry + admission", "points": ["Lazy conditional reclaim plus reaper; signed waiting-room tokens shape checkout"]}]} />
 
 <Choice
   id="fencing-token-race"
@@ -185,9 +140,7 @@ When 2M fans arrive for 50k seats, edge workers place arrivals into a signed FIF
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **Read-then-write holds (`ticket-booking-unsafe`)**: in the simulator, switch to the `ticket-booking-unsafe` alternative (`get` followed by `update(increment, -1)`) and run `hot-event`. Concurrent requests read `remaining = 1` simultaneously and trigger an **`oversell` invariant violation**.
-- **Single-threaded in-memory actor per event + WAL**: because an entire stadium is only 6.4 MB, routing all hold/confirm requests for `eventId` to a single-threaded in-memory actor (backed by a replicated Raft/Kafka log) processes 50,000 holds/s sequentially with zero lock contention.
-- **"Best available in section" vs "Pick exact seat"**: assigning any available seat in a price tier from a partitioned counter scales with less contention than everyone clicking the same front-row centre seat on an SVG map.
+<Compare title="Ticket booking / alternatives" sides={[{"title": "ticket-booking-unsafe", "points": ["Read-then-write races oversell under hot-event"]}, {"title": "Single actor/event + WAL", "points": ["6.4 MB state; replicated log; sequential holds avoid locks"]}, {"title": "Best available in section", "points": ["Partitioned counters reduce exact-seat contention"]}]} />
 
 <Choice
   id="single-actor-why-it-works"
@@ -204,11 +157,11 @@ When 2M fans arrive for 50k seats, edge workers place arrivals into a signed FIF
 
 <Step id="failures" title="Run the failure scenarios">
 
-Run the three failure scenarios in the simulator:
+<Timeline title="ticket-booking / hot-event: 25% one seat" events={[{"at": "Inject", "label": "hot-event: 25% one seat", "tone": "warn"}, {"at": "Observe", "label": "One conditional claim wins; others 409"}, {"at": "Result", "label": "Zero oversell; rejection lowers measured goodput"}]} />
 
-- **Hot front-row seat (`hot-event`)**: 25% of traffic targets one seat ID. The reference design's `decrementIfPositive` grants the seat to one buyer and rejects contenders with `409 Conflict` (`clean: true`, zero `oversell`). Goodput dips slightly below 1.0 because 409 conflict responses count as rejected attempts — the exact expected behaviour under contention!
-- **Seat-map F5 refresh storm (`map-refresh-storm`)**: traffic doubles as fans hammer refresh. `seatcache` (with request coalescing) shields `bookingdb` and keeps goodput > 98%.
-- **Booking DB primary failover (`bookingdb-failover`)**: `bookingdb` crashes at `t = 1.5 s` and elects a semi-sync replica with fencing. Cached seat maps stay up; seat holds pause for ~500 ms and resume without losing any confirmed hold or double-selling a seat.
+<Timeline title="ticket-booking / map-refresh-storm: 2x" events={[{"at": "Inject", "label": "map-refresh-storm: 2x", "tone": "warn"}, {"at": "Observe", "label": "Cache coalesces misses"}, {"at": "Result", "label": "Fixture goodput >98%; DB shielded"}]} />
+
+<Timeline title="ticket-booking / bookingdb-failover: ~500ms" events={[{"at": "Inject", "label": "bookingdb-failover: ~500ms", "tone": "warn"}, {"at": "Observe", "label": "Cached maps survive; holds pause"}, {"at": "Result", "label": "Semi-sync + fencing prevent lost holds/double sale"}]} />
 
 <Choice
   id="hot-seat-409-meaning"
@@ -225,11 +178,7 @@ Run the three failure scenarios in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Review the complete ticket booking blueprint:
-1. **Virtual waiting room at the edge**: shape a 2-million-user spike into steady checkout flow.
-2. **Short-TTL coalesced seat-map cache**: absorb 100:1 read-to-write map refreshes.
-3. **Atomic conditional hold (`decrementIfPositive` / `UPDATE ... WHERE`)**: eliminate read-then-write overselling.
-4. **Bounded-TTL holds (lazy + active expiry) + `holdToken` fencing**: survive abandoned carts and late payment races safely.
+<Compare title="ticket-booking / wrap-up" sides={[{"title": "Protect", "points": ["Waiting room; atomic holds; holdToken fencing"]}, {"title": "Expire", "points": ["Bounded TTL; lazy reclaim + active reaper; coalesced map cache"]}]} />
 
 <Choice
   id="lazy-vs-active-expiry"

@@ -39,11 +39,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Separate user redirect latency from billing accuracy">
 
-Every ad click does two things at once: it **redirects a human browser** to the advertiser's landing page, and it **transfers money** from the advertiser's budget. That gives us two strict, competing requirements:
-
-**Functional**: ingest click events (`clickId`, signed `impressionId`, `adId`, `campaignId`, `eventTime`), redirect the user immediately, deduplicate retries and invalid clicks, and aggregate click counts and spend per `adId` in **1-minute tumbling windows** for live advertiser dashboards and budget pacing.
-
-**Non-functional**: click redirect p99 under **50 ms**; dashboard freshness within **10–30 seconds**; **zero lost clicks** once accepted; and **end-to-end exactly-once accounting** so retries or worker crashes never bill an advertiser twice.
+<Compare
+  title="ad-click-aggregation - Separate user redirect latency from billing accuracy"
+  sides={[
+    {"title": "Collect", "points": ["Signed clicks; immediate browser redirect; dedup invalid clicks"]},
+    {"title": "Guarantees", "points": ["No accepted click lost; exactly-once billing"]},
+    {"title": "Targets", "points": ["Redirect p99 <50 ms; dashboards 10-30 s fresh; minute windows"]}
+  ]}
+/>
 
 <Choice
   id="ad-click-core-tension"
@@ -60,12 +63,15 @@ Every ad click does two things at once: it **redirects a human browser** to the 
 
 <Step id="estimates" title="Estimate stream volume and rollup compression">
 
-Assume **1 billion ad clicks per day** across **2 million active ads** (with ~100 billion impressions/day at a 1% click-through rate):
-
-- **Click rate**: 1B ÷ 86,400 s ≈ **11,500 clicks/s** average, **~50,000 clicks/s** at peak (e.g., a live sports broadcast).
-- **Log ingress**: 50,000/s × 300 B ≈ **15 MB/s** — easily handled by a 16–32 partition Kafka topic.
-- **Dedup state**: keeping `impressionId`s for 1 hour at peak (`50k/s × 3,600 s × 24 B`) is **~4.3 GB** of state across the stream workers (or ~67 GB if holding all 4.2B served impressions/hour for attribution joins).
-- **Write reduction from 1-minute rollups**: instead of 50,000 OLAP writes/s, emitting one row per active clicked ad per minute (~200,000 ads clicked in a given minute ÷ 60 s) is **~3,300 writes/s** — a **15× write reduction** (and 1,000× reduction for popular ads!).
+<Stats
+  title="ad-click-aggregation - Estimate stream volume and rollup compression"
+  items={[
+    {"label": "Clicks", "value": "11.5k/s", "sub": "1B/day / 86,400; peak 50k/s; 2M active ads"},
+    {"label": "Ingress", "value": "15 MB/s", "sub": "50k * 300 B; 16-32 log partitions"},
+    {"label": "Dedup", "value": "4.3 GB", "sub": "50k * 3,600 * 24 B; attribution state about 67 GB"},
+    {"label": "Rollup writes", "value": "3.3k/s", "sub": "200k clicked ads/minute; 15x write reduction"}
+  ]}
+/>
 
 <Choice
   id="ad-rollup-math"
@@ -82,10 +88,15 @@ Assume **1 billion ad clicks per day** across **2 million active ads** (with ~10
 
 <Step id="api" title="Design the collector and query APIs">
 
-- `GET /v1/click?adId=42&impToken=<signed-impression-id>&dest=https%3A%2F%2F...` → appends `{ impressionId, adId, eventTime, receivedTime }` to the `clickstream` log and returns **302 Found** with `Location: <dest>`.
-- `GET /v1/ads/{adId}/metrics?from=2026-10-24T12:00:00Z&to=2026-10-24T13:00:00Z&granularity=1m` → returns **200** `{ watermark, buckets: [{ windowStart, clicks, spendCents }] }`, served via a 5-second dashboard cache in front of the OLAP store.
-
-Why a **server-signed `impToken`**? When the ad server displays an impression, it signs `(impressionId, adId, auctionPrice, issuedAt)` with an HMAC key. The click collector verifies the signature so a bot cannot fabricate fake `impressionId`s that were never served.
+<Timeline
+  title="ad-click-aggregation - Design the collector and query APIs"
+  events={[
+    {"at": "Validate", "label": "GET /v1/click: HMAC impressionId, adId, price, issuedAt"},
+    {"at": "Redirect", "label": "Durably append event -> 302 Location"},
+    {"at": "Query", "label": "GET /v1/ads/{adId}/metrics?from=&to=&granularity=1m"},
+    {"at": "Return", "label": "Watermark, clicks, spendCents; 5-second cache"}
+  ]}
+/>
 
 <Choice
   id="ad-signed-impression"
@@ -102,11 +113,14 @@ Why a **server-signed `impToken`**? When the ad server displays an impression, i
 
 <Step id="data-model" title="Model idempotent window rollups">
 
-In the OLAP / rollup store (`olapdb`), key the `aggregates` table by **`(adId, windowStartMinute)`**:
-- Primary key: `adWindowKey = "{adId}:{2026-10-24T12:05}"`
-- Columns: `adId`, `windowStart`, `clicks`, `spendCents`, `updatedAt`.
-
-Crucially, the stream processor stores the running count for `(adId, 12:05)` inside its own checkpointed state (RocksDB) and writes the **total window value (`clicks = 1420`)** to `olapdb` using an idempotent `PUT` (upsert), **never** `SET clicks = clicks + delta`. If a worker crashes and replays the last 10 seconds of a partition from its checkpoint, writing `clicks = 1420` again is a harmless no-op!
+<Timeline
+  title="ad-click-aggregation - Model idempotent window rollups"
+  events={[
+    {"at": "Window key", "label": "adId + windowStartMinute -> clicks, spendCents, updatedAt"},
+    {"at": "Checkpoint", "label": "Processor persists running totals"},
+    {"at": "Replay", "label": "PUT clicks=1420 again; never increment replayed deltas"}
+  ]}
+/>
 
 <Choice
   id="ad-upsert-vs-increment"
@@ -123,9 +137,25 @@ Crucially, the stream processor stores the running count for `(adId, 12:05)` ins
 
 <Step id="high-level" title="Trace the streaming pipeline">
 
-1. **Click Collectors (`ing1`, `ing2`)**: verify the signed impression token, publish the click event to the **Partitioned Click Stream** (`clickstream`, partitioned by `adId`), and immediately return `302`.
-2. **Stream Aggregators (`aggworker`)**: consume each partition, check the **Dedup Store** (`dedup`) by `impressionId`/`clickId`, accumulate counts in 1-minute event-time windows, and upsert the window rollups + billing ledger into the **OLAP Store** (`olapdb`).
-3. **Dashboard Query Path**: reads recent minute buckets through a short-TTL **Dashboard Cache** (`dashcache`), while a raw sink archives every event to object storage for daily batch reconciliation.
+<Flow
+  title="ad-click-aggregation - Trace the streaming pipeline"
+  nodes={[
+    {"id": "0", "label": "Collector", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Click log", "kind": "queue", "x": 50, "y": 25},
+    {"id": "2", "label": "Aggregator", "kind": "worker", "x": 90, "y": 25},
+    {"id": "3", "label": "Dedup", "kind": "dedupStore", "x": 10, "y": 80},
+    {"id": "4", "label": "OLAP", "kind": "database", "x": 50, "y": 80},
+    {"id": "5", "label": "Dash cache", "kind": "cache", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "adId"},
+    {"from": "1", "to": "2", "label": "consume"},
+    {"from": "2", "to": "3", "label": "click ID"},
+    {"from": "2", "to": "4", "label": "PUT totals"},
+    {"from": "5", "to": "4", "label": "query"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="ad-pipeline-order"
@@ -144,17 +174,16 @@ Crucially, the stream processor stores the running count for `(adId, 12:05)` ins
 
 <Step id="deep-dive" title="Deep dive: event time, watermarks, and hot campaigns">
 
-Mobile users click ads on subways or spotty cellular networks, so an event that happened at `12:00:45` (**event time**) might not reach your server until `12:03:10` (**processing time**).
-- If you bucket by *processing time*, network delays shift clicks into the wrong minute and distort campaign attribution.
-- Instead, bucket by **event time** and advance a **watermark** `W(t)` — the timestamp up to which the stream processor believes no more on-time events will arrive.
-- When `W(t) >= 12:01:00`, the `[12:00, 12:01)` window fires. We also configure an **allowed lateness** horizon (e.g., 10 minutes): if a straggler from `12:00:45` arrives while `W(t) < 12:11:00`, the window state updates from `850` to `851` and re-upserts `('ad:42', '12:00') → 851`.
-
-Explore how tumbling windows, watermarks, and late events interact in the model player below:
+<Compare
+  title="ad-click-aggregation - Deep dive: event time, watermarks, and hot campaigns"
+  sides={[
+    {"title": "Event time", "points": ["12:00:45 belongs in 12:00 window, even if received 12:03:10"]},
+    {"title": "Watermark", "points": ["Fire at 12:01; accept corrections until 12:11 with 10-minute lateness"]},
+    {"title": "Hot campaign", "points": ["Salt adId across 8 workers; merge 5-second partials"]}
+  ]}
+/>
 
 <WindowingPlayer />
-
-### Hot campaigns (skewed `adId`s)
-If a Super Bowl ad gets 30% of all clicks, hashing by `adId` sends 30% of the stream to a single partition. Fix this with **two-stage aggregation**: stage 1 salts the key (`adId#0..7`) to deduplicate and pre-aggregate 5-second partial counts across 8 workers; stage 2 sums the 8 partials per `adId`.
 
 <Choice
   id="ad-watermark-late"
@@ -171,9 +200,14 @@ If a Super Bowl ad gets 30% of all clicks, hashing by `adId` sends 30% of the st
 
 <Step id="alternatives" title="Compare the alternatives">
 
-- **Non-idempotent increments (`ad-click-non-idempotent`)**: runnable in the simulator. When workers crash and replay unacknowledged messages against a `clicks = clicks + 1` handler without dedup, the engine flags `duplicateEffect` violations (double-billing).
-- **Synchronous DB write on redirect (`ad-click-sync`)**: runnable in the simulator. Removing the stream buffer and writing directly to a single billing DB on every click saturates the DB and drops goodput below 85%.
-- **Lambda / hybrid reconciliation**: run the streaming pipeline for sub-minute dashboards and budget cutoff, and run a daily batch job over raw Parquet files in object storage to produce the 100% authoritative monthly invoice.
+<Compare
+  title="ad-click-aggregation - Compare the alternatives"
+  sides={[
+    {"title": "ad-click-non-idempotent", "points": ["Replay increments twice; duplicateEffect"]},
+    {"title": "ad-click-sync", "points": ["Billing DB blocks redirects; goodput <85%"]},
+    {"title": "Hybrid reconciliation", "points": ["Streaming dashboards; raw archive -> daily authoritative invoice"]}
+  ]}
+/>
 
 <Choice
   id="ad-hot-key-salt"
@@ -190,9 +224,32 @@ If a Super Bowl ad gets 30% of all clicks, hashing by `adId` sends 30% of the st
 
 <Step id="failures" title="Run the failure scenarios">
 
-1. **Stream aggregator crash (`worker-crash`)**: all `aggworker` instances die from t = 1.3 s to 1.8 s. Unacknowledged clicks reappear after the 400 ms visibility timeout; when workers return, `dedup` and idempotent `PUT`s ensure zero `duplicateEffect` violations and >99% goodput.
-2. **Super Bowl spike (`campaign-spike`)**: traffic triples from t = 1.2 s to 2.2 s. The partitioned click log absorbs the spike so browser redirects stay fast while consumer lag drains cleanly afterwards.
-3. **OLAP store slowdown (`olap-slowdown`)**: segment merges slow `olapdb` by 4×. Redirects never touch `olapdb`, and the dashboard cache shields reader latency.
+<Timeline
+  title="ad-click-aggregation - worker-crash"
+  events={[
+    {"at": "Inject", "label": "Workers down 1.3-1.8 s", "tone": "bad"},
+    {"at": "Observe", "label": "Replay after 400 ms", "tone": "warn"},
+    {"at": "Recover", "label": "Dedup + PUT; no duplicateEffect; >99% goodput", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="ad-click-aggregation - campaign-spike"
+  events={[
+    {"at": "Inject", "label": "Traffic x3 at 1.2-2.2 s", "tone": "bad"},
+    {"at": "Observe", "label": "Log buffers burst", "tone": "warn"},
+    {"at": "Recover", "label": "Redirects fast; consumer lag drains", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="ad-click-aggregation - olap-slowdown"
+  events={[
+    {"at": "Inject", "label": "OLAP latency x4", "tone": "bad"},
+    {"at": "Observe", "label": "Rollups lag", "tone": "warn"},
+    {"at": "Recover", "label": "Redirect isolated; cache shields queries", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="ad-failure-isolation"
@@ -209,9 +266,14 @@ If a Super Bowl ad gets 30% of all clicks, hashing by `adId` sends 30% of the st
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Finish your design by connecting the pipeline to business invariants:
-- **Budget pacing & cutoff**: when an advertiser's remaining daily budget approaches zero, push a stop signal to the ad server within seconds so you do not serve free impressions at your own expense.
-- **Clock skew defence**: use the server timestamp recorded when the impression was served (plus the elapsed delta) rather than trusting an arbitrary device wall clock that could be set to 1970 or 2035.
+<Timeline
+  title="ad-click-aggregation - Wrap up and self-assess"
+  events={[
+    {"at": "Pace", "label": "Stop serving near budget exhaustion within seconds"},
+    {"at": "Clock", "label": "Use impression server time + elapsed delta"},
+    {"at": "Audit", "label": "Reconcile raw clicks and billing ledger"}
+  ]}
+/>
 
 <Choice
   id="ad-clock-spoof"

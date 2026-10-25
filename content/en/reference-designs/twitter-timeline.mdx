@@ -26,13 +26,11 @@ estimatedMinutes: 8
 
 <Step id="scale-driver" title="What drives the scale">
 
-Twitter reported more than 500 million Tweets/day in February 2014. That historical write count is neither a current X traffic claim nor a count of home-timeline reads.
+Illustrative budgets, not production topology. Public scale figures do not determine API throughput.
 
-This **illustrative** sketch chooses 300,000 requests/s, 98% reads and 2% posts, with fixed 8 KiB responses. Regional APIs merge a US materialized timeline with European post storage using an all-branches parallel join. Posts persist first, then enter regional fan-out queues; workers update the US timeline aggregate.
+<Flow title={"Architecture paths"} nodes={[{"id": "0", "label": "Timeline API", "kind": "service", "x": 8.0, "y": 30}, {"id": "1", "label": "US timeline", "kind": "database", "x": 29.0, "y": 70}, {"id": "2", "label": "EU posts", "kind": "database", "x": 50.0, "y": 30}, {"id": "3", "label": "Fan-out queue", "kind": "queue", "x": 71.0, "y": 70}, {"id": "4", "label": "Workers", "kind": "worker", "x": 92.0, "y": 30}]} edges={[{"from": "0", "to": "1", "label": "read"}, {"from": "0", "to": "2", "label": "read / persist"}, {"from": "0", "to": "3", "label": "after persist"}, {"from": "3", "to": "4"}, {"from": "4", "to": "1"}]} height={280} caption={"Reads join timeline and posts. Posts persist before queueing; workers update the US timeline. One operation per queued post; follower amplification and ordering omitted. Worker cost uses global mix; celebrity write contention disables affected predictions. Foreground success does not prove fan-out completion."} />
 
-Each queued post causes one materialized-timeline operation. Real follower-degree amplification and ordering are absent. Consumer work uses the engine’s global endpoint mix as a cost approximation. A celebrity write therefore does not simulate millions of follower deliveries; hotspot write contention disables affected predictions.
-
-[Public scale anchor](https://blog.x.com/engineering/en_us/a/2014/introducing-twitter-data-grants). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+<Stats title={"Illustrative assumptions"} items={[{"label": "Global offered rate", "value": "300k requests/s"}, {"label": "Fixed response / payload", "value": "8 KiB"}, {"label": "Model choice", "value": "98% reads / 2% posts"}]} />
 
 <Choice
   id="driver-check"
@@ -45,15 +43,19 @@ Each queued post causes one materialized-timeline operation. Real follower-degre
 
 <Step id="test-remedy" title="Failure ladder and what to try">
 
-**Observed Failure ladder.** At 1x, the European fan-out worker worker-1 already saturates. At 4x, US timeline API api-0 saturates and its queue overflows. The first bottleneck is background work; a successful foreground post is not evidence that fan-out has caught up.
+Failure ladder: short model sweeps, not production limits. Change one budget in a copy; compare unchanged scenarios. Remedies remain unverified; correctness stays **unknown**.
 
-These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+<Timeline title={"Observed Failure ladder"} events={[{"at": "1x", "label": "EU fan-out worker saturates", "tone": "warn"}, {"at": "4x", "label": "US timeline API saturates", "tone": "warn"}, {"at": "Next", "label": "API queue overflows", "tone": "warn"}]} />
 
-**What to try.** Try more European fan-out worker concurrency, then rerun while comparing consumer age and queue depth. Separately move or partition timeline storage to reduce remote worker holding time. Treat hybrid celebrity fan-out as an architectural extension to model, not a remedy already verified by this sketch. Remedies are suggestions to test; none is verified here.
+<Stats title={"Sweep limits"} items={[{"label": "Independent levels", "value": "1x / 4x / 16x"}, {"label": "Per level", "value": "2 s + 8 s", "sub": "Warm-up + measurement; no drain"}, {"label": "Step", "value": "250 ms"}, {"label": "Steady state", "value": "Unstable", "sub": "Window < required 30 s"}, {"label": "Edge ceiling", "value": "~1M/s", "sub": "1 microsecond minimum service time"}]} />
 
-The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+<Timeline title={"Incident window"} events={[{"at": "0 s", "label": "Normal day; celebrity concentration starts"}, {"at": "4 s", "label": "Disturbance begins", "tone": "warn"}, {"at": "8 s", "label": "Disturbance ends"}]} />
 
-When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+<Compare title={"Scenario pack"} sides={[{"title": "Traffic", "points": ["Normal day", "Peak event: 4x", "Celebrity: 4x concentrated", "DDoS: 50x competing application traffic"]}, {"title": "Dependencies", "points": ["US region outage: regional entry retained", "No automatic evacuation", "Brownout: 10x service time", "DDoS does not identify legitimate users"]}]} />
+
+<Compare title={"Experiments to compare"} sides={[{"title": "Worker concurrency", "points": ["Compare consumer age and queue depth", "Start with European worker"]}, {"title": "Move / partition timeline", "points": ["Reduce remote worker holding time", "Hybrid fan-out is an unverified extension"]}]} />
+
+When integration is available, select this reference's normal-day pack in Scale mode. Check fidelity reasons before using disabled metrics.
 
 <Choice
   id="remedy-check"

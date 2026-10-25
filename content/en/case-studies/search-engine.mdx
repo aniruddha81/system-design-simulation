@@ -40,11 +40,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-A full-text search engine ingests billions of documents, builds an **inverted index** mapping every term to the documents containing it, and answers multi-word queries with ranked results and highlighted snippets in under **200 ms**.
-
-**Functional**: full-text boolean, phrase, and ranked keyword search; multi-stage ranking combining lexical match (**BM25**), static document quality (**PageRank**), and learned re-ranking; dynamic snippet generation; continuous near-real-time document indexing.
-
-**Non-functional**: p99 latency < 200–250 ms across puluhan shards; high availability (gracefully return partial results from responding shards if one shard lags); scale to ~20B documents and ~100k queries/s.
+<Compare title="search-engine / requirements" sides={[{"title": "Full-text search", "points": ["Boolean/phrase queries; BM25 + PageRank + re-ranking; snippets; continuous indexing"]}, {"title": "20B documents", "points": ["~100k queries/s; p99 <200-250ms; production partial results"]}]} />
 
 <Choice
   id="search-core-problem"
@@ -61,13 +57,7 @@ A full-text search engine ingests billions of documents, builds an **inverted in
 
 <Step id="estimates" title="Work out the numbers">
 
-Assume **20 billion documents**, **200 unique terms per document**, and **8 billion queries per day**:
-
-- **Query rate**: 8B ÷ 86,400 s ≈ **93,000 queries/s** average, ~200,000/s peak.
-- **Postings count**: 20B docs × 200 unique terms = **4 trillion postings**.
-- **Compressed inverted index size**: storing sorted `docId` gaps (`delta = docId[i] - docId[i-1]`), term frequencies, and positions with block bit-packing (~8 bytes per posting) ≈ **32 TB** total. Across 64 shards, each shard holds **~500 GB** — fitting comfortably in RAM + fast NVMe per shard replica.
-- **Tail amplification**: if each of 64 independent shards has a 99th-percentile latency of 50 ms (`P(fast) = 0.99`), the probability that **all 64** finish under 50 ms is `0.99⁶⁴ ≈ 0.526` (`52.6%`).
-Nearly **half** of all uncached queries experience at least one 99th-percentile shard!
+<Stats title="search-engine / estimates" items={[{"label": "Queries/s", "value": "93k", "sub": "8B/day / 86,400; 200k peak"}, {"label": "Postings", "value": "4 trillion", "sub": "20B docs / 200 terms"}, {"label": "Index size", "value": "32 TB", "sub": "4T / 8 B; 64 shards / 500 GB"}, {"label": "All shards fast", "value": "52.6%", "sub": "0.99^64; independent-shard assumption"}]} />
 
 <Choice
   id="fanout-tail-math"
@@ -84,12 +74,7 @@ Nearly **half** of all uncached queries experience at least one 99th-percentile 
 
 <Step id="api" title="Design the external and internal APIs">
 
-- **External**:
-  - `GET /v1/search?q={terms}&page=1` → `200 { totalApprox, hits: [{ docId, title, url, snippet, score }] }`.
-  - `PUT /v1/documents/{docId}` → `200` (appends document to the indexing pipeline).
-- **Internal two-phase RPC between Coordinator and Index Shards**:
-  1. `RPC Shard.Query(parsedTerms, topK=25)` → returns only lightweight `[(docId, score)]` pairs.
-  2. `RPC DocStore.GetSnippets(winningDocIds[10], queryTerms)` → fetches title, URL, and highlighted snippet **only for the global top 10**.
+<Compare title="search-engine / api" sides={[{"title": "GET /v1/search?q={terms}&page=1; PUT /v1/documents/{docId}", "points": ["Ranked hits/snippets; enqueue indexing"]}, {"title": "Internal RPC", "points": ["Shard.Query(topK=25); DocStore.GetSnippets(global top 10)"]}]} />
 
 <Choice
   id="why-two-phase-rpc"
@@ -106,16 +91,7 @@ Nearly **half** of all uncached queries experience at least one 99th-percentile 
 
 <Step id="data-model" title="Model the inverted index and sharding strategy">
 
-An **inverted index** stores a dictionary of terms, where each term points to a sorted **postings list**:
-
-`term → [(docId_1, tf_1, pos_1), (docId_2, tf_2, pos_2), ...]`
-
-How should we shard this index across 64 machines?
-
-1. **Document partitioning (local index per shard)**: hash each document `docId` to one of 64 shards. Each shard builds a complete inverted index for its 1/64th slice of documents.
-2. **Term partitioning (global index per term)**: hash each `term` to one shard (`"apple"` on shard 1, `"banana"` on shard 2).
-
-Production web search engines use **document partitioning** because a multi-word query (`"system design interview"`) can intersect the postings lists for all three words **locally in memory on each shard**, whereas term partitioning would require shipping gigabytes of postings lists across the network to intersect common words.
+<Compare title="search-engine / data-model" sides={[{"title": "Document partitions", "points": ["hash(docId) / shard; term / sorted (docId, frequency, positions)"]}, {"title": "Term partitions", "points": ["Common-word intersections require network transfers; document partitions intersect locally"]}]} />
 
 <Choice
   id="doc-vs-term-partitioning"
@@ -132,12 +108,7 @@ Production web search engines use **document partitioning** because a multi-word
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-Look at the reference design in the simulator:
-
-1. **Query coordinators** (`coord1`, `coord2`) check the **Query result cache** (`qcache`).
-2. On a cache miss, the coordinator **scatters** the query in parallel (`parallel(all)`) across the **Inverted index shards** (`idx1`, `idx2`).
-3. Each shard intersects its posting lists, scores top matches, and returns top `(docId, score)` candidates.
-4. The coordinator merges the candidates, fetches the winning documents' snippets from the **Document store** (`docstore`), caches the response, and returns `200`.
+<Flow title="search-engine / high-level" nodes={[{"id": "0", "label": "Client", "kind": "client", "x": 10, "y": 18}, {"id": "1", "label": "Coordinator", "kind": "service", "x": 50, "y": 18}, {"id": "2", "label": "Query cache", "kind": "cache", "x": 90, "y": 18}, {"id": "3", "label": "Shard 1", "kind": "searchIndex", "x": 10, "y": 82}, {"id": "4", "label": "Shard 2", "kind": "searchIndex", "x": 50, "y": 82}, {"id": "5", "label": "Documents", "kind": "objectStore", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "query"}, {"from": "1", "to": "2", "label": "lookup"}, {"from": "1", "to": "3", "label": "scatter"}, {"from": "1", "to": "4", "label": "scatter"}, {"from": "3", "to": "1", "label": "candidates"}, {"from": "4", "to": "1", "label": "candidates"}, {"from": "1", "to": "5", "label": "winning snippets"}]} height={300} caption={"Misses scatter to every shard; merge candidate scores, fetch only winning snippets, cache the response. Fixture waits for all shards."} />
 
 <Ordering
   id="scatter-gather-steps"
@@ -157,17 +128,7 @@ Look at the reference design in the simulator:
 
 <Step id="deep-dive" title="Deep dive: WAND pruning, immutable segments, and tail defences">
 
-### 1. Fast postings intersection and WAND
-When intersecting `"distributed"` (10M docs) and `"consensus"` (500k docs), we advance pointers through both `docId`-sorted lists using **skip pointers** (or galloping search) to jump over non-matching blocks in $O(\log N)$ steps. Better yet, **WAND (Weak AND)** and **Block-Max WAND** record the maximum possible BM25 score in each block of 128 postings; if the sum of upper bounds for a document cannot beat the current $k$-th best score in the min-heap, WAND skips scoring that document (and entire blocks) altogether.
-
-### 2. Real-time indexing via immutable LSM segments
-Mutating delta-compressed posting lists in place on disk is impossible without rewriting megabytes per word. Following **Apache Lucene**, new documents are buffered in memory and flushed every second as a new **immutable segment**. A search queries all active segments on the shard; background threads merge small segments into larger ones and purge deleted `docId`s.
-
-### 3. Defending against the 64-shard tail
-Because `P(all 64 fast)` is low, coordinators combine three techniques:
-- **Query and posting caches**: popular queries hit `qcache` directly; common sub-clauses cache their intersected bitsets inside shards.
-- **Hedged requests**: if shard 17 has not responded after 30 ms (its p95), send a duplicate request to shard 17's replica and take whichever answers first.
-- **Soft timeouts (partial results)**: at 150 ms, merge and return the results from the 63 shards that answered rather than failing the user's search.
+<Compare title="search-engine / deep-dive" sides={[{"title": "Fast local search", "points": ["Skip pointers; Block-Max WAND skips blocks below top-k score bound"]}, {"title": "Freshness and tails", "points": ["Immutable segments merge; caches; 30ms replica hedge; 150ms soft deadline"]}]} />
 
 <Choice
   id="immutable-segments-why"
@@ -184,9 +145,7 @@ Because `P(all 64 fast)` is low, coordinators combine three techniques:
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **No inverted index (`search-full-scan`)**: in the simulator, querying `docstore` without the inverted index scans all rows on every search, saturating the store and failing the latency SLO.
-- **Tiered indexes (hot in-memory tier vs cold full tier)**: keep the top 10% highest-PageRank documents in an all-RAM tier searched on every query; only fall back to the 90% cold tier if the hot tier fails to find $k$ high-scoring matches.
-- **Precomputed single-term top-k lists (fancy lists)**: store a short list of the top 1,000 highest-scoring documents for each term at the front of its posting list so single-term and high-authority queries terminate almost immediately.
+<Compare title="search-engine / alternatives" sides={[{"title": "search-full-scan", "points": ["Store saturates; latency SLO fails"]}, {"title": "Tiered index", "points": ["Hot 10% in RAM; cold fallback"]}, {"title": "Fancy lists", "points": ["Precomputed term winners accelerate common queries"]}]} />
 
 <Choice
   id="tiered-index-benefit"
@@ -203,11 +162,11 @@ Because `P(all 64 fast)` is low, coordinators combine three techniques:
 
 <Step id="failures" title="Run the failure scenarios">
 
-Run the three failure scenarios in the simulator:
+<Timeline title="search-engine / slow-shard: 6x" events={[{"at": "Inject", "label": "slow-shard: 6x", "tone": "warn"}, {"at": "Observe", "label": "parallel(all) waits for idx2"}, {"at": "Result", "label": "Uncached p99 rises; cache hits stay fast"}]} />
 
-- **One index shard degrades 6× (`slow-shard`)**: a heavy background segment merge slows down `idx2`. Because `parallel(all)` waits for both shards on every cache miss, p99 latency rises across uncached queries while cached queries stay fast.
-- **Index shard outage (`shard-outage`)**: `idx2` goes down for 400 ms. Cache hits and document writes continue, while uncached searches fail until the shard recovers (or until a production coordinator falls back to a replica / partial results).
-- **Viral news query (`hot-query`)**: 35% of searches ask for the same query. `qcache` absorbs the spike after the first scatter-gather.
+<Timeline title="search-engine / shard-outage: 400ms" events={[{"at": "Inject", "label": "shard-outage: 400ms", "tone": "warn"}, {"at": "Observe", "label": "Uncached fixture searches fail"}, {"at": "Result", "label": "Cache hits/writes survive; production replicas or partial results"}]} />
+
+<Timeline title="search-engine / hot-query: 35%" events={[{"at": "Inject", "label": "hot-query: 35%", "tone": "warn"}, {"at": "Observe", "label": "First lookup scatters"}, {"at": "Result", "label": "qcache absorbs subsequent repeated queries"}]} />
 
 <Choice
   id="slow-shard-remedy"
@@ -224,11 +183,7 @@ Run the three failure scenarios in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Review the architecture end to end:
-- **Document-partitioned shards** keep multi-term intersection local in memory.
-- **Block-Max WAND + delta compression** make local intersection fast and compact.
-- **Two-phase scatter-gather** fetches snippets only for the final top 10.
-- **Query caching, hedged replicas, and soft timeouts** tame the $1 - p^N$ fan-out tail.
+<Compare title="search-engine / wrap-up" sides={[{"title": "Explain", "points": ["Document sharding, WAND, compression, two-phase retrieval"]}, {"title": "Watch", "points": ["Fan-out tail, index freshness, cache hits; hedge within capacity"]}]} />
 
 <Choice
   id="soft-timeout-degradation"

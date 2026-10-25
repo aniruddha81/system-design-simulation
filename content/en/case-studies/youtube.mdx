@@ -44,9 +44,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-Accept video uploads up to hours long, transcode them into multiple resolutions and bitrates, and stream them with adaptive bitrate on any device with instant seeking. Track video metadata and eventually consistent view counts.
-
-**Non-functional**: playback starts in under ~2 s and does not rebuffer on a stable connection; uploaded videos are never lost (though processing can take minutes); and the delivery tier carries on the order of **100 Tbit/s** of egress at peak. Bandwidth, not request rate, is the primary constraint.
+<Compare title="youtube / requirements" sides={[{"title": "Upload, transcode, stream", "points": ["Resumable hours-long uploads; adaptive bitrate; seeking; eventual view counts"]}, {"title": "Delivery dominates", "points": ["Startup ~2s; durable originals; ~100 Tbit/s scale assumption"]}]} />
 
 <Choice
   id="video-primary-constraint"
@@ -63,14 +61,7 @@ Accept video uploads up to hours long, transcode them into multiple resolutions 
 
 <Step id="estimates" title="Estimates">
 
-Start from YouTube's public scale figures:
-
-- **Upload volume**: 500 hours of video uploaded per minute ≈ **30,000 video-hours per hour** of wall clock.
-- **Raw ingest**: 30,000 h/hour × ~1 GB/hour (1080p upload) ≈ **30 TB/hour** ≈ **0.7 PB/day** of originals.
-- **Stored renditions**: ~6 renditions (240p to 4K) totalling ~1.5× the upload size ≈ **1 PB/day** added before replication or erasure coding.
-- **Transcode compute**: 30,000 video-hours/hour × ~1 transcoder-hour per video-hour across the ladder → **tens of thousands of workers** busy continuously, parallelised per 4-second chunk.
-- **Concurrent viewers**: 1B hours watched/day ÷ 24 h ≈ **42M concurrent streams** on average.
-- **Egress**: 42M streams × ~2.5 Mbit/s average bitrate ≈ **100 Tbit/s** — served from ISP-embedded caches, not origin data centres.
+<Stats title="youtube / estimates" items={[{"label": "Uploads", "value": "500 h/min", "sub": "30k video-hours/wall-clock hour assumption"}, {"label": "Originals/day", "value": "0.7 PB", "sub": "30k h/hour / 1 GB/h / 24"}, {"label": "Renditions/day", "value": "~1 PB", "sub": "~1.5x originals before redundancy"}, {"label": "Concurrent streams", "value": "42M", "sub": "1B watch-hours/day / 24"}, {"label": "Egress", "value": "~100 Tbit/s", "sub": "42M / 2.5 Mbit/s"}, {"label": "Transcoders", "value": "Tens of thousands", "sub": "Parallel ~4s chunks; workload-dependent"}]} />
 
 <Choice
   id="concurrent-streams-calc"
@@ -87,9 +78,7 @@ Start from YouTube's public scale figures:
 
 <Step id="api" title="API">
 
-- `POST /upload` → `PUT /upload/{videoId}/chunk/{n}`: resumable chunked upload. Each chunk returns **201** once durable; clients poll or subscribe to `GET /videos/{id}` for processing status.
-- `GET /v/{id}/master.m3u8` (HLS) or `.mpd` (DASH): returns the manifest listing available renditions and their segment URLs.
-- `GET /v/{id}/{rendition}/{n}.m4s`: returns **200** with ~4 seconds of media (~256 KB at mid bitrate). Keys are **immutable**, so CDN edges cache them with a long TTL.
+<Compare title="youtube / api" sides={[{"title": "POST /upload; PUT /upload/{videoId}/chunk/{n}", "points": ["201 after durable chunk; GET /videos/{id} processing state"]}, {"title": "GET /v/{id}/master.m3u8 or .mpd", "points": ["Manifest / immutable rendition segments /{rendition}/{n}.m4s; long CDN TTL"]}]} />
 
 <Choice
   id="why-segmented-http"
@@ -106,9 +95,7 @@ Start from YouTube's public scale figures:
 
 <Step id="data-model" title="Data model">
 
-- **videos**: `videoId`, `ownerId`, `title`, `status`, `manifestKey`, keyed by `videoId` in the metadata database. View counts are aggregated asynchronously via a stream processor, never updated synchronously on every segment fetch.
-- **segments**: immutable blobs keyed by `(videoId, rendition, index)` in the object store; the manifest lists them.
-- **originals**: kept in colder, erasure-coded storage so the catalogue can be re-encoded when newer codecs (VP9, AV1) become worthwhile.
+<Compare title="youtube / data-model" sides={[{"title": "Video metadata", "points": ["videoId, ownerId, title, status, manifestKey; async view-count aggregation"]}, {"title": "Media blobs", "points": ["Immutable (videoId, rendition, index); retain originals for future codecs"]}]} />
 
 <Choice
   id="view-counter-design"
@@ -125,7 +112,7 @@ Start from YouTube's public scale figures:
 
 <Step id="high-level" title="High-level design">
 
-DNS steers clients to the **CDN edge** (with an **origin shield** collapsing misses across edges). Playback requests hit the CDN; cache misses pass through the load balancer to stateless **origin servers**, which fetch segments from the **object store**. Uploads send chunks to the origin, which writes the raw chunk to the object store, updates **video metadata**, and publishes a job to the **transcode queue**. **Transcoder workers** pull chunks in batches, encode all renditions, and write the output segments back to the object store.
+<Flow title="youtube / high-level" nodes={[{"id": "0", "label": "Viewer", "kind": "client", "x": 10, "y": 18}, {"id": "1", "label": "CDN/shield", "kind": "cdn", "x": 50, "y": 18}, {"id": "2", "label": "Origin", "kind": "service", "x": 90, "y": 18}, {"id": "3", "label": "Media store", "kind": "objectStore", "x": 10, "y": 82}, {"id": "4", "label": "Transcode queue", "kind": "queue", "x": 50, "y": 82}, {"id": "5", "label": "Transcoder", "kind": "worker", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "playback"}, {"from": "1", "to": "2", "label": "shield miss"}, {"from": "2", "to": "3", "label": "segment / upload"}, {"from": "2", "to": "4", "label": "encode job"}, {"from": "4", "to": "5", "label": "chunk tasks"}, {"from": "5", "to": "3", "label": "renditions"}]} height={300} caption={"DNS steers playback to edge caches. Uploads persist originals and metadata, then enqueue transcodes independently of viewing."} />
 
 <Ordering
   id="video-upload-to-play"
@@ -145,8 +132,7 @@ DNS steers clients to the **CDN edge** (with an **origin shield** collapsing mis
 
 <Step id="deep-dive" title="Deep dive: transcoding DAG and 100 Tbit/s delivery">
 
-1. **The transcoding pipeline.** A 2-hour upload cannot be encoded serially on one machine without making the creator wait hours. Split the upload at keyframes into 4-second chunks and run a job DAG (`split → encode per rendition → package → thumbnail → publish`). Because output segment keys are deterministic, retrying a failed task on another worker is idempotent. Short videos and popular creators get priority queues; long-tail re-encodes run in batch on spot/preemptible capacity.
-2. **Delivering 100 Tbit/s.** Even a regional CDN costs too much if every byte crosses transit backbones. Large video platforms place cache appliances directly inside ISP networks (Google Global Cache, Netflix Open Connect) and steer clients via DNS or manifest URLs to a nearby appliance that holds the video. Popular catalogue is pre-positioned during off-peak hours; long-tail misses pass through a regional origin shield so only one fetch reaches the object store.
+<Compare title="youtube / deep-dive" sides={[{"title": "Transcode DAG", "points": ["Split at keyframes / encode chunks/renditions / package / publish; deterministic keys make retries idempotent"]}, {"title": "Delivery hierarchy", "points": ["ISP-embedded caches; off-peak pre-positioning; origin shield coalesces long-tail misses"]}]} />
 
 <Choice
   id="chunk-parallel-transcode"
@@ -163,9 +149,7 @@ DNS steers clients to the **CDN edge** (with an **origin shield** collapsing mis
 
 <Step id="alternatives" title="Alternatives">
 
-- **No origin shield.** Without a shield, every edge location that misses a segment fetches it from the origin independently. During a premiere across hundreds of edges, the origin receives hundreds of duplicate fetches for the same segment.
-- **Progressive download of one file.** Simplest to host, but locks everyone into a single bitrate: slow connections rebuffer, fast connections get blurry video, and seeking requires byte-range requests into a multi-gigabyte file.
-- **Per-title or per-shot encoding.** A fixed bitrate ladder wastes bits on cartoons and starves high-motion scenes. Netflix's per-title encoding analyses video complexity to pick a custom bitrate ladder per video — spending more compute once to save egress bandwidth on every view.
+<Compare title="youtube / alternatives" sides={[{"title": "No shield", "points": ["Duplicate edge misses overload origin"]}, {"title": "Progressive file", "points": ["Simple; one bitrate; slow seeking"]}, {"title": "Per-title encoding", "points": ["Extra compute buys lower recurring egress"]}]} />
 
 <Choice
   id="per-title-tradeoff"
@@ -182,9 +166,11 @@ DNS steers clients to the **CDN edge** (with an **origin shield** collapsing mis
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **A video goes viral** (40% of requests target one video). Its segments sit in the CDN edge cache after the first fetch, so the origin barely notices the viral video itself; long-tail misses are what touch the origin uplink.
-- **The CDN edge fails and traffic falls back to the origin.** After the 300 ms DNS TTL expires, all 2,000 segments/s × 256 KB (≈ **4 Gbit/s**) hit the origin's **2.5 Gbit/s** uplink. The link saturates, the queue grows by ~200 MB/s, latency climbs past half a second within a second of failover, and playback stalls. For video, the CDN is not an optimisation: the origin uplink physically cannot carry the bytes.
-- **Uploads triple.** Chunk uploads still return 201 as soon as the raw bytes land in the object store; transcoding jobs queue up and new videos take longer to become playable while viewing is completely unaffected.
+<Timeline title="youtube / Viral video: 40%" events={[{"at": "Inject", "label": "Viral video: 40%", "tone": "warn"}, {"at": "Observe", "label": "Segments remain at CDN edge"}, {"at": "Result", "label": "Long-tail misses dominate origin work"}]} />
+
+<Timeline title="youtube / CDN failure; 300ms DNS TTL" events={[{"at": "Inject", "label": "CDN failure; 300ms DNS TTL", "tone": "warn"}, {"at": "Observe", "label": "~4 Gbit/s offered to 2.5 Gbit/s uplink"}, {"at": "Result", "label": "Queue grows; playback stalls"}]} />
+
+<Timeline title="youtube / Uploads triple" events={[{"at": "Inject", "label": "Uploads triple", "tone": "warn"}, {"at": "Observe", "label": "Durable chunks still acknowledge"}, {"at": "Result", "label": "Transcode backlog delays publication; viewing unaffected"}]} />
 
 <Choice
   id="cdn-outage-bottleneck"
@@ -201,7 +187,9 @@ DNS steers clients to the **CDN edge** (with an **origin shield** collapsing mis
 
 <Step id="wrap-up" title="Wrap up">
 
-Check your design against the common mistakes: never serve video bytes from app servers, never encode a long video as one monolithic job, never update view counts synchronously per watch, and always size the delivery network in **bits per second** rather than requests per second. Watch three operational signals: **rebuffer rate**, **CDN / origin-shield hit ratio (by bytes)**, and **transcode queue lag**. Then score yourself from 1 to 4 on each rubric stage.
+<Compare title="youtube / wrap-up" sides={[{"title": "Watch", "points": ["Rebuffer rate, byte hit ratios, transcode lag"]}, {"title": "Avoid", "points": ["App-server media delivery; monolithic encodes; synchronous view counts; QPS-only sizing"]}]} />
+
+Then score yourself from 1 to 4 on each rubric stage.
 
 <Choice
   id="upload-surge-signal"

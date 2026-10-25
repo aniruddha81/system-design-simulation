@@ -40,9 +40,7 @@ estimatedMinutes: 30
 
 <Step id="requirements" title="Requirements">
 
-Post tweets; read the **home timeline** (recent tweets from followed accounts) and **user timelines** (one author's tweets). Home timeline p99 under ~200 ms; reads dominate writes by about 60:1; a tweet reaches followers within seconds — minutes for the largest accounts is not acceptable; posting never blocks on fan-out.
-
-This builds on the news feed case study: same problem, real numbers, and the hybrid model in production.
+<Compare title="twitter-timeline / requirements" sides={[{"title": "Home timeline", "points": ["Post tweets; follow graph; cursor pagination"]}, {"title": "Bounded reads", "points": ["Fresh timelines; celebrity fan-out must not delay everyone"]}]} />
 
 <Choice
   id="timeline-staleness"
@@ -59,11 +57,7 @@ This builds on the news feed case study: same problem, real numbers, and the hyb
 
 <Step id="estimates" title="Estimates from published numbers">
 
-Twitter's 2012 talk "Timelines at Scale" gave roughly **300k QPS** of timeline reads and about **5k tweets/s** on average (around 12k/s at peaks; about 400M tweets a day).
-
-- **Fan-out writes**: 5k tweets/s × ~200 followers ≈ **1M timeline inserts/s**. The fan-out tier is the big write system.
-- **Timeline memory**: ~150M active users × 800 tweet IDs × 8 B × 3 replicas ≈ **3 TB of RAM**; inactive users are not kept.
-- **A celebrity**: an account with 30M followers is 30M inserts per tweet — seconds to minutes of fan-out.
+<Stats title="twitter-timeline / estimates" items={[{"label": "Timeline reads/s", "value": "300k", "sub": "2012 published workload"}, {"label": "Tweets/s", "value": "5k", "sub": "~12k peak; ~400M/day"}, {"label": "Fan-out inserts/s", "value": "1M", "sub": "5k / 200 followers"}, {"label": "Timeline RAM", "value": "~3 TB", "sub": "150M / 800 IDs / 8 B / 3"}, {"label": "Celebrity tweet", "value": "30M inserts", "sub": "30M followers; motivates pull"}]} />
 
 <Choice
   id="memory-math"
@@ -80,8 +74,7 @@ Twitter's 2012 talk "Timelines at Scale" gave roughly **300k QPS** of timeline r
 
 <Step id="api" title="API">
 
-- `POST /2/tweets` → 201 with the tweet ID.
-- `GET /2/timeline/home?pagination_token=` → tweets and the next token. Because tweet IDs are time-ordered, the token is just the last ID seen.
+<Compare title="twitter-timeline / api" sides={[{"title": "POST /2/tweets", "points": ["201 + tweet ID"]}, {"title": "GET /2/timeline/home?pagination_token=", "points": ["Merge/hydrate tweets; last seen ID becomes cursor"]}]} />
 
 <Choice
   id="cursor-id"
@@ -98,9 +91,7 @@ Twitter's 2012 talk "Timelines at Scale" gave roughly **300k QPS** of timeline r
 
 <Step id="data-model" title="Data model">
 
-- **tweets**: the source of truth, keyed by a **Snowflake ID** — 41 bits of milliseconds, 10 bits of worker ID, 12 bits of sequence — unique without coordination and roughly time-ordered.
-- **timelines**: per-user lists of ~800 tweet IDs (with author and flags), in memory, replicated three times. Derived data: it can be rebuilt from tweets and the follow graph.
-- **follow graph**: a separate service (FlockDB at the time) used by the fan-out service.
+<Compare title="twitter-timeline / data-model" sides={[{"title": "Source tweets", "points": ["Snowflake: 41-bit ms, 10-bit worker, 12-bit sequence; follow graph"]}, {"title": "Derived timelines", "points": ["~800 IDs/active user; three replicas; rebuild from tweets + follows"]}]} />
 
 <Choice
   id="snowflake-bits"
@@ -117,9 +108,7 @@ Twitter's 2012 talk "Timelines at Scale" gave roughly **300k QPS** of timeline r
 
 <Step id="high-level" title="High-level design: hybrid fan-out">
 
-Posting stores the tweet and, unless the author is above the follower threshold, publishes one fan-out message. The **fan-out service** writes the tweet ID into each follower's in-memory timeline, skipping inactive users.
-
-Reading runs two things **in parallel**: fetch the precomputed timeline (through a cache), and fetch recent tweets from the few celebrities the reader follows. Merge the two sorted lists by ID and hydrate.
+<Flow title="twitter-timeline / high-level" nodes={[{"id": "0", "label": "API", "kind": "service", "x": 10, "y": 18}, {"id": "1", "label": "Tweets", "kind": "database", "x": 50, "y": 18}, {"id": "2", "label": "Fan-out queue", "kind": "queue", "x": 90, "y": 18}, {"id": "3", "label": "Fan-out worker", "kind": "worker", "x": 10, "y": 82}, {"id": "4", "label": "Timelines", "kind": "kvStore", "x": 50, "y": 82}, {"id": "5", "label": "Read cache", "kind": "cache", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "persist / celebrity pull"}, {"from": "0", "to": "2", "label": "ordinary author"}, {"from": "2", "to": "3", "label": "async"}, {"from": "3", "to": "4", "label": "active followers"}, {"from": "0", "to": "5", "label": "timeline read"}, {"from": "5", "to": "4", "label": "cache miss"}]} height={300} caption={"Read cached timelines and celebrity tweets in parallel, merge by ID, then hydrate. Skip inactive recipients during fan-out."} />
 
 <Ordering
   id="read-path"
@@ -139,7 +128,7 @@ Reading runs two things **in parallel**: fetch the precomputed timeline (through
 
 <Step id="deep-dive" title="Deep dive: choosing the threshold">
 
-Pushing an author with F followers costs F inserts per tweet, all at once. Pulling costs nothing at write time, but every timeline read by every follower pays a small query for that author, whether or not they tweeted. Push is cheaper for almost everyone; pull wins when F is so large that the burst of inserts delays everyone else's fan-out and inflates timelines that may never be read. In practice the threshold sits around accounts with millions of followers.
+<Compare title="twitter-timeline / deep-dive" sides={[{"title": "Push below threshold", "points": ["F followers / F inserts/tweet; cheap timeline reads"]}, {"title": "Pull celebrities", "points": ["Pay on follower reads; avoid millions of burst writes and unused timelines"]}]} />
 
 <Choice
   id="threshold"
@@ -156,8 +145,7 @@ Pushing an author with F followers costs F inserts per tweet, all at once. Pulli
 
 <Step id="alternatives" title="Alternatives">
 
-- **Pure fan-out on write.** Every read is one lookup, but a celebrity tweet is tens of millions of writes that delay everyone else's fan-out.
-- **Pure fan-out on read.** No timeline storage and instant posting, but each read gathers from hundreds of accounts across shards, with fan-out tail latency on every request.
+<Compare title="twitter-timeline / alternatives" sides={[{"title": "Pure push", "points": ["Cheap reads; celebrity write storm"]}, {"title": "Pure pull", "points": ["Cheap posts; hundreds of shard reads"]}]} />
 
 <Choice
   id="tail"
@@ -174,9 +162,11 @@ Pushing an author with F followers costs F inserts per tweet, all at once. Pulli
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **The timeline cache is flushed.** Reads fall through to the replicated timeline store, which is sized for them: latency rises briefly and nothing fails. If timelines had to be recomputed from tweets, the same event would be an outage.
-- **The fan-out service slows 6×.** Posting and reading are unaffected; consumer lag rises from near zero to a few hundred milliseconds, so new tweets appear late. Staleness instead of errors is the designed degradation.
-- **A global event triples traffic.** Reads stay fast because each read is bounded work. The celebrity merge queries grow with traffic, so the tweet store's utilisation is the one to watch.
+<Timeline title="twitter-timeline / Timeline cache flush" events={[{"at": "Inject", "label": "Timeline cache flush", "tone": "warn"}, {"at": "Observe", "label": "Fall through to replicated timeline store"}, {"at": "Result", "label": "Brief latency rise; no recomputation outage"}]} />
+
+<Timeline title="twitter-timeline / Fan-out slows 6x" events={[{"at": "Inject", "label": "Fan-out slows 6x", "tone": "warn"}, {"at": "Observe", "label": "Queue lag rises hundreds of milliseconds"}, {"at": "Result", "label": "Posts/reads succeed; new tweets appear late"}]} />
+
+<Timeline title="twitter-timeline / Global event: 3x" events={[{"at": "Inject", "label": "Global event: 3x", "tone": "warn"}, {"at": "Observe", "label": "Bounded reads stay fast"}, {"at": "Result", "label": "Watch celebrity merge load on tweet store"}]} />
 
 <Choice
   id="fanout-slow"
@@ -193,7 +183,9 @@ Pushing an author with F followers costs F inserts per tweet, all at once. Pulli
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: in-memory replicated timelines of IDs, fan-out on write below a follower threshold, read-time merge above it, Snowflake IDs for ordering and cursors, inactive users skipped. Signals: fan-out lag (freshness SLO), timeline store hit rate, tweet store load from celebrity merges. Then score each stage from 1 to 4.
+<Compare title="twitter-timeline / wrap-up" sides={[{"title": "Watch", "points": ["Fan-out lag, timeline hits, celebrity query load"]}, {"title": "Explain", "points": ["Threshold, inactive users, replicated IDs, Snowflake cursors"]}]} />
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="inactive"

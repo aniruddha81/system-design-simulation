@@ -39,9 +39,7 @@ estimatedMinutes: 30
 
 <Step id="requirements" title="Requirements">
 
-Limit each client (API key, user or IP) to rules such as 100 requests a minute, with short bursts allowed. Rejected requests get **429 Too Many Requests** with `Retry-After`. Rules change without a deploy.
-
-Non-functional: a check adds under 1 ms p99; limits hold across all API servers within a small tolerance; and — the requirement people forget — **the limiter failing must not take the API down**, so the failure policy is decided up front.
+<Compare title="rate-limiter / requirements" sides={[{"title": "Per-key/user/IP quotas", "points": ["Allow bounded bursts; live rule updates; 429 + Retry-After"]}, {"title": "Check p99 <1 ms", "points": ["Shared limits within tolerance; explicit outage policy"]}]} />
 
 <Choice
   id="limiter-purpose"
@@ -58,11 +56,7 @@ Non-functional: a check adds under 1 ms p99; limits hold across all API servers 
 
 <Step id="estimates" title="Estimates">
 
-- **Checks**: every request is checked — at 50k requests/s that is 50k counter operations/s.
-- **State**: 1M active clients × 3 rules × ~50 B ≈ **150 MB**. Fits in memory on one Redis node.
-- **Throughput**: ~100k simple operations/s per Redis shard, so one shard is enough; run three for headroom and blast radius.
-- **Latency**: same-zone round trip ≈ 0.5 ms + operation ≈ 0.1 ms ≈ **0.6 ms**, inside the 1 ms budget.
-- **The simulated cell**: two API servers × 16 workers ÷ ~10 ms per request ≈ 3,200 requests/s of capacity, protected by a global limit of 2,000/s with a 400-token burst.
+<Stats title="rate-limiter / estimates" items={[{"label": "Checks/s", "value": "50k", "sub": "One counter operation/request"}, {"label": "Counter memory", "value": "150 MB", "sub": "1M clients / 3 rules / 50 B"}, {"label": "Shard throughput", "value": "~100k ops/s", "sub": "Illustrative; three shards for headroom"}, {"label": "Check latency", "value": "0.6 ms", "sub": "0.5ms RTT + 0.1ms operation"}, {"label": "Simulated capacity", "value": "3,200/s", "sub": "2 / 16 workers / 10ms"}, {"label": "Admission", "value": "2,000/s", "sub": "400-token burst"}]} />
 
 <Choice
   id="counter-memory"
@@ -79,7 +73,7 @@ Non-functional: a check adds under 1 ms p99; limits hold across all API servers 
 
 <Step id="api" title="API and headers">
 
-The limiter has no public API of its own; it shapes every response. Allowed requests pass through. Rejected ones get 429 with `Retry-After` and rate-limit headers (limit, remaining, reset) so well-behaved clients can pace themselves. Rules are managed by an internal API and pushed to limiters as configuration, cached locally.
+<Compare title="rate-limiter / api" sides={[{"title": "Allowed", "points": ["Pass request; expose limit, remaining, reset"]}, {"title": "Rejected", "points": ["429 + Retry-After; internal rule API pushes cached configuration"]}]} />
 
 <Choice
   id="retry-after"
@@ -96,13 +90,7 @@ The limiter has no public API of its own; it shapes every response. Allowed requ
 
 <Step id="data-model" title="Counter state">
 
-State is one small key per (client, rule), with a TTL slightly longer than the window so idle clients cost nothing:
-
-- **Token bucket**: tokens and last refill time. Allows bursts of B and a sustained rate r.
-- **Fixed window**: one counter per window. Cheap, but a client can send 2× the limit across a window boundary.
-- **Sliding-window counter**: current and previous counts; the rolling estimate is current + previous × overlap fraction.
-
-The update must be **atomic** — a Lua script or INCR with EXPIRE. A read followed by a write lets two servers read the same count and both allow.
+<Compare title="rate-limiter / data-model" sides={[{"title": "Token bucket", "points": ["Tokens + last refill; sustained r, burst B; TTL per client/rule"]}, {"title": "Atomic updates", "points": ["Lua or atomic increment + expiry; sliding count weights previous window"]}]} />
 
 <Choice
   id="atomic-check"
@@ -119,9 +107,7 @@ The update must be **atomic** — a Lua script or INCR with EXPIRE. A read follo
 
 <Step id="high-level" title="High-level design">
 
-Requests pass the **API gateway** (authentication, size limits), then the **limiter** with shared counters, then the load balancer and API servers. Limiting at the gateway rejects excess work before any expensive processing happens.
-
-Layer the protection: a coarse per-IP limit at the edge against floods, per-key quotas at the gateway, and concurrency limits inside services. A rate limit cannot see a slow dependency: at the same request rate, slower responses mean more requests in flight.
+<Flow title="rate-limiter / high-level" nodes={[{"id": "0", "label": "Gateway", "kind": "apiGateway", "x": 10, "y": 18}, {"id": "1", "label": "Limiter", "kind": "rateLimiter", "x": 50, "y": 18}, {"id": "2", "label": "Balancer", "kind": "loadBalancer", "x": 90, "y": 18}, {"id": "3", "label": "API", "kind": "service", "x": 10, "y": 82}, {"id": "4", "label": "Counters", "kind": "kvStore", "x": 50, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "check quota"}, {"from": "1", "to": "4", "label": "atomic update"}, {"from": "1", "to": "2", "label": "allowed only"}, {"from": "2", "to": "3", "label": "bounded load"}]} height={300} caption={"Reject before expensive work. Layer edge quotas, shared key quotas and service concurrency limits; the fixture has no outage bypass."} />
 
 <Ordering
   id="request-path"
@@ -140,7 +126,7 @@ Layer the protection: a coarse per-IP limit at the edge against floods, per-key 
 
 <Step id="deep-dive" title="Deep dive: making shared counters fast and safe">
 
-A shared counter costs one round trip per request. To cut that, servers can take tokens locally **in chunks** and sync every few hundred milliseconds, accepting a small overshoot. Shard counters by client key so one hot client cannot overload every shard. Put a tight timeout on the counter call and decide what happens when it expires — for overload protection, **allow** and fall back to a local limit.
+<Compare title="rate-limiter / deep-dive" sides={[{"title": "Shared counters", "points": ["Shard by client; atomic update; tight timeout"]}, {"title": "Local token chunks", "points": ["Fewer network calls; bounded overshoot; fail-open local fallback for overload protection"]}]} />
 
 <Choice
   id="batching"
@@ -157,9 +143,7 @@ A shared counter costs one round trip per request. To cut that, servers can take
 
 <Step id="alternatives" title="Alternatives">
 
-- **No limiter.** Under a 6× burst the backend completes about as many requests as it can — roughly the same goodput in the simulator — but every request waits in a full queue: median latency rises about 10× and failures are slow timeouts instead of instant 429s.
-- **Local in-process limiters.** No network hop and nothing shared to fail, but the effective limit is the per-server limit times the number of servers, and it drifts as the fleet scales.
-- **Sliding window instead of token bucket.** The sliding-window counter fixes most of the fixed window's boundary burst; a token bucket expresses "sustained rate plus burst" directly.
+<Compare title="rate-limiter / alternatives" sides={[{"title": "No limiter", "points": ["Similar throughput; 10x median latency; slow timeouts"]}, {"title": "Local limiter", "points": ["No hop; quota grows with fleet"]}, {"title": "Sliding window", "points": ["Reduces boundary burst; token bucket expresses rate + burst"]}]} />
 
 <Choice
   id="local-limits"
@@ -176,9 +160,11 @@ A shared counter costs one round trip per request. To cut that, servers can take
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **A 6× burst.** The limiter admits about 2,000 requests/s and answers the rest with 429 in well under a millisecond. Admitted requests stay fast because the backend stays at about two-thirds utilisation.
-- **A slow counter store** (50× slower checks). Every request pays it, because the limiter is in the path, even though nobody is over quota.
-- **The limiter dies.** In this topology every request times out for the whole outage: a protection layer became a single point of failure.
+<Timeline title="rate-limiter / 6x burst" events={[{"at": "Inject", "label": "6x burst", "tone": "warn"}, {"at": "Observe", "label": "Admit ~2,000/s; remainder 429"}, {"at": "Result", "label": "Backend stays near two-thirds utilisation"}]} />
+
+<Timeline title="rate-limiter / Counter store 50x slower" events={[{"at": "Inject", "label": "Counter store 50x slower", "tone": "warn"}, {"at": "Observe", "label": "Every request pays check latency"}, {"at": "Result", "label": "Timeout and local fallback needed in production"}]} />
+
+<Timeline title="rate-limiter / Limiter dies" events={[{"at": "Inject", "label": "Limiter dies", "tone": "warn"}, {"at": "Observe", "label": "Fixture requests time out throughout outage"}, {"at": "Result", "label": "Production overload policy: fail open to local cap"}]} />
 
 <Choice
   id="dead-limiter"
@@ -195,7 +181,9 @@ A shared counter costs one round trip per request. To cut that, servers can take
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise the decisions: token bucket with atomic shared counters per (client, rule), checked at the gateway with a sub-millisecond timeout, failing open to a local limit for overload protection. Name the risks — the limiter's own latency and availability, hot clients on one counter shard — and the signals: 429 rate per client, check latency, and fail-open events. Then score each stage from 1 to 4.
+<Compare title="rate-limiter / wrap-up" sides={[{"title": "Watch", "points": ["429/client, check latency, fail-open events"]}, {"title": "Decide", "points": ["Hot-key shards; timeout; bounded local fallback"]}]} />
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="limiter-signal"

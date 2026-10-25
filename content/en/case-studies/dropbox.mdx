@@ -36,11 +36,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-A cloud file sync service (Dropbox, Google Drive, iCloud Drive) keeps a user's folder tree synchronised across laptops and phones. If a user edits one slide in a **500 MB presentation**, re-uploading and re-downloading all 500 MB on every save would saturate uplink bandwidth and storage.
-
-**Functional**: sync files and folders across multiple devices; upload and download only modified chunks (**delta sync**); deduplicate identical chunks via cryptographic hashes; preserve version history; handle concurrent offline edits without losing either user's work.
-
-**Non-functional**: **11 nines (99.999999999%)** block durability; zero silent data corruption (end-to-end checksums); propagate changes to linked online devices within a few seconds; support files from 1 KB to 50+ GB.
+<Compare
+  title="dropbox - Pin down what you are building"
+  sides={[
+    {"title": "Features", "points": ["Delta sync, dedup, version history, offline conflict copies"]},
+    {"title": "Targets", "points": ["1 KB-50+ GB files; propagate within seconds"]},
+    {"title": "Safety", "points": ["11-nines block durability; end-to-end checksums; no silent overwrite"]}
+  ]}
+/>
 
 <Choice
   id="delta-sync-motivation"
@@ -57,13 +60,16 @@ A cloud file sync service (Dropbox, Google Drive, iCloud Drive) keeps a user's f
 
 <Step id="estimates" title="Work out the numbers">
 
-Assume **100M daily active users**, **2.5 devices per user**, and **500M file saves per day**:
-
-- **Connected sync clients**: 100M × 2.5 = **250 million** devices holding long-poll or WebSocket notification channels.
-- **Chunk write rate**: 500M saves/day × 1.5 changed chunks/save ÷ 86,400 s ≈ **8,700 chunk writes/s** average (~400 KB mean compressed chunk size $\Rightarrow$ **~3.5 GB/s** ingress before deduplication).
-- **Deduplication savings**: ~25–35% of uploaded chunks match an already-stored SHA-256 hash and skip block upload entirely.
-- **Storage footprint**: 700M registered users × ~3 GB logical ÷ 1.4 (compression + dedup) ≈ **1.5 exabytes** physical before replication/erasure coding.
-- **Metadata QPS**: ~50k–100k reads/s and ~10k writes/s on small (~250 B) manifest rows.
+<Stats
+  title="dropbox - Work out the numbers"
+  items={[
+    {"label": "Devices", "value": "250M", "sub": "100M daily users * 2.5"},
+    {"label": "Chunk writes", "value": "8.7k/s", "sub": "500M saves * 1.5 / 86,400"},
+    {"label": "Ingress", "value": "3.5 GB/s", "sub": "400 KB/chunk before 25-35% dedup savings"},
+    {"label": "Physical storage", "value": "1.5 EB", "sub": "700M * 3 GB / 1.4; before redundancy"},
+    {"label": "Metadata", "value": "50-100k reads/s", "sub": "10k writes/s; 250 B manifests"}
+  ]}
+/>
 
 <Choice
   id="metadata-vs-block-scale"
@@ -80,16 +86,15 @@ Assume **100M daily active users**, **2.5 devices per user**, and **500M file sa
 
 <Step id="api" title="Design the sync protocol and API">
 
-Saving a file is a **two-step protocol** that keeps block transfer off the metadata path:
-
-1. **Check & upload missing blocks**:
-   - `POST /v1/blocks/check { hashes: [sha256_0, sha256_1, ...] }` → returns `{ missing: [sha256_1] }`.
-   - `PUT /v1/blocks/{sha256_1}` (raw compressed & encrypted chunk bytes) → server verifies `sha256(body) == sha256_1` and stores it in the object store.
-2. **Commit the new file version**:
-   - `POST /v1/files/{fileId}/commit { baseVersion: 3, blockHashes: [sha256_0, sha256_1, ...] }` → atomically advances `version` from `3` to `4` (or returns `409 Conflict` if another device already committed `v4`).
-3. **Sync to other devices**:
-   - `GET /v1/changes?cursor={lastSeq}` (long-poll) → wakes up within seconds when `v4` commits.
-   - `GET /v1/files/{fileId}/manifest` → returns `blockHashes[]`; the receiving device downloads only the hashes it does not already have on local disk!
+<Timeline
+  title="dropbox - Design the sync protocol and API"
+  events={[
+    {"at": "Check", "label": "POST /v1/blocks/check {hashes} -> missing hashes"},
+    {"at": "Upload", "label": "PUT /v1/blocks/{sha256}; verify content checksum"},
+    {"at": "Commit", "label": "POST /v1/files/{id}/commit; baseVersion + blockHashes; CAS or 409"},
+    {"at": "Sync", "label": "GET /v1/changes?cursor= then manifest; download missing hashes"}
+  ]}
+/>
 
 <Ordering
   id="write-before-commit-order"
@@ -109,9 +114,14 @@ Saving a file is a **two-step protocol** that keeps block transfer off the metad
 
 <Step id="data-model" title="Model the data">
 
-- **blocks**: `sha256 → immutable compressed bytes` in the object store. Because a block's key **is** the cryptographic hash of its contents, a block is never modified in place: changing 1 bit produces a brand-new `sha256` key.
-- **fileMeta**: `(workspaceId, fileId) → { version, path, blockHashes: [sha256...], updatedAt }`, sharded by `workspaceId` (a user's private folder or a shared team folder) so directory listings and workspace change logs stay on one shard.
-- **workspaceLog**: `(workspaceId, seq) → { fileId, newVersion }`. Every device stores its last applied `seq` cursor locally; on wake-up, it asks for `seq > cursor`.
+<Timeline
+  title="dropbox - Model the data"
+  events={[
+    {"at": "Blocks", "label": "SHA-256 -> immutable bytes"},
+    {"at": "fileMeta", "label": "workspaceId + fileId -> version, path, blockHashes"},
+    {"at": "workspaceLog", "label": "workspaceId + seq -> fileId, newVersion; device persists cursor"}
+  ]}
+/>
 
 <Choice
   id="immutability-benefit"
@@ -128,10 +138,25 @@ Saving a file is a **two-step protocol** that keeps block transfer off the metad
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-Look at the reference design in the simulator:
-
-- **Commit path**: the API checks the **Block SHA-256 index** (`blockdedup`). If the chunk is already stored (`dedupHit`), it skips the **Content-addressed block store** (`blockstore`) write and goes straight to incrementing the version in the **Metadata DB** (`metadb`), invalidating the **Metadata cache** (`metacache`), and publishing to the **Device notification stream** (`syncbus`).
-- **Sync path**: linked devices read the manifest through `metacache` (`cacheAside` in front of `metadb`).
+<Flow
+  title="dropbox - Draw the high-level architecture"
+  nodes={[
+    {"id": "0", "label": "API", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Hash index", "kind": "dedupStore", "x": 50, "y": 25},
+    {"id": "2", "label": "Blocks", "kind": "objectStore", "x": 90, "y": 25},
+    {"id": "3", "label": "Metadata", "kind": "database", "x": 10, "y": 80},
+    {"id": "4", "label": "Cache", "kind": "cache", "x": 50, "y": 80},
+    {"id": "5", "label": "Sync bus", "kind": "queue", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "check hash"},
+    {"from": "0", "to": "2", "label": "missing only"},
+    {"from": "0", "to": "3", "label": "commit version"},
+    {"from": "0", "to": "4", "label": "invalidate"},
+    {"from": "0", "to": "5", "label": "notify"}
+  ]}
+  height={300}
+/>
 
 <Choice
   id="long-poll-vs-short-poll"
@@ -148,18 +173,15 @@ Look at the reference design in the simulator:
 
 <Step id="deep-dive" title="Deep dive: Rabin chunking, conflict copies, and Magic Pocket">
 
-### 1. Fixed 4 MB chunks vs Content-Defined Chunking (Rabin fingerprinting)
-Suppose a file is split at fixed 4 MB offsets (`0..4MB`, `4..8MB`, ...). If you insert **10 bytes at offset 0**, every byte shifts right by 10 bytes — so **every single 4 MB chunk changes its SHA-256 hash**!
-**Content-Defined Chunking (LBFS / Rabin rolling hash)** slides a 48-byte window over the file and declares a chunk boundary whenever the lower 22 bits of the rolling polynomial hash equal zero (`hash & 0x3FFFFF == 0`, average 4 MB). Inserting 10 bytes at the start changes only the first chunk; the very next boundary marker aligns back up with the original file!
-
-### 2. Offline conflicts without data loss
-If Alice and Bob both edit `budget.xlsx` (`baseVersion = 7`) while on an airplane:
-1. Alice lands first and commits `commit(baseVersion=7)` $\rightarrow$ succeeds, file becomes `version = 8`.
-2. Bob lands later and sends `commit(baseVersion=7)` $\rightarrow$ the conditional update `WHERE version = 7` returns **409 Conflict**.
-3. Bob's client fetches `v8` for `budget.xlsx` and commits Bob's blocks as a separate file `budget (Bob's conflicted copy).xlsx` so neither user's work is silently overwritten.
-
-### 3. Erasure coding in cold storage (Magic Pocket)
-Keeping 3 full replicas of 1.5 EB costs 4.5 EB of raw disks (`3×` overhead). Because content-addressed blocks are **immutable**, Dropbox packs blocks into 1 GB extents and encodes them with **Reed-Solomon erasure coding** (e.g. 6 data shards + 3 parity shards across separate racks = `1.5×` storage overhead while tolerating any 3 simultaneous disk/rack failures).
+<Compare
+  title="dropbox - Deep dive: Rabin chunking, conflict copies, and Magic Pocket"
+  sides={[
+    {"title": "Fixed 4 MB chunks", "points": ["10-byte prefix insert changes every hash"]},
+    {"title": "Content-defined chunks", "points": ["Rabin rolling boundaries realign; preserve later chunk hashes"]},
+    {"title": "Offline conflict", "points": ["baseVersion 7 loses CAS to v8; preserve conflict copy"]},
+    {"title": "Cold storage", "points": ["6 data + 3 parity shards: 1.5x overhead, tolerates any 3 shard losses"]}
+  ]}
+/>
 
 <Choice
   id="rabin-chunking-advantage"
@@ -176,9 +198,14 @@ Keeping 3 full replicas of 1.5 EB costs 4.5 EB of raw disks (`3×` overhead). Be
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **Whole-file upload without chunk dedup or metadata cache (`dropbox-whole-file`)**: in the simulator, skipping block deduplication and scanning metadata directly drops goodput below 85%.
-- **Client-side encryption (zero-knowledge) vs server-side encryption**: encrypting chunks with a user-held key before hashing gives zero-knowledge privacy, at the cost of disabling cross-user deduplication (two users encrypting the same file with different keys produce different ciphertexts).
-- **Direct-to-object-store pre-signed URLs**: in production, the metadata API returns pre-signed URLs so clients stream 4 MB chunks directly to and from the block storage cluster without passing bytes through metadata servers.
+<Compare
+  title="dropbox - Evaluate alternatives"
+  sides={[
+    {"title": "dropbox-whole-file", "points": ["No dedup/cache; goodput <85%"]},
+    {"title": "User-held encryption", "points": ["Privacy; different user keys prevent cross-user dedup"]},
+    {"title": "Pre-signed URLs", "points": ["Clients stream blocks directly; metadata API handles manifests"]}
+  ]}
+/>
 
 <Choice
   id="cas-conflict-resolution"
@@ -195,11 +222,32 @@ Keeping 3 full replicas of 1.5 EB costs 4.5 EB of raw disks (`3×` overhead). Be
 
 <Step id="failures" title="Run the failure scenarios">
 
-Run the three failure scenarios in the simulator:
+<Timeline
+  title="dropbox - shared-folder-storm"
+  events={[
+    {"at": "Inject", "label": "35% traffic targets one file", "tone": "bad"},
+    {"at": "Observe", "label": "Cache manifests; skip duplicate blocks", "tone": "warn"},
+    {"at": "Recover", "label": ">99% goodput", "tone": "ok"}
+  ]}
+/>
 
-- **Shared team folder storm (`shared-folder-storm`)**: 35% of requests hit one shared file. `metacache` serves manifest reads and `blockdedup` skips duplicate chunk writes, maintaining > 99% goodput.
-- **Metadata DB leader failover (`metadb-failover`)**: `metadb` crashes for 500 ms. Cached manifest reads continue; commits pause during leader election and resume on the promoted replica with zero lost versions (`semiSync` + fencing).
-- **Notification worker crash (`notifier-lag`)**: `notifier` workers crash for 600 ms. File commits and manifest reads stay at > 99% goodput while change notifications queue safely in `syncbus`.
+<Timeline
+  title="dropbox - metadb-failover"
+  events={[
+    {"at": "Inject", "label": "Metadata DB down 500 ms", "tone": "bad"},
+    {"at": "Observe", "label": "Cached reads continue; commits pause", "tone": "warn"},
+    {"at": "Recover", "label": "semiSync + fencing: no lost versions", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="dropbox - notifier-lag"
+  events={[
+    {"at": "Inject", "label": "Notifiers down 600 ms", "tone": "bad"},
+    {"at": "Observe", "label": "syncbus buffers changes", "tone": "warn"},
+    {"at": "Recover", "label": "Commits/reads >99% goodput", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="dangling-block-race"
@@ -216,11 +264,14 @@ Run the three failure scenarios in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Bring the pieces together:
-1. **Content-defined chunks + SHA-256**: delta sync and automatic deduplication.
-2. **Write blocks before committing metadata**: never expose a dangling block hash.
-3. **Optimistic CAS (`baseVersion`) + conflict copies**: never silently overwrite concurrent offline edits.
-4. **Erasure coding + cold tiering**: 11-nines durability at ~1.5× storage overhead instead of 3×.
+<Timeline
+  title="dropbox - Wrap up and self-assess"
+  events={[
+    {"at": "Transfer", "label": "Content-defined chunks + SHA-256"},
+    {"at": "Commit", "label": "Blocks before metadata; CAS + conflict copies"},
+    {"at": "Retain", "label": "Version history; erasure-coded cold storage"}
+  ]}
+/>
 
 <Choice
   id="garbage-collection-race"

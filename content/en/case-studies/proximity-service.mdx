@@ -40,9 +40,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-Find businesses within a given radius of a point (optionally filtered by category), view business details, and let business owners add or edit listings.
-
-**Non-functional**: search p99 under **~100 ms**; heavily skewed toward reads (**~5,000 searches/s** vs **~1 write/s**); high read availability; and **eventual consistency** for search is acceptable (an owner's edit can take a few minutes to appear in radius searches, though the detail page should reflect it right away).
+<Compare title="proximity-service / requirements" sides={[{"title": "Nearby businesses", "points": ["Radius/category search; detail views; owner edits"]}, {"title": "Search p99 <100 ms", "points": ["High read availability; eventual search freshness; immediate detail invalidation"]}]} />
 
 <Choice
   id="uber-vs-proximity"
@@ -59,13 +57,7 @@ Find businesses within a given radius of a point (optionally filtered by categor
 
 <Step id="estimates" title="Estimates">
 
-Assume **200M businesses** worldwide and **100M daily active users** running 5 searches/day:
-
-- **Search rate**: 500M ÷ 86,400 ≈ **5,800 searches/s** average, **~15,000/s** at peak.
-- **Write rate**: ~100k business edits/day ≈ **1 write/s**.
-- **Dataset size**: 200M businesses × ~1 KB of details ≈ **200 GB** in the primary database.
-- **Geo index size**: 200M × ~30 B (`businessId` + geohash + `lat`/`lng`) ≈ **6 GB** total. That fits in RAM on a single machine!
-- **Index replicas**: at ~5,000 queries/s per in-memory replica, **3–4 full replicas per region** carry peak traffic without sharding the index at all.
+<Stats title="proximity-service / estimates" items={[{"label": "Searches/s", "value": "5,800", "sub": "100M users / 5 / 86,400; 15k peak"}, {"label": "Edits/s", "value": "~1", "sub": "100k/day"}, {"label": "Business details", "value": "200 GB", "sub": "200M / 1 KB"}, {"label": "Geo index", "value": "6 GB", "sub": "200M / 30 B"}, {"label": "Regional replicas", "value": "3-4", "sub": "~5k queries/s each; leave headroom"}]} />
 
 <Choice
   id="shard-or-replicate-index"
@@ -82,9 +74,7 @@ Assume **200M businesses** worldwide and **100M daily active users** running 5 s
 
 <Step id="api" title="API">
 
-- `GET /v1/search?lat&lng&radius&category&cursor` (radius ≤ 20 km) → **200** `{ businesses[], next }`.
-- `GET /v1/businesses/{id}` → **200** `{ details }`.
-- `PUT /v1/businesses/{id}` → **200**. Writes the database and invalidates `biz:{id}` in the cache immediately so the owner sees their edit on the detail page; the geo index catches up asynchronously.
+<Compare title="proximity-service / api" sides={[{"title": "GET /v1/search?lat&lng&radius&category&cursor", "points": ["Radius <=20 km; businesses + next cursor"]}, {"title": "GET /v1/businesses/{id}; PUT /v1/businesses/{id}", "points": ["Write DB; invalidate biz:{id}; index catches up"]}]} />
 
 <Choice
   id="owner-read-your-writes"
@@ -101,9 +91,7 @@ Assume **200M businesses** worldwide and **100M daily active users** running 5 s
 
 <Step id="data-model" title="Data model">
 
-- **businesses** (`db`): `businessId`, `name`, `geohash` (length 6 ≈ 1.2 km × 0.6 km), `lat`, `lng`, `category`, `rating`, `details`, sharded by `businessId`.
-- **geoindex**: an in-memory read-optimised replica mapping `geohash → list of (businessId, lat, lng)`, fed from `db` via change-data-capture (CDC).
-- **cellcache**: caches both popular cell search results (`cell:{geohash}`, 60 s TTL) and individual business details (`biz:{id}`).
+<Compare title="proximity-service / data-model" sides={[{"title": "Database", "points": ["businessId, geohash, lat/lng, category, rating; shard by businessId"]}, {"title": "Read replicas", "points": ["CDC geoindex; cell:{geohash} cache 60s; biz:{id} cache"]}]} />
 
 <Choice
   id="geohash-length-choice"
@@ -120,10 +108,7 @@ Assume **200M businesses** worldwide and **100M daily active users** running 5 s
 
 <Step id="high-level" title="High-level design">
 
-Requests enter through a load balancer to stateless **Search API** servers.
-- **Nearby search** uses cache-aside on `cellcache` (`cell:{geohash}`); on a miss it queries `geoindex` for the target cell and its 8 neighbours, filters candidates by exact Haversine distance, caches the result for 60 seconds, and returns.
-- **Detail view** uses cache-aside on `cellcache` (`biz:{id}`), falling back to `db`.
-- **Owner update** writes `db` and deletes `biz:{id}` from `cellcache`; `geoindex` pulls the change asynchronously.
+<Flow title="proximity-service / high-level" nodes={[{"id": "0", "label": "Client", "kind": "client", "x": 10, "y": 18}, {"id": "1", "label": "Search API", "kind": "service", "x": 50, "y": 18}, {"id": "2", "label": "Cell cache", "kind": "cache", "x": 90, "y": 18}, {"id": "3", "label": "Geo index", "kind": "searchIndex", "x": 10, "y": 82}, {"id": "4", "label": "Businesses", "kind": "database", "x": 50, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "nearby / detail"}, {"from": "1", "to": "2", "label": "cache-aside"}, {"from": "1", "to": "3", "label": "miss: radius cells"}, {"from": "1", "to": "4", "label": "detail / edit"}, {"from": "4", "to": "3", "label": "async CDC"}]} height={300} caption={"Search filters candidates by exact distance. A 3x3 cell neighbourhood suffices only when it covers the requested radius."} />
 
 <Ordering
   id="nearby-search-flow"
@@ -143,9 +128,7 @@ Requests enter through a load balancer to stateless **Search API** servers.
 
 <Step id="deep-dive" title="Deep dive: boundary effects and adaptive cells">
 
-Two points 10 metres apart on opposite sides of a geohash division line can have completely different prefixes (just as `0999` and `1000` share no prefix in base 10). Querying only the user's own cell misses restaurants right across the street. That is why every search **always queries the centre cell plus its 8 neighbours**, then filters by exact Euclidean/Haversine distance.
-
-Fixed geohash cells have uneven occupancy: one cell in midtown Manhattan holds thousands of cafes while a cell in the desert holds zero. A **quadtree** (or Google's **S2** hierarchy) recursively subdivides a square until every leaf holds at most $k$ businesses — giving tiny leaves downtown and huge leaves in rural areas. Experiment with geohash rings vs quadtree subdivision in the interactive player below:
+<Compare title="proximity-service / deep-dive" sides={[{"title": "Geohash boundaries", "points": ["Query every cell intersecting radius; filter exact Haversine distance"]}, {"title": "Adaptive cells", "points": ["Quadtree/S2 splits dense areas; fixed cells vary in occupancy"]}]} />
 
 <SpatialPlayer />
 
@@ -164,9 +147,7 @@ Fixed geohash cells have uneven occupancy: one cell in midtown Manhattan holds t
 
 <Step id="alternatives" title="Alternatives">
 
-- **No geo index: scan the business table.** The runnable `proximity-scan` alternative removes `geoindex` and queries `db` directly on cache misses. Every miss scans 20,000 rows, saturating the database worker pool and dropping goodput below 90%.
-- **Quadtree instead of fixed geohash cells.** Balances candidate count per leaf across dense cities and sparse countryside; built in memory at startup in a few seconds and patched in place. Slightly more code than a B-tree index on a `geohash` column.
-- **Database-native spatial index (PostGIS R-tree / GiST).** Zero extra infrastructure and supports arbitrary polygons. Great up to a few thousand queries/s per read replica — often the best V1 before extracting a dedicated in-memory geo index.
+<Compare title="proximity-service / alternatives" sides={[{"title": "proximity-scan", "points": ["20k rows/miss; saturated DB; <90% goodput"]}, {"title": "Quadtree", "points": ["Adaptive density; extra implementation"]}, {"title": "PostGIS GiST", "points": ["Simple V1; spatial SQL; replica throughput ceiling"]}]} />
 
 <Choice
   id="quadtree-vs-geohash"
@@ -183,9 +164,11 @@ Fixed geohash cells have uneven occupancy: one cell in midtown Manhattan holds t
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **Everyone searches Times Square** (30% of searches hit one hot cell on New Year's Eve). The hot cell sits in `cellcache` and costs just one `geoindex` query per minute; the rest of the uniform long-tail misses are easily handled by the index replicas.
-- **The geo index is unavailable** (a bad index build kills `geoindex` for 0.5 s). Popular cached cells keep answering from `cellcache` and business detail pages keep working from `db`, while uncached searches time out. Roll out new index builds blue/green beside the old index and swap atomically.
-- **Index replicas slow down 5×** (background index rebuild competes for CPU). Cache hits do not notice; misses take ~10 ms longer instead of ~2 ms, and because `cellcache` absorbs the hot cells, `geoindex` stays well below saturation.
+<Timeline title="proximity-service / Times Square: 30%" events={[{"at": "Inject", "label": "Times Square: 30%", "tone": "warn"}, {"at": "Observe", "label": "Hot cell hits cache"}, {"at": "Result", "label": "Long tail reaches geo replicas"}]} />
+
+<Timeline title="proximity-service / geoindex down: 0.5s" events={[{"at": "Inject", "label": "geoindex down: 0.5s", "tone": "warn"}, {"at": "Observe", "label": "Uncached searches time out"}, {"at": "Result", "label": "Cached searches/details survive; blue/green index swap"}]} />
+
+<Timeline title="proximity-service / Index rebuild: 5x slower" events={[{"at": "Inject", "label": "Index rebuild: 5x slower", "tone": "warn"}, {"at": "Observe", "label": "Miss work rises ~2ms to ~10ms"}, {"at": "Result", "label": "Hot-cell cache keeps index below saturation"}]} />
 
 <Choice
   id="safe-index-rollout"
@@ -202,7 +185,9 @@ Fixed geohash cells have uneven occupancy: one cell in midtown Manhattan holds t
 
 <Step id="wrap-up" title="Wrap up">
 
-Recap why this design is so clean: **read-to-write asymmetry (5,000:1)** and a **small spatial footprint (~6 GB)** let every replica hold the full geo index in memory, **9-cell geohash lookups** (or a **quadtree**) solve boundary and density problems, and **cell-level caching** makes viral locations free. Track **search p99 latency**, **cell cache hit rate**, and **CDC index lag**. Score each stage from 1 to 4.
+<Compare title="proximity-service / wrap-up" sides={[{"title": "Watch", "points": ["Search p99, cache hit rate, CDC lag"]}, {"title": "Size", "points": ["Read-heavy workload; full in-memory geo replicas"]}]} />
+
+Score each stage from 1 to 4.
 
 <Choice
   id="when-postgis-is-enough"

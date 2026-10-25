@@ -26,13 +26,11 @@ estimatedMinutes: 8
 
 <Step id="scale-driver" title="What drives the scale">
 
-Uber reported about 33 million platform trips/day in Q4 2024, including Mobility and Delivery. Trips are not API requests: location updates, quotes and matching attempts can create far more work.
+Illustrative budgets, not production topology. Public scale figures do not determine API throughput.
 
-This **illustrative** design chooses 200,000 match operations/s globally with fixed 2 KiB responses. Each regional coordinator calls a local nearby-driver key-value aggregate and a shared US pricing dependency in parallel, then calls US trip storage. Driver-cell membership and prices are abstract service costs; this is not a geographic matching algorithm.
+<Flow title={"Architecture paths"} nodes={[{"id": "0", "label": "Coordinator", "kind": "service", "x": 8, "y": 50}, {"id": "1", "label": "Nearby drivers", "kind": "kvStore", "x": 50, "y": 12}, {"id": "2", "label": "US pricing", "kind": "service", "x": 50, "y": 88}, {"id": "3", "label": "US trips", "kind": "database", "x": 92, "y": 50}]} edges={[{"from": "0", "to": "1", "label": "parallel"}, {"from": "0", "to": "2", "label": "parallel"}, {"from": "0", "to": "3", "label": "after join"}]} height={280} caption={"Local driver lookup and US pricing join before trip storage. Cell membership and pricing are service costs; geographic matching and assignment correctness are omitted."} />
 
-The European coordinator holds capacity while waiting across regions. Even a fast local lookup cannot remove a mandatory remote pricing or commitment round trip. The hot-city scenario concentrates writes on one key; Scale disables contention-sensitive predictions rather than estimating lock behavior.
-
-[Public scale anchor](https://investor.uber.com/news-events/news/press-release-details/2025/Uber-Announces-Results-for-Fourth-Quarter-and-Full-Year-2024/default.aspx). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+<Stats title={"Illustrative assumptions"} items={[{"label": "Global offered rate", "value": "200k matches/s"}, {"label": "Fixed response / payload", "value": "2 KiB"}, {"label": "Model choice", "value": "Parallel lookup + pricing"}]} />
 
 <Choice
   id="driver-check"
@@ -45,15 +43,19 @@ The European coordinator holds capacity while waiting across regions. Even a fas
 
 <Step id="test-remedy" title="Failure ladder and what to try">
 
-**Observed Failure ladder.** At 1x the global timely-success estimate is already below the ladder’s 99% threshold. At 4x the European coordinator api-1 saturates and its bounded queue overflows. This is a finding about this invented cross-region path, not Uber reliability.
+Failure ladder: short model sweeps, not production limits. Change one budget in a copy; compare unchanged scenarios. Remedies remain unverified; correctness stays **unknown**.
 
-These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+<Timeline title={"Observed Failure ladder"} events={[{"at": "1x", "label": "Timely-success below 99%", "tone": "warn"}, {"at": "4x", "label": "EU coordinator saturates", "tone": "warn"}, {"at": "Next", "label": "Bounded queue overflows", "tone": "warn"}]} />
 
-**What to try.** Try placing pricing near the European coordinator, then measure the same scenario and inspect the remaining trip-storage round trip. Increase coordinator capacity only as a separate experiment. Compare the pricing brownout and region outage; use Exact or a focused matching model to investigate assignment correctness. Remedies are suggestions to test; none is verified here.
+<Stats title={"Sweep limits"} items={[{"label": "Independent levels", "value": "1x / 4x / 16x"}, {"label": "Per level", "value": "2 s + 8 s", "sub": "Warm-up + measurement; no drain"}, {"label": "Step", "value": "250 ms"}, {"label": "Steady state", "value": "Unstable", "sub": "Window < required 30 s"}, {"label": "Edge ceiling", "value": "~1M/s", "sub": "1 microsecond minimum service time"}]} />
 
-The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+<Timeline title={"Incident window"} events={[{"at": "0 s", "label": "Normal day; celebrity concentration starts"}, {"at": "4 s", "label": "Disturbance begins", "tone": "warn"}, {"at": "8 s", "label": "Disturbance ends"}]} />
 
-When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+<Compare title={"Scenario pack"} sides={[{"title": "Traffic", "points": ["Normal day", "Peak event: 4x", "Celebrity: 4x concentrated", "DDoS: 50x competing application traffic"]}, {"title": "Dependencies", "points": ["US region outage: regional entry retained", "No automatic evacuation", "Brownout: 10x service time", "DDoS does not identify legitimate users"]}]} />
+
+<Compare title={"Experiments to compare"} sides={[{"title": "Local pricing", "points": ["Compare EU latency", "Inspect remaining trip-storage round trip"]}, {"title": "Coordinator capacity", "points": ["Test independently", "Compare pricing brownout and US outage"]}]} />
+
+When integration is available, select this reference's normal-day pack in Scale mode. Check fidelity reasons before using disabled metrics.
 
 <Choice
   id="remedy-check"

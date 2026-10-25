@@ -40,7 +40,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-Users publish posts and read a feed of recent posts from the accounts they follow, newest first, paginated. Feed reads p99 under 200 ms; reads outnumber posts about 100:1; a new post should appear in followers' feeds within a few seconds. **Posting must stay fast and available even when the feed pipeline lags** — staleness is acceptable, errors are not.
+<Compare
+  title="news-feed - Requirements"
+  sides={[
+    {"title": "Features", "points": ["Publish; newest-first followed-account feed; pagination"]},
+    {"title": "Targets", "points": ["Feed p99 <200 ms; posts visible within seconds; reads:posts 100:1"]},
+    {"title": "Isolation", "points": ["Posting fast during fan-out lag; stale feeds acceptable"]}
+  ]}
+/>
 
 <Choice
   id="feed-question"
@@ -57,11 +64,16 @@ Users publish posts and read a feed of recent posts from the accounts they follo
 
 <Step id="estimates" title="Estimates">
 
-- **Feed reads**: 300M daily users × 10 loads ÷ 86,400 ≈ **35k/s**, about 70k/s at peak.
-- **Posts**: 300M × 0.1 ÷ 86,400 ≈ **350/s**.
-- **Fan-out writes**: 350 posts/s × ~200 followers ≈ **70k feed inserts/s** — a 200× write amplification.
-- **Feed storage**: 300M feeds × 500 post IDs × 8 B ≈ **1.2 TB** of IDs. Feeds store IDs, not bodies.
-- **A celebrity post**: one account with 50M followers is 50M inserts — at 70k/s, about 12 minutes of the entire fan-out tier.
+<Stats
+  title="news-feed - Estimates"
+  items={[
+    {"label": "Feed reads", "value": "35k/s", "sub": "300M * 10 / 86,400; peak 70k/s"},
+    {"label": "Posts", "value": "350/s", "sub": "300M * 0.1 / 86,400"},
+    {"label": "Fan-out", "value": "70k inserts/s", "sub": "350 * 200 followers; 200x amplification"},
+    {"label": "Feed IDs", "value": "1.2 TB", "sub": "300M * 500 * 8 B"},
+    {"label": "Celebrity", "value": "12 minutes", "sub": "50M inserts / 70k/s capacity"}
+  ]}
+/>
 
 <Choice
   id="celebrity-cost"
@@ -78,11 +90,15 @@ Users publish posts and read a feed of recent posts from the accounts they follo
 
 <Step id="api" title="API">
 
-- `POST /v1/posts` with an `Idempotency-Key` (or a client-generated post ID) → 201.
-- `GET /v1/feed?cursor=` → 200 with posts and `nextCursor`. The cursor encodes the last post ID seen.
-- `POST /v1/follows/{userId}` → 204, optionally backfilling recent posts.
-
-**Cursor pagination** stays stable while new posts arrive. Offsets do not: if five posts arrive between page 1 and page 2, offset 20 now shows five posts the user already saw.
+<Timeline
+  title="news-feed - API"
+  events={[
+    {"at": "Post", "label": "POST /v1/posts + Idempotency-Key returns 201"},
+    {"at": "Feed", "label": "GET /v1/feed?cursor= returns posts + nextCursor"},
+    {"at": "Follow", "label": "POST /v1/follows/{userId} returns 204; optional backfill"},
+    {"at": "Page", "label": "Last-ID cursor stays stable as new posts arrive"}
+  ]}
+/>
 
 <Choice
   id="cursor"
@@ -99,9 +115,14 @@ Users publish posts and read a feed of recent posts from the accounts they follo
 
 <Step id="data-model" title="Data model">
 
-- **posts**: the source of truth, sharded by author, so "posts by X" is one shard.
-- **feeds**: one precomputed list of post IDs per user (newest first, capped at ~500) in a key-value store. Post bodies are hydrated from a post cache at read time.
-- **follows**: follower → followee, indexed both ways, read by the fan-out workers.
+<Timeline
+  title="news-feed - Data model"
+  events={[
+    {"at": "Posts", "label": "Source of truth; shard by author"},
+    {"at": "Feeds", "label": "User maps to newest 500 post IDs; hydrate bodies from cache"},
+    {"at": "Follows", "label": "Index both directions for fan-out"}
+  ]}
+/>
 
 <Choice
   id="ids-not-bodies"
@@ -118,9 +139,25 @@ Users publish posts and read a feed of recent posts from the accounts they follo
 
 <Step id="high-level" title="High-level design: fan-out on write">
 
-Posting writes the post and publishes one message to a **fan-out queue**, then returns 201. Fan-out workers read the follower list and write the post ID into each follower's feed. Feed reads go through a cache to the feed store: one key lookup per read.
-
-The queue is what keeps posting fast: a surge in posts becomes a deeper queue and a few seconds of extra staleness, not slow or failed requests.
+<Flow
+  title="news-feed - High-level design: fan-out on write"
+  nodes={[
+    {"id": "0", "label": "Post API", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Posts DB", "kind": "database", "x": 50, "y": 25},
+    {"id": "2", "label": "Fan-out log", "kind": "queue", "x": 90, "y": 25},
+    {"id": "3", "label": "Workers", "kind": "worker", "x": 10, "y": 80},
+    {"id": "4", "label": "Feed store", "kind": "kvStore", "x": 50, "y": 80},
+    {"id": "5", "label": "Cache", "kind": "cache", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "persist"},
+    {"from": "0", "to": "2", "label": "publish then 201"},
+    {"from": "2", "to": "3", "label": "followers"},
+    {"from": "3", "to": "4", "label": "idempotent ID"},
+    {"from": "5", "to": "4", "label": "read miss"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="post-path"
@@ -140,7 +177,14 @@ The queue is what keeps posting fast: a surge in posts becomes a deeper queue an
 
 <Step id="deep-dive" title="Deep dive: push, pull or hybrid">
 
-Fan-out on write costs posts/s × average followers in writes, but a read is one lookup. Fan-out on read costs feed reads/s × accounts followed in lookups, but posting is free. With 100 reads per post and a few hundred followers, push wins for ordinary accounts. A celebrity breaks push, so **hybrid** systems skip fan-out above a follower threshold and merge celebrity posts at read time (see the Twitter timeline case study). Inactive users can be skipped during fan-out and rebuilt on their next visit.
+<Compare
+  title="news-feed - Deep dive: push, pull or hybrid"
+  sides={[
+    {"title": "Push", "points": ["Posts/s * followers writes; read one key"]},
+    {"title": "Pull", "points": ["Reads/s * followed accounts lookups; cheap posting"]},
+    {"title": "Hybrid", "points": ["Push ordinary authors; merge celebrities on read; rebuild inactive feeds"]}
+  ]}
+/>
 
 <Choice
   id="hybrid"
@@ -157,8 +201,14 @@ Fan-out on write costs posts/s × average followers in writes, but a read is one
 
 <Step id="alternatives" title="Alternatives you can run">
 
-- **Fan-out on read.** Each feed read becomes a scatter-gather of indexed queries, one per posts shard. In the simulator that is 8 queries per read; the posts database cannot keep up and most reads fail on the same hardware that serves the push design comfortably.
-- **Appending post IDs instead of idempotent writes.** Natural, but a worker that crashes after writing and before acknowledging gets the message again and appends the post twice. Run the worker-crash scenario against it: the engine reports a duplicated effect.
+<Compare
+  title="news-feed - Alternatives you can run"
+  sides={[
+    {"title": "Pull", "points": ["8 queries/read in simulator overwhelm posts DB"]},
+    {"title": "Append IDs", "points": ["Crash after write before ack duplicates feed item"]},
+    {"title": "Idempotent insert", "points": ["Unique user/post key tolerates replay"]}
+  ]}
+/>
 
 <Choice
   id="append-duplicate"
@@ -175,9 +225,32 @@ Fan-out on write costs posts/s × average followers in writes, but a read is one
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **A 4× surge.** Posts go from 150/s to 600/s, above the workers' ~400/s. Posting stays fast; the fan-out queue absorbs the excess and consumer lag rises to about a second, then drains.
-- **Fan-out workers crash** for 0.6 s. Feeds stop updating, then catch up; in-flight messages are redelivered and the idempotent writes create no duplicates.
-- **The feed cache is flushed.** Reads fall through to the feed store, which is sized for them. Precomputed feeds make a cache loss cheap.
+<Timeline
+  title="news-feed - Post surge"
+  events={[
+    {"at": "Inject", "label": "150 to 600 posts/s; workers 400/s", "tone": "bad"},
+    {"at": "Observe", "label": "Queue absorbs excess", "tone": "warn"},
+    {"at": "Recover", "label": "Posting fast; about 1 s lag drains", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="news-feed - Worker crash"
+  events={[
+    {"at": "Inject", "label": "Workers down 0.6 s", "tone": "bad"},
+    {"at": "Observe", "label": "Feeds pause; replay in-flight work", "tone": "warn"},
+    {"at": "Recover", "label": "Idempotent writes prevent duplicates", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="news-feed - Cache flush"
+  events={[
+    {"at": "Inject", "label": "Feed cache empty", "tone": "bad"},
+    {"at": "Observe", "label": "Precomputed store handles reads", "tone": "warn"},
+    {"at": "Recover", "label": "Cache loss stays cheap", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="surge-signal"
@@ -194,7 +267,16 @@ Fan-out on write costs posts/s × average followers in writes, but a read is one
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: push fan-out through a durable queue, idempotent feed writes, feeds of capped ID lists hydrated from caches, cursor pagination, a celebrity threshold with read-time merge. Set a **freshness SLO** on fan-out lag and alert on it. Then score each stage from 1 to 4.
+<Timeline
+  title="news-feed - Wrap up"
+  events={[
+    {"at": "Build", "label": "Durable queue; idempotent capped feed IDs"},
+    {"at": "Scale", "label": "Celebrity threshold; read-time merge"},
+    {"at": "Watch", "label": "Freshness SLO on fan-out lag; hydrate cached bodies"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="delete-post"

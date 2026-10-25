@@ -40,7 +40,14 @@ estimatedMinutes: 40
 
 <Step id="requirements" title="Requirements">
 
-`put(key, value)`, `get(key)` and `delete(key)` for values up to ~1 MB (typically ~1 KB), optionally a conditional put on a version. Single-digit-millisecond p99 inside a region; writes accepted whenever a quorum is reachable; consistency tunable per request; scale to tens of TB and about a million operations a second by adding nodes.
+<Compare
+  title="key-value-store - Requirements"
+  sides={[
+    {"title": "Operations", "points": ["put/get/delete; conditional version; typical 1 KB, max 1 MB"]},
+    {"title": "Targets", "points": ["Single-digit-ms regional p99; tens of TB; 1M ops/s"]},
+    {"title": "Availability", "points": ["Writes when quorum reachable; tune consistency per request"]}
+  ]}
+/>
 
 <Choice
   id="kv-cap"
@@ -57,10 +64,15 @@ estimatedMinutes: 40
 
 <Step id="estimates" title="Estimates">
 
-- **Data**: 10B keys × ~1 KB ≈ 10 TB, **30 TB** with N = 3.
-- **Nodes for storage**: 30 TB ÷ ~2 TB usable each (room for compaction) ≈ **15**.
-- **Nodes for throughput**: 1M ops/s with 70% reads at R = 2 and 30% writes sent to N = 3 replicas ≈ 2.3M replica operations/s ÷ ~100k per node ≈ **23**. Plan about 30 for headroom and node loss.
-- **Joining a node**: consistent hashing moves about 1/31 of the data (about 1 TB), where hash mod N would move almost all of it.
+<Stats
+  title="key-value-store - Estimates"
+  items={[
+    {"label": "Data", "value": "30 TB", "sub": "10B * 1 KB * N=3"},
+    {"label": "Storage nodes", "value": "15", "sub": "30 TB / 2 TB usable"},
+    {"label": "Throughput nodes", "value": "23 minimum", "sub": "1M * (0.7*2 + 0.3*3) / 100k; plan 30"},
+    {"label": "Join transfer", "value": "1 TB", "sub": "New node 31: about 1/31 of data"}
+  ]}
+/>
 
 <Choice
   id="kv-nodes"
@@ -77,11 +89,15 @@ estimatedMinutes: 40
 
 <Step id="api" title="API">
 
-- `GET /kv/{key}?consistency=quorum|one` → 200 with value and version, or 404.
-- `PUT /kv/{key}` with an optional `If-Match: version` → 200 with the new version, or 409 on a version mismatch.
-- `DELETE /kv/{key}` → writes a **tombstone**, garbage-collected after a grace period (10 days here) so a replica that was down cannot resurrect the value.
-
-A plain put is an idempotent overwrite, so the coordinator can retry it safely after a timeout.
+<Timeline
+  title="key-value-store - API"
+  events={[
+    {"at": "Read", "label": "GET /kv/{key}?consistency=quorum or one; value/version or 404"},
+    {"at": "Write", "label": "PUT /kv/{key}; optional If-Match; mismatch 409"},
+    {"at": "Delete", "label": "Tombstone; 10-day grace prevents resurrection"},
+    {"at": "Retry", "label": "Plain put is idempotent overwrite"}
+  ]}
+/>
 
 <Choice
   id="tombstones"
@@ -98,7 +114,14 @@ A plain put is an idempotent overwrite, so the coordinator can retry it safely a
 
 <Step id="data-model" title="Placing keys on a ring">
 
-Each key hashes to a token on a ring. Its N = 3 replicas are the next three **distinct** nodes clockwise: the preference list. Each physical node owns many **virtual nodes** (64 here, 256 by default in Cassandra), so load spreads evenly and a failed node's keys spread across all survivors instead of one neighbour. Try it: add and remove nodes and watch how few keys move.
+<Timeline
+  title="key-value-store - Placing keys on a ring"
+  events={[
+    {"at": "Placement", "label": "Hash to ring; next 3 distinct nodes replicate key"},
+    {"at": "Virtual nodes", "label": "64 here; spread load and failure ownership"},
+    {"at": "Membership", "label": "Small key fraction moves; avoid hash modulo N"}
+  ]}
+/>
 
 <HashRingPlayer seed={7} />
 
@@ -117,7 +140,25 @@ Each key hashes to a token on a ring. Its N = 3 replicas are the next three **di
 
 <Step id="high-level" title="High-level design">
 
-Clients reach stateless **coordinators** through a load balancer. A coordinator hashes the key, sends the write to all N replicas and acknowledges after W of them reply; a read asks R replicas and returns the highest version. **Hinted handoff** writes to the next healthy node when an owner is down and hands the data back later; **read repair** fixes stale replicas a read touches.
+<Flow
+  title="key-value-store - High-level design"
+  nodes={[
+    {"id": "0", "label": "Client", "kind": "client", "x": 10, "y": 25},
+    {"id": "1", "label": "Balancer", "kind": "loadBalancer", "x": 50, "y": 25},
+    {"id": "2", "label": "Coordinator", "kind": "service", "x": 90, "y": 25},
+    {"id": "3", "label": "Replica A", "kind": "kvStore", "x": 10, "y": 80},
+    {"id": "4", "label": "Replica B", "kind": "kvStore", "x": 50, "y": 80},
+    {"id": "5", "label": "Replica C", "kind": "kvStore", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "request"},
+    {"from": "1", "to": "2", "label": "least connections"},
+    {"from": "2", "to": "3", "label": "replicate"},
+    {"from": "2", "to": "4", "label": "replicate"},
+    {"from": "2", "to": "5", "label": "replicate"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="put-path"
@@ -137,7 +178,15 @@ Clients reach stateless **coordinators** through a load balancer. A coordinator 
 
 <Step id="deep-dive" title="Deep dive: quorums">
 
-If **R + W > N**, every read set overlaps the last write set in at least one replica, so a read sees the latest acknowledged write. N = 3, R = W = 2 tolerates one slow or dead replica on both paths; R = 1, W = 3 makes reads fast and writes fragile; **R = W = 1 is fastest but only eventually consistent**. Quorum overlap is not linearizability: concurrent writes still produce siblings that need versions (vector clocks in Dynamo, timestamps in Cassandra).
+<Compare
+  title="key-value-store - Deep dive: quorums"
+  sides={[
+    {"title": "R=2 W=2 N=3", "points": ["Overlap; tolerate one failed replica; concurrent writes need versions"]},
+    {"title": "R=1 W=3", "points": ["Fast reads; fragile writes"]},
+    {"title": "R=1 W=1", "points": ["Fast; eventual consistency"]},
+    {"title": "Boundary", "points": ["Overlap alone does not imply linearizability"]}
+  ]}
+/>
 
 <Choice
   id="quorum-pick"
@@ -155,9 +204,14 @@ If **R + W > N**, every read set overlaps the last write set in at least one rep
 
 <Step id="alternatives" title="Alternatives">
 
-- **Weak quorums, R = W = 1.** Lowest latency, but run the baseline against it: the engine reports stale reads — acknowledged writes invisible to later reads.
-- **Leader per shard with Raft or Paxos** (etcd, TiKV, Spanner). Linearizable and conflict-free, but writes wait for a majority and stall during elections, and a minority partition cannot write.
-- **Round-robin load balancing** in front of the coordinators. Ignores how busy each coordinator is, which matters in the partition scenario below.
+<Compare
+  title="key-value-store - Alternatives"
+  sides={[
+    {"title": "Weak quorum", "points": ["R=W=1 produces stale reads"]},
+    {"title": "Leader per shard", "points": ["Raft/Paxos linearizability; elections pause writes; minority cannot write"]},
+    {"title": "Round robin", "points": ["Stuck coordinators still receive half requests"]}
+  ]}
+/>
 
 <Choice
   id="raft-tradeoff"
@@ -174,9 +228,32 @@ If **R + W > N**, every read set overlaps the last write set in at least one rep
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **5% packet loss** between a coordinator and the ring: lost requests time out after 30 ms and are retried with backoff. Put is an idempotent overwrite, so retries are safe and nearly every request succeeds; the tail gets fatter.
-- **The ring slows 6×** (compaction or a noisy neighbour): p99 roughly quadruples but everything finishes inside the 200 ms deadline, because the ring has spare workers.
-- **Coordinator 2 loses its path to the ring** but still passes health checks — a gray failure. The **least-connections** balancer rescues most requests: stuck requests keep coordinator 2's connection count high, so new requests go to coordinator 1. With round robin, half of all requests would keep falling into the hole.
+<Timeline
+  title="key-value-store - Packet loss"
+  events={[
+    {"at": "Inject", "label": "5% loss", "tone": "bad"},
+    {"at": "Observe", "label": "30 ms timeouts; backoff retries", "tone": "warn"},
+    {"at": "Recover", "label": "Idempotent puts succeed; tail grows", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="key-value-store - Ring slowdown"
+  events={[
+    {"at": "Inject", "label": "Latency x6", "tone": "bad"},
+    {"at": "Observe", "label": "Spare workers absorb delay", "tone": "warn"},
+    {"at": "Recover", "label": "p99 about x4; below 200 ms deadline", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="key-value-store - Gray coordinator"
+  events={[
+    {"at": "Inject", "label": "Coordinator 2 loses ring path but passes health checks", "tone": "bad"},
+    {"at": "Observe", "label": "Stuck connection count rises", "tone": "warn"},
+    {"at": "Recover", "label": "Least-connections steers traffic to coordinator 1", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="gray-coordinator"
@@ -193,7 +270,16 @@ If **R + W > N**, every read set overlaps the last write set in at least one rep
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: consistent-hash ring with virtual nodes, N = 3 and R = W = 2 by default with per-request overrides, hinted handoff and read repair for availability, Merkle-tree anti-entropy for keys nobody reads, tombstones with a grace period. Risks: compaction-induced latency, hot keys on one preference list, gray failures. Then score each stage from 1 to 4.
+<Timeline
+  title="key-value-store - Wrap up"
+  events={[
+    {"at": "Repair", "label": "Hinted handoff, read repair, Merkle anti-entropy"},
+    {"at": "Delete", "label": "Tombstones outlive replica outages"},
+    {"at": "Watch", "label": "Compaction, hot keys, gray failures; default N=3, R=W=2"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="kv-hot-key"

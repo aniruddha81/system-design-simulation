@@ -39,13 +39,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down exchange fairness and determinism">
 
-A stock exchange matching engine is the ultimate test of **deterministic ordering**. Every millisecond, market makers and retail brokers submit limit orders, market orders, and cancellations. Regulators and traders require two ironclad guarantees:
-1. **Price-time priority (FIFO)**: the highest bid (buy) and lowest ask (sell) always match first; among orders at the same price, **the order sequenced earlier must fill first**.
-2. **Determinism**: given the exact same sequence of input commands, any replica of the matching engine must produce the exact same trades and order book state down to the last share.
-
-**Functional**: accept `NewOrderSingle` (`BUY`/`SELL`, `symbol`, integer `priceTicks`, `qty`, `clOrdId`) and `OrderCancelRequest`; match crossing orders immediately; emit `ExecutionReport` fills to the counterparties and L1/L2 market data updates to subscribers.
-
-**Non-functional**: sub-millisecond to low-millisecond matching latency; **zero out-of-order executions (`orderingViolated`)** per symbol; **idempotent order entry** on `clOrdId`; and instant failover without losing a single sequenced command.
+<Compare title="stock-exchange / requirements" sides={[{"title": "Price-time priority", "points": ["Best price first; FIFO within price; deterministic replay"]}, {"title": "Order entry", "points": ["Integer ticks; clOrdId dedup; fills/cancels; no lost sequenced commands"]}]} />
 
 <Choice
   id="exchange-why-not-db"
@@ -62,11 +56,7 @@ A stock exchange matching engine is the ultimate test of **deterministic orderin
 
 <Step id="estimates" title="Show that the entire order book fits in L3 cache and RAM">
 
-Across **8,000 listed symbols** during a **6.5-hour (23,400 s) trading day**:
-
-- **Order & cancel volume**: 5 billion messages/day ÷ 23,400 s ≈ **210,000 messages/s** average, peaking at **~1,000,000 messages/s** at the 9:30 AM open and 4:00 PM close. (Note: **85–90% of all messages are cancellations and replacements** from market makers!)
-- **Active resting orders in the book**: ~10 million open orders across all symbols. At **64 bytes per `OrderNode`** (`orderId`, `priceTicks`, `remainingQty`, `prev*`, `next*`, `participantId`), the entire exchange's resting order book is `10M × 64 B =` **640 MB of RAM** — or under **80 KB per symbol** (fits inside L2/L3 CPU cache!).
-- **Sequencer log**: 5B messages × 64 B binary frame ≈ **320 GB/day**, sequential append.
+<Stats title="stock-exchange / estimates" items={[{"label": "Messages/s", "value": "210k", "sub": "5B / 23,400s; ~1M peak"}, {"label": "Cancels/replacements", "value": "85-90%", "sub": "Dominant operation"}, {"label": "Resting order book", "value": "640 MB", "sub": "10M / 64 B; ~80 KB/symbol average"}, {"label": "Sequencer log/day", "value": "320 GB", "sub": "5B / 64 B"}]} />
 
 <Choice
   id="exchange-book-memory"
@@ -83,12 +73,7 @@ Across **8,000 listed symbols** during a **6.5-hour (23,400 s) trading day**:
 
 <Step id="api" title="Design the order gateway and market data protocols">
 
-Real exchanges use compact binary protocols (FIX / SBE / Nasdaq OUCH for order entry; ITCH over UDP multicast for market data), which we map to two simulated endpoints:
-- `POST /v1/orders` (`NewOrderSingle`): `{ clOrdId, symbol, side: "BUY"|"SELL", priceTicks, qty }` → deduplicated on `clOrdId`, checked against pre-trade risk limits, sequenced, and matched.
-- `DELETE /v1/orders/{ordId}` (`OrderCancelRequest`): removes the resting quantity from the book in $O(1)$ time.
-- `GET /v1/marketdata/{symbol}/book`: returns top-of-book (L1) and price-level depth (L2), served from the low-latency market data cache fed by the matching engine.
-
-Always represent prices as **integer ticks** (e.g., `priceTicks = 18542` for `\$185.42` at a `\$0.01` tick size), never IEEE 754 floats (`0.1 + 0.2 = 0.30000000000000004`), so arithmetic is exact and deterministic across every CPU.
+<Compare title="stock-exchange / api" sides={[{"title": "POST /v1/orders; DELETE /v1/orders/{ordId}", "points": ["NewOrderSingle / cancel; risk-check, dedup, sequence"]}, {"title": "GET /v1/marketdata/{symbol}/book", "points": ["L1/L2; FIX/SBE/OUCH entry, ITCH data; integer priceTicks"]}]} />
 
 <Choice
   id="exchange-integer-ticks"
@@ -105,12 +90,7 @@ Always represent prices as **integer ticks** (e.g., `priceTicks = 18542` for `\$
 
 <Step id="data-model" title="Build an O(1) in-memory limit order book">
 
-Because 90% of messages are cancels and matches always happen at the best bid/ask, every book operation must be $O(1)$:
-1. **Two sides (`bids` sorted descending, `asks` sorted ascending)**: each price maps to a `PriceLevel` struct holding `totalVolume` and the `head`/`tail` pointers of a **doubly-linked list** of `OrderNode`s in FIFO sequence order.
-2. **Fast `orderId` lookup**: a pre-allocated hash map (or flat array indexed by sequence slot) maps `orderId → OrderNode*`.
-- **Add resting limit order**: append `OrderNode` to the tail of its `PriceLevel` doubly-linked list and insert `orderId → OrderNode*` in the map — **$O(1)$** once the price level is located.
-- **Match incoming order**: walk `head` of the best opposite `PriceLevel` list, decrementing `qty` and unlinking filled `head` nodes — **$O(1)$ per resting order filled**.
-- **Cancel by `orderId`**: look up `OrderNode*` in the hash map and splice out `node->prev` and `node->next` in the doubly-linked list — **strictly $O(1)$** regardless of whether 50,000 orders sit at that price!
+<Compare title="stock-exchange / data-model" sides={[{"title": "Price levels", "points": ["Sorted bids/asks; FIFO doubly-linked order lists"]}, {"title": "orderId map", "points": ["O(1) unlink/cancel; append after locating level; match O(1) per filled node"]}]} />
 
 <Choice
   id="exchange-cancel-complexity"
@@ -127,9 +107,7 @@ Because 90% of messages are cancels and matches always happen at the best bid/as
 
 <Step id="high-level" title="Connect gateways, the sequencer log, and the matching engine">
 
-1. **Order Gateways (`gw1`, `gw2`)**: terminate client connections, deduplicate `clOrdId` in `dedup`, and verify pre-trade risk limits.
-2. **Deterministic Sequencer Log (`sequencer`)**: partitioned by `symbol` (`orderedByKey: true`). Assigns a gapless monotonic sequence number to every command and replicates it to a consensus quorum before delivery.
-3. **Single-Threaded Matching Engines (`matcher`)**: each partition is consumed in strict sequence order by its matching engine, which updates the in-memory book and writes execution reports and book snapshots to `bookstore` and `mdcache`.
+<Flow title="stock-exchange / high-level" nodes={[{"id": "0", "label": "Gateways", "kind": "apiGateway", "x": 10, "y": 18}, {"id": "1", "label": "Dedup", "kind": "dedupStore", "x": 50, "y": 18}, {"id": "2", "label": "Sequencer", "kind": "queue", "x": 90, "y": 18}, {"id": "3", "label": "Matcher", "kind": "worker", "x": 10, "y": 82}, {"id": "4", "label": "Book store", "kind": "database", "x": 50, "y": 82}, {"id": "5", "label": "Market cache", "kind": "cache", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "clOrdId"}, {"from": "0", "to": "2", "label": "risk checked"}, {"from": "2", "to": "3", "label": "symbol order"}, {"from": "3", "to": "4", "label": "reports / snapshots"}, {"from": "3", "to": "5", "label": "market updates"}]} height={300} caption={"Replicate the input log before delivery. One ordered matching loop per symbol partition; market-data readers are decoupled."} />
 
 <Ordering
   id="exchange-order-path"
@@ -148,15 +126,9 @@ Because 90% of messages are cancels and matches always happen at the best bid/as
 
 <Step id="deep-dive" title="Deep dive: price-time priority and deterministic state machines">
 
-Step through the limit order book and price-time matching algorithm directly in the interactive player below:
+<Compare title="stock-exchange / deep-dive" sides={[{"title": "One ordered loop/symbol", "points": ["Sequence 101 executes before 102; replicas replay identical commands"]}, {"title": "Scale across symbols", "points": ["Preallocated ring; no I/O in loop; concurrent same-symbol workers break fairness"]}]} />
 
 <MatchingPlayer />
-
-### Why single-threaded beats multi-threaded for a symbol
-If 8 worker threads concurrently pull orders for `AAPL` from a queue:
-- Even a 1-millisecond pause or lock stall on Thread 1 (holding Sequence #101: `BUY 100 AAPL @ $200`) lets Thread 2 (holding Sequence #102: `BUY 100 AAPL @ $200`) reach the order book first and steal the fill!
-- That violates price-time priority (`orderingViolated` in the simulator) and means two replicas of the engine will produce **different trades** from the same input log.
-- Instead, follow the **LMAX Disruptor** pattern: pin one single-threaded matching loop per symbol shard to a dedicated CPU core with zero locks, zero heap allocations (pre-allocated ring buffer), and zero I/O in the loop. One core executes ~2 million matches/s, and symbols scale horizontally across cores (`AAPL..D` on Core 1, `E..L` on Core 2).
 
 <Choice
   id="exchange-determinism-bug"
@@ -173,9 +145,7 @@ If 8 worker threads concurrently pull orders for `AAPL` from a queue:
 
 <Step id="alternatives" title="Compare the alternatives">
 
-- **Concurrent workers with variable latency and short visibility timeouts (`exchange-unordered-workers`)**: runnable in the simulator! When `matcher` runs with `concurrency: 8`, bimodal latency (`100 µs` vs `4,000 µs`), and a `1 ms` visibility timeout on `hot-symbol`, fast orders overtake slow/redelivered orders on the same symbol and trigger **`orderingViolated`**.
-- **Synchronous SQL matching (`exchange-sql-matching`)**: runnable in the simulator. Matching via indexed SQL queries and writes saturates the database and drops goodput below 70%.
-- **Active-active state machine replication vs post-match DB replication**: replicating the 64-byte input command at the sequencer before matching is smaller, faster, and guarantees the hot standby has the exact in-memory book ready for sub-millisecond takeover.
+<Compare title="stock-exchange / alternatives" sides={[{"title": "exchange-unordered-workers", "points": ["Overtaking/redelivery violates orderingViolated"]}, {"title": "exchange-sql-matching", "points": ["DB saturates; <70% goodput"]}, {"title": "Replicated input log", "points": ["Standby replays commands before takeover"]}]} />
 
 <Choice
   id="exchange-why-ordering-violated"
@@ -192,9 +162,11 @@ If 8 worker threads concurrently pull orders for `AAPL` from a queue:
 
 <Step id="failures" title="Run the failure scenarios">
 
-1. **Hot earnings symbol (`hot-symbol`)**: 80% of all order traffic targets a single ticker symbol. The reference design processes the symbol's partition in strict sequence order with zero `orderingViolated` errors and >99% goodput (whereas the concurrent-worker alternative fails with `orderingViolated`).
-2. **Market open burst (`market-open-burst`)**: traffic doubles at the 9:30 AM opening bell. Gateways, sequencer, and in-memory matcher absorb 6,000 rps well inside the 200 ms deadline.
-3. **Market data cache restart (`md-cache-flush`)**: `mdcache` flushes at t = 1.5 s. Order matching is completely decoupled from market data readers and continues without a blip while the cache refills.
+<Timeline title="stock-exchange / hot-symbol: 80%" events={[{"at": "Inject", "label": "hot-symbol: 80%", "tone": "warn"}, {"at": "Observe", "label": "Reference preserves FIFO; >99% fixture goodput"}, {"at": "Result", "label": "Unordered workers trigger orderingViolated"}]} />
+
+<Timeline title="stock-exchange / market-open-burst: 2x" events={[{"at": "Inject", "label": "market-open-burst: 2x", "tone": "warn"}, {"at": "Observe", "label": "Fixture reaches 6,000 rps"}, {"at": "Result", "label": "In-memory path meets 200ms fixture deadline"}]} />
+
+<Timeline title="stock-exchange / md-cache-flush: t=1.5s" events={[{"at": "Inject", "label": "md-cache-flush: t=1.5s", "tone": "warn"}, {"at": "Observe", "label": "Market cache restarts"}, {"at": "Result", "label": "Matching continues while reader cache refills"}]} />
 
 <Choice
   id="exchange-standby-failover"
@@ -211,9 +183,7 @@ If 8 worker threads concurrently pull orders for `AAPL` from a queue:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Close your exchange design with the operational guardrails that real venues enforce:
-- **Cancel-on-disconnect & kill switch**: if a market maker's gateway session drops, automatically inject `CancelAll` commands into the sequencer for their open quotes so stale quotes are not picked off while they are offline.
-- **Price collars & circuit breakers (LULD)**: reject fat-finger orders more than X% away from the reference price at the gateway, and pause matching on a symbol if its price moves beyond regulatory bands within 5 minutes.
+<Compare title="stock-exchange / wrap-up" sides={[{"title": "Cancel-on-disconnect", "points": ["Sequence CancelAll; participant kill switch"]}, {"title": "Price protection", "points": ["Gateway collars; per-symbol circuit breakers"]}]} />
 
 <Choice
   id="exchange-cancel-on-disconnect"

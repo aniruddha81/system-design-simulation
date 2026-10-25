@@ -39,11 +39,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-A collaborative editor lets dozens of users type into the same document simultaneously, apply local keystrokes with **zero perceived latency**, and converge to the **exact same document text** once all operations arrive.
-
-**Functional**: real-time concurrent text editing; live collaborator cursors and selections; offline edits that merge cleanly on reconnect; version history and point-in-time document restore.
-
-**Non-functional**: optimistic local typing (0 ms UI wait) with remote propagation under ~150 ms; **strong eventual convergence**; zero lost or duplicated operations across flaky WebSocket reconnects; cap active concurrent writers per document at ~100 while scaling read-only viewers to thousands.
+<Compare
+  title="google-docs - Pin down what you are building"
+  sides={[
+    {"title": "Features", "points": ["Concurrent editing, cursors, offline merge, version restore"]},
+    {"title": "Targets", "points": ["0 ms local wait; remote propagation <150 ms"]},
+    {"title": "Safety", "points": ["Eventual convergence; no lost/duplicate ops; about 100 writers, thousands of viewers"]}
+  ]}
+/>
 
 <Choice
   id="optimistic-typing-why"
@@ -60,12 +63,15 @@ A collaborative editor lets dozens of users type into the same document simultan
 
 <Step id="estimates" title="Work out the numbers">
 
-Assume **5 million concurrent active editors** who send a batched operation every **2 seconds**:
-
-- **Operation write rate**: 5M ÷ 2 s ≈ **2.5 million ops/s** globally (~150 B per op).
-- **Operation log growth**: 2.5M/s × 150 B × 86,400 s ≈ **32 TB/day** of raw operations before compaction.
-- **Snapshot compaction**: compacting every ~100–500 operations into a materialised snapshot (~50 KB) in object storage bounds document load time to **1 snapshot read + < 100 tail ops**.
-- **Cursor broadcast fan-out**: $K$ editors in one document moving cursors 5 times/s generate $5 \times K^2$ messages/s ($K = 50 \Rightarrow 12,500$ messages/s per hot doc). Because cursor positions are obsolete 200 ms later, they are broadcast in memory over WebSockets and **never written to disk**.
+<Stats
+  title="google-docs - Work out the numbers"
+  items={[
+    {"label": "Operations", "value": "2.5M/s", "sub": "5M editors / 2 s; 150 B/op"},
+    {"label": "Log", "value": "32 TB/day", "sub": "2.5M * 150 B * 86,400"},
+    {"label": "Load", "value": "Snapshot + tail", "sub": "Compact every 100-500 ops; 50 KB snapshot; target <100 tail ops"},
+    {"label": "Cursor fan-out", "value": "12,500/s/doc", "sub": "5 * 50^2; ephemeral, never written to disk"}
+  ]}
+/>
 
 <Choice
   id="cursor-traffic-math"
@@ -82,11 +88,15 @@ Assume **5 million concurrent active editors** who send a batched operation ever
 
 <Step id="api" title="Design the protocol and API">
 
-- `WS op { docId, opId, baseRev, delta }` → server transforms `delta` against any operations committed since `baseRev`, appends it as `serverRev`, replies `ack { opId, serverRev }` to the sender, and broadcasts `{ serverRev, author, transformedDelta }` to all other session peers.
-- `GET /v1/documents/{docId}` → `200 { snapshotRev, snapshotContent, tailOps[] }` (where `tailOps` are operations with `rev > snapshotRev`).
-- `WS presence { docId, cursor, selection }` → best-effort broadcast to connected peers.
-
-In **Jupiter-style OT** (used by Google Docs), each client keeps **at most one unacknowledged operation batch in flight** to the server while buffering newer local keystrokes, simplifying transformation to a 1D server-revision history instead of an arbitrary $N$-way state space.
+<Timeline
+  title="google-docs - Design the protocol and API"
+  events={[
+    {"at": "Edit", "label": "WS op: docId, opId, baseRev, delta"},
+    {"at": "Commit", "label": "Transform since baseRev; append serverRev; ack + broadcast"},
+    {"at": "Load", "label": "GET /v1/documents/{docId} -> snapshot + tailOps"},
+    {"at": "Presence", "label": "WS cursor/selection; best effort; one unacked OT batch/client"}
+  ]}
+/>
 
 <Choice
   id="jupiter-single-inflight"
@@ -103,9 +113,14 @@ In **Jupiter-style OT** (used by Google Docs), each client keeps **at most one u
 
 <Step id="data-model" title="Model the data">
 
-- **oplog**: keyed by `(docId, rev)`, storing `{ opId, authorId, delta, ts }`. Partitioned by `docId` so loading the tail of operations since the last snapshot is a single contiguous partition range read.
-- **snapshots**: keyed by `(docId, snapshotRev)` in object storage, holding compacted document state so opening an old document never replays 2 million historical keystrokes from `rev = 0`.
-- **opdedup**: keyed by `(docId, opId)` with a 24h TTL so a client retrying after a dropped WebSocket connection does not apply its buffered insert twice.
+<Timeline
+  title="google-docs - Model the data"
+  events={[
+    {"at": "oplog", "label": "docId + rev -> opId, authorId, delta, timestamp"},
+    {"at": "Snapshots", "label": "docId + snapshotRev -> compacted state"},
+    {"at": "opdedup", "label": "docId + opId; 24-hour TTL"}
+  ]}
+/>
 
 <Choice
   id="snapshot-plus-tail"
@@ -122,12 +137,25 @@ In **Jupiter-style OT** (used by Google Docs), each client keeps **at most one u
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-In the reference design:
-
-1. Clients connect via **WebSocket gateways** (`gw1`, `gw2`) behind a **consistent-hash load balancer** so collaborators on `docId` route to the active **Document session service** (`collab`).
-2. On `edit`, `collab` checks **Client opId dedup** (`opdedup`), appends the operation to the **Operation log store** (`opstore`), and publishes a compaction trigger to the **Snapshot compaction queue** (`compaction`).
-3. **Snapshot compactors** (`compactor`) asynchronously fold tail operations into the **Document snapshots** object store (`snapstore`).
-4. On `load`, `collab` checks the **Active document cache** (`doccache`) and on a miss loads the latest snapshot from `snapstore` plus tail operations from `opstore`.
+<Flow
+  title="google-docs - Draw the high-level architecture"
+  nodes={[
+    {"id": "0", "label": "Gateway", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Session", "kind": "service", "x": 50, "y": 25},
+    {"id": "2", "label": "Op dedup", "kind": "dedupStore", "x": 90, "y": 25},
+    {"id": "3", "label": "Op log", "kind": "database", "x": 10, "y": 80},
+    {"id": "4", "label": "Compact", "kind": "queue", "x": 50, "y": 80},
+    {"id": "5", "label": "Snapshots", "kind": "objectStore", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "hash docId"},
+    {"from": "1", "to": "2", "label": "opId"},
+    {"from": "1", "to": "3", "label": "append"},
+    {"from": "1", "to": "4", "label": "trigger"},
+    {"from": "4", "to": "5", "label": "worker snapshot"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="edit-and-compact-flow"
@@ -147,15 +175,14 @@ In the reference design:
 
 <Step id="deep-dive" title="Deep dive: Operational Transformation vs Sequence CRDTs">
 
-When Alice and Bob start from `"BCD"` (`rev 1`):
-- Alice inserts `"A"` at index `0` $\rightarrow$ `"ABCD"`.
-- Concurrently, Bob deletes index `1` (`"C"`) $\rightarrow$ `"BD"`.
-
-If Alice's `"insert(0, 'A')"` is applied first on the server (`rev 2`), Bob's `"delete(1)"` arrives referencing `baseRev = 1`. Because Alice inserted a character **before** index `1`, `"C"` has shifted to index `2`!
-- **Operational Transformation (OT)** shifts Bob's index (`1 + 1 = 2`) before applying it, producing `"ABD"` on all replicas.
-- **Sequence CRDTs (RGA / Yjs / Automerge)** instead assign every character a globally unique, immutable ID `(clientId, lamportClock)` and specify insertions relative to the **ID of the left neighbour** (not a mutable integer index) and deletions as a tombstone on that ID. Because IDs never shift, operations commute in any order without a central server!
-
-Experiment with **RGA (Sequence CRDT)** and **Server-ordered OT** in the interactive player below:
+<Compare
+  title="google-docs - Deep dive: Operational Transformation vs Sequence CRDTs"
+  sides={[
+    {"title": "Concurrent edits", "points": ["BCD: Alice inserts A at 0; Bob deletes C at 1"]},
+    {"title": "OT", "points": ["After Alice, transform delete 1 -> 2; both converge to ABD"]},
+    {"title": "Sequence CRDT", "points": ["Stable character IDs, neighbour links, tombstones; deterministic merge"]}
+  ]}
+/>
 
 <CrdtPlayer />
 
@@ -174,9 +201,15 @@ Experiment with **RGA (Sequence CRDT)** and **Server-ordered OT** in the interac
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **No operation deduplication (`docs-no-dedup`)**: in the simulator, running the `lost-acks` scenario against the alternative without `opdedup` causes retried operations to append twice, triggering a `duplicateEffect` violation.
-- **Full snapshot write on every edit (`docs-sync-snapshot`)**: writing the full snapshot to object storage synchronously on every edit slows down writes and drops goodput below 98%.
-- **OT vs CRDT trade-off**: Google Docs uses server-ordered OT (small payloads, no tombstones, requires a central session server per doc); Figma and Yjs-based editors use CRDTs (natural offline/peer-to-peer merges, at the cost of tracking character IDs and periodically pruning tombstones).
+<Compare
+  title="google-docs - Evaluate alternatives"
+  sides={[
+    {"title": "docs-no-dedup", "points": ["lost-acks causes duplicateEffect"]},
+    {"title": "docs-sync-snapshot", "points": ["Full synchronous snapshots; goodput <98%"]},
+    {"title": "Server-ordered OT", "points": ["Small payloads; central session server"]},
+    {"title": "Sequence CRDT", "points": ["Offline merges; character IDs and tombstones need management"]}
+  ]}
+/>
 
 <Choice
   id="crdt-tradeoff"
@@ -193,11 +226,32 @@ Experiment with **RGA (Sequence CRDT)** and **Server-ordered OT** in the interac
 
 <Step id="failures" title="Run the failure scenarios">
 
-Run the three failure scenarios in the simulator:
+<Timeline
+  title="google-docs - lost-acks"
+  events={[
+    {"at": "Inject", "label": "gw1 loses responses for 80 ms", "tone": "bad"},
+    {"at": "Observe", "label": "Retry same opId after durable append", "tone": "warn"},
+    {"at": "Recover", "label": "opdedup prevents repeated insertion", "tone": "ok"}
+  ]}
+/>
 
-- **Lost WebSocket acknowledgements (`lost-acks`)**: responses from `collab` to `gw1` drop for 80 ms after operations are already recorded in `opstore`. Gateway 1 retries with the same `opId`; `opdedup` suppresses duplicates (`clean: true`).
-- **Compactor crash (`compactor-down`)**: `compactor` workers die for 700 ms. Live editing and loading continue at > 99% goodput because edits only need `opstore` and loads replay a slightly longer tail of operations until compactors catch up.
-- **Company all-hands doc (`all-hands-doc`)**: 30% of traffic targets one hot document. `doccache` serves loads and the consistent-hashed session service serialises edits in memory.
+<Timeline
+  title="google-docs - compactor-down"
+  events={[
+    {"at": "Inject", "label": "Compactors down 700 ms", "tone": "bad"},
+    {"at": "Observe", "label": "Loads replay longer tails", "tone": "warn"},
+    {"at": "Recover", "label": "Live edits/loads >99% goodput", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="google-docs - all-hands-doc"
+  events={[
+    {"at": "Inject", "label": "30% traffic targets one doc", "tone": "bad"},
+    {"at": "Observe", "label": "Cache serves loads", "tone": "warn"},
+    {"at": "Recover", "label": "Session serialises edits; cap active writers", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="too-many-writers"
@@ -214,11 +268,14 @@ Run the three failure scenarios in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Review the four pillars of your design:
-1. **Convergence engine**: single-server Jupiter OT (with single in-flight batch per client) or sequence CRDTs (RGA/Yjs).
-2. **Idempotent WAL + checkpoints**: append small operations keyed by `(docId, opId)` to `oplog` and compact asynchronously into `snapshots`.
-3. **Stateful session routing**: consistent-hash `docId` to one session owner with lease-based failover.
-4. **Separate ephemeral plane**: keep cursors and presence in memory and cap active editors per document.
+<Timeline
+  title="google-docs - Wrap up and self-assess"
+  events={[
+    {"at": "Converge", "label": "Jupiter OT or sequence CRDT"},
+    {"at": "Persist", "label": "Idempotent WAL; asynchronous snapshots"},
+    {"at": "Route", "label": "Lease-owned document sessions; keep presence ephemeral"}
+  ]}
+/>
 
 <Choice
   id="session-server-failover"

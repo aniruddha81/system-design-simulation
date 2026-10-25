@@ -39,9 +39,7 @@ estimatedMinutes: 30
 
 <Step id="requirements" title="Requirements">
 
-Users paste text (typically ~10 KB, up to 10 MB), get back an unguessable ID, and share the link. Pastes can expire (from ten minutes to never) or be **burn-after-read**. Signed-in users can list and delete their pastes.
-
-Non-functional: reads p99 under 200 ms for typical pastes, 99.9% read availability, and an acknowledged paste is never lost. Because storage grows forever, **cost per GB** is a first-class requirement.
+<Compare title="pastebin / requirements" sides={[{"title": "Share immutable text; list/delete owned pastes", "points": ["Expiry and burn-after-read"]}, {"title": "10 KB typical; 10 MB maximum", "points": ["p99 <200 ms; 99.9% reads; durable acknowledgements"]}]} />
 
 <Choice
   id="pastebin-question"
@@ -58,13 +56,7 @@ Non-functional: reads p99 under 200 ms for typical pastes, 99.9% read availabili
 
 <Step id="estimates" title="Estimates">
 
-Assume **10M new pastes a day** and **10 reads per paste**.
-
-- **Writes**: 10M ÷ 86,400 ≈ **116/s**, about 230/s at peak. **Reads**: about 1,160/s, 2,300/s at peak.
-- **Content**: 10M × 10 KB × 365 × 5 years ≈ **183 TB**. In an object store at $0.023/GB-month that is about $4k a month.
-- **Metadata**: 18B rows × ~300 B ≈ **5.5 TB**.
-- **Egress**: 2,300/s × 10 KB ≈ 23 MB/s at peak.
-- **Cache**: the hottest 20% of a day's reads is 0.2 × 100M × 10 KB ≈ **200 GB**. Each entry is 20× bigger than a short link, so size the cache in **bytes**, not entries.
+<Stats title="pastebin / estimates" items={[{"label": "New pastes/day", "value": "10M", "sub": "10 KB each; 10 reads/paste"}, {"label": "Writes/s", "value": "116", "sub": "230 peak"}, {"label": "Reads/s", "value": "1,160", "sub": "2,300 peak"}, {"label": "Content, 5 years", "value": "183 TB", "sub": "10M / 10 KB / 365 / 5"}, {"label": "Metadata", "value": "5.5 TB", "sub": "18B / 300 B"}, {"label": "Peak egress", "value": "23 MB/s", "sub": "2,300 / 10 KB"}, {"label": "Hot cache", "value": "200 GB", "sub": "20M / 10 KB; illustrative upper bound"}]} />
 
 <Choice
   id="cache-bytes"
@@ -81,11 +73,7 @@ Assume **10M new pastes a day** and **10 reads per paste**.
 
 <Step id="api" title="API">
 
-- `POST /v1/pastes` with `content`, `syntax`, `expiresIn`, `burnAfterRead` and an `Idempotency-Key` → **201** with the ID; **413** too large (rejected at the gateway before the body is read); **429** over quota.
-- `GET /p/{id}` → **200** text; **404**; **410** expired.
-- `DELETE /v1/pastes/{id}` → **204**: delete metadata, schedule the blob for deletion, invalidate caches.
-
-IDs are random 8-character base-62 strings (about 2 × 10¹⁴ values), never counters: pastes often contain secrets, so IDs must not be enumerable.
+<Compare title="pastebin / api" sides={[{"title": "POST /v1/pastes", "points": ["content, syntax, expiresIn, burnAfterRead; Idempotency-Key; 201/413/429"]}, {"title": "GET /p/{id}; DELETE /v1/pastes/{id}", "points": ["200/404/410; owner deletion invalidates caches"]}]} />
 
 <Choice
   id="paste-ids"
@@ -102,10 +90,7 @@ IDs are random 8-character base-62 strings (about 2 × 10¹⁴ values), never co
 
 <Step id="data-model" title="Data model: two stores">
 
-- **pastes** (database): `id`, `userId`, `title`, `syntax`, `blobKey`, `createdAt`, `expiresAt`, with indexes on `userId` and `expiresAt`. Small rows that need indexes.
-- **blobs** (object store): `blobKey → content`. Cheap per GB and designed for very high durability, but tens of milliseconds per read.
-
-**Write order matters.** Write the blob first, then the metadata. A crash in between leaves an unreferenced blob that a sweeper deletes. The opposite order can leave a paste whose content does not exist — a 404 for a paste the user was told was saved.
+<Compare title="pastebin / data-model" sides={[{"title": "Metadata database", "points": ["id, userId, blobKey, syntax, expiresAt; indexed owner/expiry"]}, {"title": "Object storage", "points": ["blobKey / content; write blob before metadata; sweep orphans"]}]} />
 
 <Ordering
   id="create-order"
@@ -124,9 +109,7 @@ IDs are random 8-character base-62 strings (about 2 × 10¹⁴ values), never co
 
 <Step id="high-level" title="High-level design">
 
-A load balancer spreads requests over stateless API servers. Reads go **cache → metadata → blob**: a hit returns the cached paste; a miss reads metadata, then the blob, then fills the cache. Pastes are immutable, so the cache never needs invalidating except on delete or expiry. Creates write the blob, then the metadata.
-
-Blob reads retry with exponential backoff and jitter. That is safe because a read has no side effects. The blob write does not retry here: without an idempotency key, a retried create could store a second copy.
+<Flow title="pastebin / high-level" nodes={[{"id": "0", "label": "Client", "kind": "client", "x": 10, "y": 18}, {"id": "1", "label": "API", "kind": "service", "x": 50, "y": 18}, {"id": "2", "label": "Cache", "kind": "cache", "x": 90, "y": 18}, {"id": "3", "label": "Metadata", "kind": "database", "x": 10, "y": 82}, {"id": "4", "label": "Content", "kind": "objectStore", "x": 50, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "requests"}, {"from": "1", "to": "2", "label": "lookup / fill"}, {"from": "1", "to": "3", "label": "miss: metadata"}, {"from": "3", "to": "4", "label": "blob pointer"}, {"from": "1", "to": "4", "label": "fetch / create"}]} height={300} caption={"Reads check cache, metadata, then blob. Creates persist blob before metadata; retries need idempotency."} />
 
 <Choice
   id="immutable-cache"
@@ -143,9 +126,7 @@ Blob reads retry with exponential backoff and jitter. That is safe because a rea
 
 <Step id="deep-dive" title="Deep dive: expiry and burn-after-read">
 
-**Expiry**: check `expiresAt` on every read and return 410, so expired pastes disappear immediately. A background job walks the `expiresAt` index in small batches and deletes metadata, then blobs. Object stores also offer lifecycle rules that delete by age, which removes most of the sweeper's work for fixed TTLs.
-
-**Burn-after-read** needs an atomic read-and-delete — a conditional delete on the metadata row. With a separate read and delete, two readers who arrive together can both see the paste.
+<Compare title="pastebin / deep-dive" sides={[{"title": "Expiry", "points": ["Check expiresAt on reads; return 410; indexed batch cleanup"]}, {"title": "Burn-after-read", "points": ["Atomic conditional metadata deletion selects one reader; bypass shared caches"]}]} />
 
 <Choice
   id="burn-race"
@@ -162,9 +143,7 @@ Blob reads retry with exponential backoff and jitter. That is safe because a rea
 
 <Step id="alternatives" title="Alternatives">
 
-- **Content in the database.** One system, one transaction, no orphans. Fine below a few TB; at 183 TB it means many more shards, slower backups and replicas that copy every byte.
-- **A CDN for public pastes.** Immutable public pastes cache perfectly at the edge. Private and burn-after-read pastes must bypass it, and deletes need a purge.
-- **No retries on blob reads.** Run the lossy-link scenario against it: every lost packet becomes a failed read, where the reference design's retries hide almost all of them.
+<Compare title="pastebin / alternatives" sides={[{"title": "Database content", "points": ["One transaction; simple at small scale; expensive large replicas"]}, {"title": "Public CDN", "points": ["Fast immutable reads; bypass private/burn pastes; purge deletes"]}, {"title": "No blob retries", "points": ["Lost packets become failed reads"]}]} />
 
 <Choice
   id="db-content"
@@ -181,9 +160,11 @@ Blob reads retry with exponential backoff and jitter. That is safe because a rea
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **The object store slows down 8×** (120 ms per read). Cache hits are untouched; misses slow down and API workers spend longer waiting, so their utilisation rises. A slow dependency consumes your concurrency even though it is not your CPU.
-- **Packet loss between one API server and the object store** (10%). Blob reads retry with backoff and nearly all succeed; a few creates fail because they do not retry.
-- **A paste goes viral** (40% of reads). It is served from the cache after the first read; the long tail is what keeps the object store busy.
+<Timeline title="pastebin / Object store 8x slower" events={[{"at": "Inject", "label": "Object store 8x slower", "tone": "warn"}, {"at": "Observe", "label": "120 ms misses occupy API workers"}, {"at": "Result", "label": "Cache hits stay fast"}]} />
+
+<Timeline title="pastebin / 10% object-link loss" events={[{"at": "Inject", "label": "10% object-link loss", "tone": "warn"}, {"at": "Observe", "label": "Retry reads with jitter"}, {"at": "Result", "label": "Creates without safe retry can fail"}]} />
+
+<Timeline title="pastebin / Viral paste: 40%" events={[{"at": "Inject", "label": "Viral paste: 40%", "tone": "warn"}, {"at": "Observe", "label": "Hot content stays cached"}, {"at": "Result", "label": "Long-tail misses reach object storage"}]} />
 
 <Choice
   id="retry-safety"
@@ -200,7 +181,9 @@ Blob reads retry with exponential backoff and jitter. That is safe because a rea
 
 <Step id="wrap-up" title="Wrap up">
 
-Name the risks: storage cost growth (lifecycle tiers for old pastes), abuse and leaked credentials (rate limits, size caps at the gateway, secret scanning), and the slow-dependency problem (timeouts shorter than your deadline, bounded retries). Then score each stage from 1 to 4 against the rubric.
+<Compare title="pastebin / wrap-up" sides={[{"title": "Watch", "points": ["Object latency, cache bytes, egress"]}, {"title": "Protect", "points": ["Expiry checks, atomic burn, safe retries"]}]} />
+
+Then score each stage from 1 to 4 against the rubric.
 
 <Choice
   id="slow-dependency"

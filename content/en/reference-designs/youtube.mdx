@@ -26,13 +26,11 @@ estimatedMinutes: 8
 
 <Step id="scale-driver" title="What drives the scale">
 
-Google reported roughly a billion daily YouTube watch-hours in February 2017. Watch-hours do not determine request rate without assumptions about segment duration, bitrate and client behavior.
+Illustrative budgets, not production topology. Public scale figures do not determine API throughput.
 
-This **illustrative** design chooses 1 million segment requests/s globally and a fixed 256 KiB segment. Two regional CDN caches each hold 100,000 segments. Misses reach a US origin shield, which fetches from a European object store. The region matrix charges 35 ms one-way propagation across the ocean. These are invented aggregate budgets, not YouTube's infrastructure.
+<Flow title={"Architecture paths"} nodes={[{"id": "0", "label": "Clients", "kind": "client", "x": 8.0, "y": 30}, {"id": "1", "label": "Regional CDN", "kind": "cdn", "x": 36.0, "y": 70}, {"id": "2", "label": "US shield", "kind": "cache", "x": 64.0, "y": 30}, {"id": "3", "label": "EU objects", "kind": "objectStore", "x": 92.0, "y": 70}]} edges={[{"from": "0", "to": "1"}, {"from": "1", "to": "2"}, {"from": "2", "to": "3"}]} height={280} caption={"Hits save origin work; edge egress remains. Two empty regional caches; stationary Zipf s=1.8 celebrity demand. Cross-ocean propagation: 35 ms one way."} />
 
-Bytes and cache locality drive delivery capacity. A hit saves origin work but still consumes edge egress. Both caches start empty; the celebrity scenario uses stationary Zipf s=1.8 from the start, rather than claiming to model a sudden popularity shift.
-
-[Public scale anchor](https://india.googleblog.com/2017/02/you-know-whats-cool-billion-hours.html). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+<Stats title={"Illustrative assumptions"} items={[{"label": "Global offered rate", "value": "1M segments/s"}, {"label": "Fixed response / payload", "value": "256 KiB"}, {"label": "Model choice", "value": "100k segments/cache"}]} />
 
 <Choice
   id="driver-check"
@@ -45,15 +43,19 @@ Bytes and cache locality drive delivery capacity. A hit saves origin work but st
 
 <Step id="test-remedy" title="Failure ladder and what to try">
 
-**Observed Failure ladder.** At 4x, the first rung is the US admission-to-CDN edge saturating; the next two rungs are the US and European client-to-admission edges saturating. These are engine edge resources, not evidence of YouTube network limits.
+Failure ladder: short model sweeps, not production limits. Change one budget in a copy; compare unchanged scenarios. Remedies remain unverified; correctness stays **unknown**.
 
-These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+<Timeline title={"Observed Failure ladder"} events={[{"at": "4x", "label": "US admission -> CDN saturates", "tone": "warn"}, {"at": "Next", "label": "US client -> admission saturates", "tone": "warn"}, {"at": "Next", "label": "EU client -> admission saturates", "tone": "warn"}]} />
 
-**What to try.** Try a smaller fixed segment or a lower offered segment rate and compare timely-success and edge utilisation. Separately enlarge cache capacity to observe origin load; that cannot remove the client-facing byte budget. Test the shield brownout and region outage after each change. Remedies are suggestions to test; none is verified here.
+<Stats title={"Sweep limits"} items={[{"label": "Independent levels", "value": "1x / 4x / 16x"}, {"label": "Per level", "value": "2 s + 8 s", "sub": "Warm-up + measurement; no drain"}, {"label": "Step", "value": "250 ms"}, {"label": "Steady state", "value": "Unstable", "sub": "Window < required 30 s"}, {"label": "Edge ceiling", "value": "~1M/s", "sub": "1 microsecond minimum service time"}]} />
 
-The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+<Timeline title={"Incident window"} events={[{"at": "0 s", "label": "Normal day; celebrity concentration starts"}, {"at": "4 s", "label": "Disturbance begins", "tone": "warn"}, {"at": "8 s", "label": "Disturbance ends"}]} />
 
-When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+<Compare title={"Scenario pack"} sides={[{"title": "Traffic", "points": ["Normal day", "Peak event: 4x", "Celebrity: 4x concentrated", "DDoS: 50x competing application traffic"]}, {"title": "Dependencies", "points": ["US region outage: regional entry retained", "No automatic evacuation", "Brownout: 10x service time", "DDoS does not identify legitimate users"]}]} />
+
+<Compare title={"Experiments to compare"} sides={[{"title": "Smaller segments", "points": ["Compare timely-success and edge utilisation", "Lower offered rate separately"]}, {"title": "Larger cache", "points": ["Compare origin load", "Still needs client-facing egress"]}]} />
+
+When integration is available, select this reference's normal-day pack in Scale mode. Check fidelity reasons before using disabled metrics.
 
 <Choice
   id="remedy-check"

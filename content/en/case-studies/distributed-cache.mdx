@@ -40,7 +40,13 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-get, set with TTL, and delete for keys up to 250 B and values up to 1 MB, used cache-aside by many services. Sub-millisecond p99. The requirement that drives everything: **the hit rate must stay high enough that the database never sees more than its capacity** — including right after a cache node restarts.
+<Compare
+  title="distributed-cache - requirements"
+  sides={[
+    {"title": "Operations", "points": ["get, set with TTL, delete; keys <=250 B; values <=1 MB"]},
+    {"title": "Guarantees", "points": ["Sub-ms p99; database remains below capacity after node loss"]}
+  ]}
+/>
 
 <Choice
   id="cache-real-constraint"
@@ -57,10 +63,15 @@ get, set with TTL, and delete for keys up to 250 B and values up to 1 MB, used c
 
 <Step id="estimates" title="Estimates">
 
-- **Load**: 1M reads/s at peak; the database can take ~50k reads/s, so the hit rate must stay **≥ 95%**.
-- **Working set**: 100M objects × ~1 KB ≈ 100 GB.
-- **Nodes**: 100 GB ÷ ~25 GB usable per node = 4 by memory; 1M ops/s ÷ ~200k per node = 5 by throughput. **Plan 8.**
-- **Losing one of 8 nodes**: an eighth of the keys miss at once, about **125k extra reads/s** — 2.5× the database's capacity unless misses are coalesced or the node is replaced warm.
+<Stats
+  title="distributed-cache - worked estimates"
+  items={[
+    {"label": "Peak reads", "value": "1M/s", "sub": "DB capacity 50k/s -> >=95% hits"},
+    {"label": "Working set", "value": "100 GB", "sub": "100M * 1 KB"},
+    {"label": "Nodes", "value": "8 planned", "sub": "Memory needs 4; throughput needs 5 at 200k ops/s/node"},
+    {"label": "Node loss", "value": "125k extra reads/s", "sub": "1/8 of keys; 2.5x DB capacity before mitigation"}
+  ]}
+/>
 
 <HitRateCalculator />
 
@@ -80,7 +91,15 @@ get, set with TTL, and delete for keys up to 250 B and values up to 1 MB, used c
 
 <Step id="api" title="API">
 
-`get(key)` returns the value or a miss; `set(key, value, ttl)` stores with a TTL that has random jitter, so keys written together do not expire together; `delete(key)` is what writers call after committing to the database. Keys are namespaced and versioned, such as `profile:v3:{id}`, so a schema change invalidates everything by changing the prefix.
+<Timeline
+  title="distributed-cache - API contract"
+  events={[
+    {"at": "Read", "label": "get(key) -> value or miss"},
+    {"at": "Fill", "label": "set(key, value, ttl); jitter expiration"},
+    {"at": "Write", "label": "Commit DB, then delete(key)"},
+    {"at": "Evolve", "label": "Version namespace: profile:v3:{id}"}
+  ]}
+/>
 
 <Choice
   id="ttl-jitter"
@@ -97,7 +116,14 @@ get, set with TTL, and delete for keys up to 250 B and values up to 1 MB, used c
 
 <Step id="data-model" title="Partitioning the keys">
 
-Clients, or a proxy such as mcrouter or twemproxy, map each key to a node with **consistent hashing**: adding or removing one of n nodes remaps about 1/n of the keys, where hash mod n remaps almost all of them and empties the whole cache at once. Redis Cluster uses 16,384 fixed hash slots assigned to nodes — a directory variant of the same idea.
+<Timeline
+  title="distributed-cache - data layout"
+  events={[
+    {"at": "Consistent hashing", "label": "About 1/n keys move on membership change"},
+    {"at": "Modulo hashing", "label": "Almost all keys move"},
+    {"at": "Redis Cluster", "label": "16,384 fixed slots mapped to nodes"}
+  ]}
+/>
 
 <HashRingPlayer seed={3} />
 
@@ -116,7 +142,22 @@ Clients, or a proxy such as mcrouter or twemproxy, map each key to a node with *
 
 <Step id="high-level" title="High-level design">
 
-Application servers run cache-aside: get from the cache; on a miss read the database and set the value. Writers update the database and then **delete** the key. The cache tier has many nodes partitioned by consistent hashing, possibly behind a proxy layer that handles routing, connection pooling and replication of hot keys.
+<Flow
+  title="distributed-cache - architecture"
+  nodes={[
+    {"id": "0", "label": "App", "kind": "client", "x": 10, "y": 25},
+    {"id": "1", "label": "Proxy", "kind": "service", "x": 50, "y": 25},
+    {"id": "2", "label": "Cache", "kind": "cache", "x": 90, "y": 25},
+    {"id": "3", "label": "Database", "kind": "database", "x": 10, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "route key"},
+    {"from": "1", "to": "2", "label": "get / set"},
+    {"from": "0", "to": "3", "label": "miss / write"},
+    {"from": "0", "to": "2", "label": "delete after commit"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="write-path"
@@ -135,9 +176,13 @@ Application servers run cache-aside: get from the cache; on a miss read the data
 
 <Step id="deep-dive" title="Deep dive: races, leases and hot keys">
 
-Cache-aside has a classic race: a reader misses and reads v1; a writer commits v2 and deletes the key; the reader then sets **v1**, which stays until TTL. Facebook's memcache paper fixes it with **leases**: a miss returns a token, a delete invalidates outstanding tokens, and a set with an invalid token is ignored. Leases also throttle the stampede, because only the token holder fills a key.
-
-**Hot keys** can exceed one node's capacity. Replicate them under several names and read a random one, keep a small in-process cache with a TTL of a second or two, or detect and pin them to dedicated replicas.
+<Compare
+  title="distributed-cache - mechanism"
+  sides={[
+    {"title": "Lease race defence", "points": ["Miss reads v1; writer commits v2 and invalidates token; reject stale fill"]},
+    {"title": "Hot keys", "points": ["Replicate names, tiny local TTL cache, or dedicated replicas"]}
+  ]}
+/>
 
 <Choice
   id="stale-set"
@@ -154,9 +199,14 @@ Cache-aside has a classic race: a reader misses and reads v1; a writer commits v
 
 <Step id="alternatives" title="Alternatives">
 
-- **No request coalescing.** In the simulated cell, with ~4 ms fills, it changes surprisingly little: most post-restart misses are distinct long-tail keys. Coalescing pays when one key is very hot relative to fill time — overlapping misses ≈ that key's request rate × fill time.
-- **Write-through (update on write).** Reads after writes hit at once, but concurrent writers can leave the older value cached.
-- **Replicated cache** (every node holds every key). No misses on node loss and perfect hot-key spreading, but capacity is one node's memory. Good for small, very hot data such as configuration.
+<Compare
+  title="distributed-cache - trade-offs"
+  sides={[
+    {"title": "Coalescing", "points": ["Overlapping misses = key rate * fill time; small benefit for distinct tail keys"]},
+    {"title": "Write-through", "points": ["Immediate hits; concurrent writers can cache older values"]},
+    {"title": "Full replication", "points": ["Survives node loss; capacity limited to one node"]}
+  ]}
+/>
 
 <Choice
   id="coalesce-when"
@@ -173,10 +223,41 @@ Cache-aside has a classic race: a reader misses and reads v1; a writer commits v
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **Cold restart.** Hit rate drops to zero and the 8-worker database gets everything for a moment; the hot set refills within a few hundred milliseconds and only the tail pays.
-- **Restart while the database is slow** (a migration is running). The cold cache sends the database four times what it can serve; rejected reads never fill the cache, so the cache stays cold and the database stays overloaded — a **metastable failure** that does not recover by itself.
-- **A slow cache** (8 ms against a 5 ms timeout). Every read pays the timeout, then goes to the database: a slow cache is worse than a dead one.
-- **Writes triple on popular keys.** Invalidations knock hot keys out over and over; the database runs near saturation.
+<Timeline
+  title="distributed-cache - Cold restart"
+  events={[
+    {"at": "Inject", "label": "Cache empty", "tone": "bad"},
+    {"at": "Observe", "label": "Database receives all misses", "tone": "warn"},
+    {"at": "Recover", "label": "Hot set refills in hundreds of ms", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="distributed-cache - Restart + slow DB"
+  events={[
+    {"at": "Inject", "label": "DB overloaded fourfold", "tone": "bad"},
+    {"at": "Observe", "label": "Rejected reads cannot refill cache", "tone": "warn"},
+    {"at": "Recover", "label": "Shed load and warm gradually; metastability persists unaided", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="distributed-cache - Slow cache"
+  events={[
+    {"at": "Inject", "label": "8 ms vs 5 ms timeout", "tone": "bad"},
+    {"at": "Observe", "label": "Every read pays timeout then hits DB", "tone": "warn"},
+    {"at": "Recover", "label": "Bypass or fail fast; preserve DB headroom", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="distributed-cache - Hot writes"
+  events={[
+    {"at": "Inject", "label": "Popular-key writes triple", "tone": "bad"},
+    {"at": "Observe", "label": "Repeated invalidations", "tone": "warn"},
+    {"at": "Recover", "label": "Database approaches saturation", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="metastable"
@@ -193,7 +274,16 @@ Cache-aside has a classic race: a reader misses and reads v1; a writer commits v
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: consistent-hash partitioning, cache-aside with delete-on-write and leases, TTL jitter, coalescing, hot-key replication, gutter pools and warm-up for node loss. Size the database for the **worst plausible hit rate**, not the average. Signals: hit rate per node, database headroom, and eviction rate. Then score each stage from 1 to 4.
+<Timeline
+  title="distributed-cache - design review"
+  events={[
+    {"at": "Protect", "label": "Leases, jitter, coalescing, hot-key replicas, gutter pools"},
+    {"at": "Size", "label": "Worst plausible hit rate; warm replacements"},
+    {"at": "Watch", "label": "Per-node hit rate, DB headroom, evictions"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="size-for-worst"

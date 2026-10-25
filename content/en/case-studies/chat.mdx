@@ -43,9 +43,13 @@ estimatedMinutes: 40
 
 <Step id="requirements" title="Requirements">
 
-One-to-one and group messaging (up to a few hundred members). Deliver in real time to online devices; store and deliver later to offline devices, with a push notification. **Per-conversation order**, sent/delivered/read receipts, history.
-
-Non-functional: delivery under ~200 ms p99 between online users in a region; **no message lost once the sender sees "sent", and none shown twice**; hundreds of millions of concurrent connections.
+<Compare
+  title="chat - requirements"
+  sides={[
+    {"title": "Features", "points": ["Groups, history, receipts; online push and offline inboxes"]},
+    {"title": "Guarantees", "points": ["Per-conversation order; durable sent tick; no duplicate display; regional p99 <200 ms"]}
+  ]}
+/>
 
 <Choice
   id="chat-guarantee"
@@ -62,10 +66,15 @@ Non-functional: delivery under ~200 ms p99 between online users in a region; **n
 
 <Step id="estimates" title="Estimates">
 
-- **Messages**: 500M daily users × 40 messages ÷ 86,400 ≈ **230k/s**, about 500k/s at peak.
-- **Storage**: 20B messages/day × ~200 B ≈ **4 TB/day**, about 1.5 PB/year before replication, if the server keeps history.
-- **Connections**: 200M concurrent devices ÷ ~1M connections per tuned gateway host ≈ **200–400 gateways**. Memory per idle connection, not CPU, is the limit.
-- **Groups**: with an average of 20 members, delivery work is several times the send rate.
+<Stats
+  title="chat - worked estimates"
+  items={[
+    {"label": "Messages", "value": "230k/s", "sub": "500M users * 40 / 86,400; peak 500k/s"},
+    {"label": "History", "value": "4 TB/day", "sub": "20B * 200 B; 1.5 PB/year before replication"},
+    {"label": "Gateways", "value": "200-400", "sub": "200M concurrent devices; roughly 1M/host"},
+    {"label": "Group fan-out", "value": "20 members", "sub": "Delivery work exceeds send rate"}
+  ]}
+/>
 
 <Choice
   id="gateways"
@@ -82,9 +91,15 @@ Non-functional: delivery under ~200 ms p99 between online users in a region; **n
 
 <Step id="api" title="API">
 
-- Over the WebSocket, the client sends a message with `conversationId`, `messageId` and `body`. **The client generates the message ID** (a UUID) and reuses it on every retry. The server acks with the server sequence number once the message is durably stored.
-- The server pushes messages with their `serverSeq`; the client acks delivery, which produces the "delivered" receipt.
-- `GET /v1/conversations/{id}/messages?before=seq` pages through history by sequence number.
+<Timeline
+  title="chat - API contract"
+  events={[
+    {"at": "Send", "label": "WS: conversationId, client messageId, body; reuse ID on retry"},
+    {"at": "Accept", "label": "Durable append -> ack with serverSeq"},
+    {"at": "Deliver", "label": "Push serverSeq; client acknowledges delivery"},
+    {"at": "History", "label": "GET /v1/conversations/{id}/messages?before=seq"}
+  ]}
+/>
 
 <Choice
   id="client-id"
@@ -101,9 +116,14 @@ Non-functional: delivery under ~200 ms p99 between online users in a region; **n
 
 <Step id="data-model" title="Data model">
 
-- **messages**: partition key `conversationId`, clustering key `serverSeq`. A history read is one partition range read — the layout Discord describes for Cassandra.
-- **inbox**: per-user pending deliveries for offline devices, deleted once acknowledged.
-- **dedup**: one record per (sender, messageId) with a TTL of about a day.
+<Timeline
+  title="chat - data layout"
+  events={[
+    {"at": "Messages", "label": "conversationId partition; serverSeq clustering"},
+    {"at": "Inbox", "label": "Pending per-user deliveries; delete after acknowledgement"},
+    {"at": "Dedup", "label": "sender + messageId; roughly one-day TTL"}
+  ]}
+/>
 
 <Choice
   id="partition-key"
@@ -120,7 +140,25 @@ Non-functional: delivery under ~200 ms p99 between online users in a region; **n
 
 <Step id="high-level" title="High-level design">
 
-Devices hold a WebSocket to a **connection gateway**. The gateway calls the **chat service**, which checks the dedup store, appends the message to the conversation's partition, publishes it to a **delivery log partitioned by conversation**, and acks. **Delivery workers** consume the log in order and push to the recipients' gateways, or write to the inbox and send a push notification for offline devices.
+<Flow
+  title="chat - architecture"
+  nodes={[
+    {"id": "0", "label": "Device", "kind": "client", "x": 10, "y": 25},
+    {"id": "1", "label": "Gateway", "kind": "service", "x": 50, "y": 25},
+    {"id": "2", "label": "Chat", "kind": "service", "x": 90, "y": 25},
+    {"id": "3", "label": "Log", "kind": "queue", "x": 10, "y": 80},
+    {"id": "4", "label": "Delivery", "kind": "worker", "x": 50, "y": 80},
+    {"id": "5", "label": "Inbox", "kind": "database", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "WebSocket"},
+    {"from": "1", "to": "2", "label": "send"},
+    {"from": "2", "to": "3", "label": "durable append"},
+    {"from": "3", "to": "4", "label": "conversation order"},
+    {"from": "4", "to": "5", "label": "offline"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="send-path"
@@ -139,9 +177,13 @@ Devices hold a WebSocket to a **connection gateway**. The gateway calls the **ch
 
 <Step id="deep-dive" title="Deep dive: ordering and exactly-once for people">
 
-Networks give at-least-once at best. The client retries until acked; the server's dedup table turns repeats into success without re-storing; the recipient's client dedups deliveries by message ID. Together that **looks** exactly-once to people.
-
-Global order is unnecessary and expensive. Order **within a conversation** is required: the chat service assigns a per-conversation sequence when it stores the message, and the delivery log is partitioned by conversation, so a consumer sees each conversation's messages in sequence. Clients display by sequence number and fill gaps from history.
+<Compare
+  title="chat - mechanism"
+  sides={[
+    {"title": "Retry", "points": ["Reuse client messageId; dedup at server and recipient"]},
+    {"title": "Order", "points": ["Assign serverSeq per conversation; fill gaps from history"]}
+  ]}
+/>
 
 <Choice
   id="global-order"
@@ -158,9 +200,15 @@ Global order is unnecessary and expensive. Order **within a conversation** is re
 
 <Step id="alternatives" title="Alternatives">
 
-- **No idempotency key.** Run the lost-acknowledgement scenario against it: retried sends are stored twice and the engine reports a duplicated effect.
-- **Polling.** Simple HTTP, but 200M devices polling every 5 s is 40M mostly empty requests a second, and latency equals the poll interval.
-- **A relational store for messages.** Fine at millions of messages a day; at billions, the append-only, partition-local pattern suits a wide-column store, which is why Discord moved to Cassandra and later ScyllaDB.
+<Compare
+  title="chat - trade-offs"
+  sides={[
+    {"title": "Idempotent push", "points": ["Durable sends; duplicate-free display"]},
+    {"title": "No key", "points": ["Lost ack -> duplicate message"]},
+    {"title": "Polling", "points": ["200M / 5 s = 40M mostly empty requests/s"]},
+    {"title": "Relational store", "points": ["Works at smaller scale; wide-column partition appends scale further"]}
+  ]}
+/>
 
 <Choice
   id="polling"
@@ -177,9 +225,32 @@ Global order is unnecessary and expensive. Order **within a conversation** is re
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **Lost acknowledgements.** For 80 ms every response from the chat service to one gateway is dropped. The messages were stored; the gateway retries with the same ID and the dedup store answers "sent" without storing again. Most senders see a short delay.
-- **Delivery workers crash** for half a second. Sending keeps working because it ends at the durable log; delivery pauses, then catches up. Redelivered messages stay in order because each conversation's partition is consumed in order.
-- **A slow message store** (8× slower). Some sends exceed the gateway timeout and are retried; dedup keeps retries harmless, but they add load to a store that is already slow — retries need a budget.
+<Timeline
+  title="chat - Lost acknowledgements"
+  events={[
+    {"at": "Inject", "label": "80 ms response loss", "tone": "bad"},
+    {"at": "Observe", "label": "Stored message retried with same ID", "tone": "warn"},
+    {"at": "Recover", "label": "Dedup returns sent without another append", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="chat - Delivery crash"
+  events={[
+    {"at": "Inject", "label": "Workers down 0.5 s", "tone": "bad"},
+    {"at": "Observe", "label": "Durable log buffers messages", "tone": "warn"},
+    {"at": "Recover", "label": "Replay conversation partition in order", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="chat - Slow store"
+  events={[
+    {"at": "Inject", "label": "Store latency x8", "tone": "bad"},
+    {"at": "Observe", "label": "Timeouts trigger retries", "tone": "warn"},
+    {"at": "Recover", "label": "Budget retries to avoid overload", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="redelivery-order"
@@ -196,7 +267,16 @@ Global order is unnecessary and expensive. Order **within a conversation** is re
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: gateways holding connections, idempotent sends with client message IDs, messages partitioned by conversation with server sequence numbers, a partitioned delivery log, inboxes and push for offline devices. Risks: reconnect storms after a gateway failure (clients must reconnect with jittered backoff), huge-group hot partitions, retry budgets during store slowdowns. Then score each stage from 1 to 4.
+<Timeline
+  title="chat - design review"
+  events={[
+    {"at": "Protect", "label": "Jitter reconnects; cap gateway admission"},
+    {"at": "Watch", "label": "Huge-group hot partitions; store retry load"},
+    {"at": "Review", "label": "Gateways, durable IDs, ordered log, offline inbox"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="reconnect-storm"

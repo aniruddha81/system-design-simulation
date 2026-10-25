@@ -40,7 +40,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-Upload a photo with a caption; view photos in several sizes; list a user's photos (feeds are the news feed case study). Image views p99 under ~200 ms worldwide; uploaded photos are never lost; uploads are acknowledged in a few seconds while thumbnails may appear a moment later; hundreds of views per upload.
+<Compare
+  title="instagram - Requirements"
+  sides={[
+    {"title": "Features", "points": ["Captioned uploads, multiple sizes, user photo lists"]},
+    {"title": "Targets", "points": ["Global views p99 <200 ms; durable uploads within seconds"]},
+    {"title": "Workload", "points": ["Hundreds of views/upload; thumbnails may lag"]}
+  ]}
+/>
 
 <Choice
   id="uploaded-means"
@@ -57,12 +64,17 @@ Upload a photo with a caption; view photos in several sizes; list a user's photo
 
 <Step id="estimates" title="Estimates">
 
-- **Uploads**: 100M photos/day ≈ **1,160/s**, about 3k/s at peak.
-- **Storage**: 100M × (2 MB original + ~0.5 MB of resized versions) × 365 ≈ **90 PB/year**.
-- **Views**: 500M daily users × 100 image views ÷ 86,400 ≈ **580k requests/s**.
-- **Egress**: 580k/s × ~150 KB ≈ **87 GB/s**, about 700 Gbit/s. Only a CDN serves this economically.
-- **Origin**: at a 95% CDN hit rate, 580k × 5% ≈ **29k requests/s** reach the origin. The hit rate decides the origin's size.
-- **Resize workers**: Little's law, 1,160/s × 120 ms of CPU ≈ 140 cores busy on average.
+<Stats
+  title="instagram - Estimates"
+  items={[
+    {"label": "Uploads", "value": "1,160/s", "sub": "100M/day; peak 3k/s"},
+    {"label": "Storage", "value": "90 PB/year", "sub": "100M * 2.5 MB * 365"},
+    {"label": "Views", "value": "580k/s", "sub": "500M users * 100 / 86,400"},
+    {"label": "Egress", "value": "87 GB/s", "sub": "580k * 150 KB; 700 Gbit/s"},
+    {"label": "Origin", "value": "29k/s", "sub": "95% CDN hits -> 5% misses"},
+    {"label": "Resize CPU", "value": "140 cores", "sub": "1,160/s * 120 ms CPU"}
+  ]}
+/>
 
 <Choice
   id="origin-load"
@@ -79,9 +91,15 @@ Upload a photo with a caption; view photos in several sizes; list a user's photo
 
 <Step id="api" title="API">
 
-- `POST /v1/media`: a resumable, chunked upload (or a pre-signed URL straight to the object store) plus the caption → **201** with the media ID and URLs, some sizes pending.
-- `GET /p/{photoKey}_{size}.jpg`: served by the CDN. Keys are **immutable** — an edit creates a new key — so CDN entries never need invalidation.
-- `GET /v1/users/{id}/media?cursor=` pages by media ID.
+<Timeline
+  title="instagram - API"
+  events={[
+    {"at": "Upload", "label": "POST /v1/media; resumable chunks/pre-signed URL -> 201, sizes pending"},
+    {"at": "View", "label": "GET /p/{photoKey}_{size}.jpg; immutable CDN key"},
+    {"at": "List", "label": "GET /v1/users/{id}/media?cursor="},
+    {"at": "Edit", "label": "New object key; update metadata pointer"}
+  ]}
+/>
 
 <Choice
   id="immutable-keys"
@@ -98,10 +116,14 @@ Upload a photo with a caption; view photos in several sizes; list a user's photo
 
 <Step id="data-model" title="Data model and IDs">
 
-- **media**: ID, user, caption, photo key, timestamps; **sharded by user**, so a profile grid is one shard. Instagram used thousands of logical shards on PostgreSQL, mapped onto fewer physical servers.
-- **photos**: image bytes in the object store under immutable keys; the database only stores the key.
-
-Instagram generated **64-bit IDs inside PostgreSQL**: 41 bits of milliseconds since a custom epoch, 13 bits of logical shard ID, 10 bits of per-shard sequence. IDs sort by time and say which shard holds the row.
+<Timeline
+  title="instagram - Data model and IDs"
+  events={[
+    {"at": "Media", "label": "User-sharded metadata; database stores object keys"},
+    {"at": "Photos", "label": "Immutable object bytes; lifecycle tiers"},
+    {"at": "64-bit ID", "label": "41 timestamp + 13 logical shard + 10 sequence bits; sortable and routable"}
+  ]}
+/>
 
 <Choice
   id="id-shard"
@@ -118,7 +140,26 @@ Instagram generated **64-bit IDs inside PostgreSQL**: 41 bits of milliseconds si
 
 <Step id="high-level" title="High-level design">
 
-DNS points clients at the **CDN**, with the origin as a fallback. Views are served from the CDN; misses go to the origin, which reads the **object store**. Uploads pass through to the origin, which stores the original, records metadata, and publishes a **resize job**. **Resize workers** generate the sizes and write them back to the object store.
+<Flow
+  title="instagram - High-level design"
+  nodes={[
+    {"id": "0", "label": "Client", "kind": "client", "x": 10, "y": 25},
+    {"id": "1", "label": "CDN", "kind": "cdn", "x": 50, "y": 25},
+    {"id": "2", "label": "Origin", "kind": "service", "x": 90, "y": 25},
+    {"id": "3", "label": "Objects", "kind": "objectStore", "x": 10, "y": 80},
+    {"id": "4", "label": "Jobs", "kind": "queue", "x": 50, "y": 80},
+    {"id": "5", "label": "Resize", "kind": "worker", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "view"},
+    {"from": "1", "to": "2", "label": "miss / upload"},
+    {"from": "2", "to": "3", "label": "original"},
+    {"from": "2", "to": "4", "label": "job"},
+    {"from": "4", "to": "5", "label": "consume"},
+    {"from": "5", "to": "3", "label": "sizes"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="upload-flow"
@@ -138,7 +179,14 @@ DNS points clients at the **CDN**, with the origin as a fallback. Views are serv
 
 <Step id="deep-dive" title="Deep dive: serving images">
 
-Popularity is heavily skewed: recent popular photos hit the CDN almost every time, the long tail of old photos rarely does. An **origin shield** — a regional mid-tier cache — collapses misses from many edges into one origin read. Old photos move to cheaper, erasure-coded storage: Facebook's Haystack packed photos into large files to avoid per-file metadata reads, and f4 later moved "warm" photos to erasure-coded storage to cut replication cost.
+<Compare
+  title="instagram - Deep dive: serving images"
+  sides={[
+    {"title": "Edges", "points": ["Popular photos hit; old-photo tail misses"]},
+    {"title": "Shield", "points": ["Coalesce simultaneous edge misses into one origin fetch"]},
+    {"title": "Cold tier", "points": ["Haystack packs photos; f4 erasure-codes warm bytes"]}
+  ]}
+/>
 
 <Choice
   id="shield"
@@ -155,9 +203,15 @@ Popularity is heavily skewed: recent popular photos hit the CDN almost every tim
 
 <Step id="alternatives" title="Alternatives">
 
-- **Serve images from your own servers.** Full control, but 700 Gbit/s of egress from a few regions is slow far away and enormously expensive.
-- **Resize synchronously during upload.** Every size is ready immediately, but uploads now cost hundreds of milliseconds of CPU each and a spike saturates the API tier.
-- **Run your own blob store** (Haystack, f4). Worth it at Facebook's scale; most teams should use a managed object store with lifecycle tiers.
+<Compare
+  title="instagram - Alternatives"
+  sides={[
+    {"title": "Own serving", "points": ["Control; costly global 700 Gbit/s egress"]},
+    {"title": "Synchronous resize", "points": ["All sizes ready; upload CPU saturates during spikes"]},
+    {"title": "Managed blobs", "points": ["Lifecycle tiers; less operational work"]},
+    {"title": "Own blobs", "points": ["Haystack/f4 economics at very large scale"]}
+  ]}
+/>
 
 <Choice
   id="sync-resize"
@@ -174,9 +228,32 @@ Popularity is heavily skewed: recent popular photos hit the CDN almost every tim
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **The CDN edge goes down.** Requests fail until the DNS record expires, then the origin takes every view: object-store reads jump from the miss rate to the full rate and egress now leaves your origin. DNS TTL is your failover time.
-- **Uploads spike 3×.** Uploads are acknowledged as fast as before; the resize queue grows and thumbnails lag. Scale workers on queue depth.
-- **The object store slows 6×.** Most views are CDN hits and do not notice; misses slow down and the slowest exceed the API's storage timeout. The CDN's hit rate is a reliability feature, not only a cost one.
+<Timeline
+  title="instagram - CDN outage"
+  events={[
+    {"at": "Inject", "label": "Edge fails until DNS TTL expires", "tone": "bad"},
+    {"at": "Observe", "label": "Origin receives every view", "tone": "warn"},
+    {"at": "Recover", "label": "Object reads and origin egress surge", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="instagram - Upload spike"
+  events={[
+    {"at": "Inject", "label": "Uploads x3", "tone": "bad"},
+    {"at": "Observe", "label": "Durable acceptance stays fast", "tone": "warn"},
+    {"at": "Recover", "label": "Resize queue grows; scale workers on depth/age", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="instagram - Slow object store"
+  events={[
+    {"at": "Inject", "label": "Latency x6", "tone": "bad"},
+    {"at": "Observe", "label": "CDN hits unaffected", "tone": "warn"},
+    {"at": "Recover", "label": "Misses slow; some exceed storage timeout", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="cdn-failover"
@@ -193,7 +270,16 @@ Popularity is heavily skewed: recent popular photos hit the CDN almost every tim
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: CDN with immutable URLs and an origin shield, object store with lifecycle tiers, resumable uploads acknowledged after durable storage, async processing, metadata sharded by user with time-and-shard IDs. Signals: CDN hit rate, origin egress, resize queue age. Then score each stage from 1 to 4.
+<Timeline
+  title="instagram - Wrap up"
+  events={[
+    {"at": "Persist", "label": "Original before 201; sizes asynchronous"},
+    {"at": "Serve", "label": "Immutable URLs, CDN, shield, storage tiers"},
+    {"at": "Watch", "label": "Hit rate, origin egress, resize age; user-sharded sortable IDs"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="ids-sort"

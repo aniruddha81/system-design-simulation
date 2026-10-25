@@ -38,9 +38,14 @@ estimatedMinutes: 30
 
 <Step id="requirements" title="Requirements">
 
-Internal services send a notification for a user and a template; the system picks channels (push, SMS, email) from preferences, respects opt-outs, quiet hours and frequency caps, tracks status and retries transient failures.
-
-Non-functional: **accepting a request takes under 50 ms and never depends on provider health**; at-least-once delivery to providers with duplicates suppressed where the channel allows; 2FA codes arrive within seconds while marketing can wait.
+<Compare
+  title="notification-system - Requirements"
+  sides={[
+    {"title": "Features", "points": ["Push/SMS/email; preferences, quiet hours, caps, status, retries"]},
+    {"title": "Targets", "points": ["Accept <50 ms independent of providers; 2FA seconds; marketing waits"]},
+    {"title": "Delivery", "points": ["At-least-once; suppress duplicates where channel permits"]}
+  ]}
+/>
 
 <Choice
   id="decouple"
@@ -57,10 +62,15 @@ Non-functional: **accepting a request takes under 50 ms and never depends on pro
 
 <Step id="estimates" title="Estimates">
 
-- **Volume**: 1B notifications/day ≈ **11.6k/s** average; campaigns spike to 10× for minutes.
-- **Backlog in a 10-minute provider outage**: 11.6k/s × 600 s ≈ **7M messages**, about 7 GB at 1 KB each. A durable log handles that; an in-memory queue does not.
-- **Sender concurrency**: Little's law, 11.6k/s × 40 ms provider latency ≈ **460 requests in flight**.
-- **Partitions**: a partition is consumed one message at a time, in order, so you need at least as many partitions as in-flight messages — or unordered consumption.
+<Stats
+  title="notification-system - Estimates"
+  items={[
+    {"label": "Volume", "value": "11.6k/s", "sub": "1B/day; campaigns peak 10x"},
+    {"label": "10-minute backlog", "value": "7M messages", "sub": "11.6k * 600; 7 GB at 1 KB"},
+    {"label": "Concurrency", "value": "460 calls", "sub": "11.6k/s * 40 ms"},
+    {"label": "Ordered partitions", "value": "At least 460", "sub": "One in-flight message/partition, or unordered consumption"}
+  ]}
+/>
 
 <Choice
   id="littles-law"
@@ -77,9 +87,15 @@ Non-functional: **accepting a request takes under 50 ms and never depends on pro
 
 <Step id="api" title="API">
 
-- `POST /v1/notifications` with `userId`, `template`, `params`, `priority` and an `Idempotency-Key` → **201** queued, **200** duplicate, **429** over quota.
-- `GET /v1/notifications/{id}` → status and attempts.
-- `PUT /v1/users/{id}/preferences` → channels, quiet hours, opt-outs.
+<Timeline
+  title="notification-system - API"
+  events={[
+    {"at": "Accept", "label": "POST /v1/notifications; user, template, params, priority + Idempotency-Key"},
+    {"at": "Result", "label": "201 queued; 200 duplicate; 429 quota"},
+    {"at": "Inspect", "label": "GET /v1/notifications/{id}; status + attempts"},
+    {"at": "Preferences", "label": "PUT /v1/users/{id}/preferences; channels, quiet hours, opt-outs"}
+  ]}
+/>
 
 <Choice
   id="idem-key"
@@ -96,9 +112,14 @@ Non-functional: **accepting a request takes under 50 ms and never depends on pro
 
 <Step id="data-model" title="Data model">
 
-- **notifications**: ID, user, template, channel, status, attempts, timestamps. Written on accept, updated by senders; about 6 TB for 30 days of status.
-- **preferences**: per-user channels, opt-outs and quiet hours. Read on every send, cached aggressively, evaluated **at send time** because users change them and quiet hours depend on when delivery happens.
-- **devices**: push tokens per user. Providers report invalid tokens, which must be deleted.
+<Timeline
+  title="notification-system - Data model"
+  events={[
+    {"at": "Notifications", "label": "ID, user, template, channel, status, attempts, timestamps; 6 TB/30 days"},
+    {"at": "Preferences", "label": "Cache; evaluate at send time"},
+    {"at": "Devices", "label": "Push tokens/user; delete provider-reported invalid tokens"}
+  ]}
+/>
 
 <Choice
   id="send-time"
@@ -115,7 +136,25 @@ Non-functional: **accepting a request takes under 50 ms and never depends on pro
 
 <Step id="high-level" title="High-level design">
 
-The notify API checks the idempotency key, publishes to a **durable queue** and returns. **Sender workers** consume the queue, render the template, check preferences and call the provider through a **circuit breaker** with a **bulkhead** (a cap on concurrent calls). A failed attempt leaves the message unacknowledged; the queue redelivers it after the visibility timeout and moves it to a **dead-letter queue** after five attempts.
+<Flow
+  title="notification-system - High-level design"
+  nodes={[
+    {"id": "0", "label": "Notify API", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Queue", "kind": "queue", "x": 50, "y": 25},
+    {"id": "2", "label": "Sender", "kind": "worker", "x": 90, "y": 25},
+    {"id": "3", "label": "Breaker", "kind": "circuitBreaker", "x": 10, "y": 80},
+    {"id": "4", "label": "Provider", "kind": "service", "x": 50, "y": 80},
+    {"id": "5", "label": "DLQ", "kind": "queue", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "dedup + enqueue"},
+    {"from": "1", "to": "2", "label": "priority lane"},
+    {"from": "2", "to": "3", "label": "bulkhead"},
+    {"from": "3", "to": "4", "label": "rate limit"},
+    {"from": "1", "to": "5", "label": "5 attempts"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="sender-loop"
@@ -134,7 +173,15 @@ The notify API checks the idempotency key, publishes to a **durable queue** and 
 
 <Step id="deep-dive" title="Deep dive: retries, breakers and priorities">
 
-Retry transient errors (timeouts, 5xx, 429) with exponential backoff and **jitter**; never retry permanent ones such as an invalid token. Providers enforce rate limits, so senders pace themselves with a token bucket per provider. A **circuit breaker** stops hammering a failing provider; a **bulkhead** stops a slow provider from consuming every sender. Separate queues or consumer pools by **priority** so a 50M-message campaign cannot delay a 2FA code. Duplicates reaching users are suppressed per channel: APNs collapse IDs and FCM collapse keys replace an undelivered earlier notification.
+<Compare
+  title="notification-system - Deep dive: retries, breakers and priorities"
+  sides={[
+    {"title": "Transient", "points": ["Timeout/5xx/429: jittered backoff; provider token bucket"]},
+    {"title": "Permanent", "points": ["Remove invalid tokens; never retry"]},
+    {"title": "Isolation", "points": ["Breakers, bulkheads, separate priority pools"]},
+    {"title": "Collapse", "points": ["APNs/FCM replace pending messages; no universal exactly-once delivery"]}
+  ]}
+/>
 
 <Choice
   id="priority"
@@ -151,8 +198,13 @@ Retry transient errors (timeouts, 5xx, 429) with exponential backoff and **jitte
 
 <Step id="alternatives" title="Alternatives">
 
-- **Call the provider synchronously from the API.** One less component and immediate status, but callers inherit the provider's latency and outages.
-- **Separate queues per channel and priority.** More to operate, but a slow email provider can no longer delay push, and each provider's senders scale and rate-limit independently.
+<Compare
+  title="notification-system - Alternatives"
+  sides={[
+    {"title": "Synchronous provider", "points": ["Fewer parts; callers inherit latency/outages"]},
+    {"title": "Channel + priority queues", "points": ["Independent scaling/rate limits; more queues to operate"]}
+  ]}
+/>
 
 <Choice
   id="sync-call"
@@ -169,9 +221,32 @@ Retry transient errors (timeouts, 5xx, 429) with exponential backoff and **jitte
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **The provider fails half of all requests** while passing health checks. The API keeps accepting at full speed; senders retry, the breaker opens and fails fast, and redelivery delivers the messages after the incident. Watch the queue's redelivery count, not the API's goodput.
-- **The provider is down long enough to fill the queue.** At first nothing changes for callers; then the 1,000-message queue fills and publishes are rejected with 503: back-pressure reaches the API. Loud and bounded is the right failure, but the queue must be sized for the longest outage you plan for.
-- **The provider's latency jumps by 250 ms.** 128 senders now deliver only ~440/s against 1,000/s arriving; the queue fills and callers get 503 — latency alone produced the same back-pressure as an outage.
+<Timeline
+  title="notification-system - Gray provider"
+  events={[
+    {"at": "Inject", "label": "50% failures; health checks pass", "tone": "bad"},
+    {"at": "Observe", "label": "Breaker opens; redeliver later", "tone": "warn"},
+    {"at": "Recover", "label": "API accepts; watch redelivery count", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="notification-system - Long outage"
+  events={[
+    {"at": "Inject", "label": "Provider down", "tone": "bad"},
+    {"at": "Observe", "label": "1,000-message queue fills", "tone": "warn"},
+    {"at": "Recover", "label": "Publish returns 503; size for outage horizon", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="notification-system - Latency jump"
+  events={[
+    {"at": "Inject", "label": "Provider adds 250 ms", "tone": "bad"},
+    {"at": "Observe", "label": "128 senders: 440/s vs 1k/s arriving", "tone": "warn"},
+    {"at": "Recover", "label": "Queue fills; API returns 503", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="latency-backpressure"
@@ -188,7 +263,16 @@ Retry transient errors (timeouts, 5xx, 429) with exponential backoff and **jitte
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise: idempotent accept into a durable, disk-backed queue sized for hours; senders with preferences at send time, backoff with jitter, breakers, bulkheads and provider-specific rate limits; priorities separated; DLQ for poison messages; invalid tokens removed. Signals: queue depth and age per priority, provider error rate, DLQ growth. Then score each stage from 1 to 4.
+<Timeline
+  title="notification-system - Wrap up"
+  events={[
+    {"at": "Buffer", "label": "Disk-backed queue sized for hours"},
+    {"at": "Send", "label": "Preferences now; jitter, breakers, bulkheads, quotas, priorities, DLQ"},
+    {"at": "Watch", "label": "Queue depth/age by priority; provider errors; DLQ growth"}
+  ]}
+/>
+
+Then score each stage from 1 to 4.
 
 <Choice
   id="dlq"

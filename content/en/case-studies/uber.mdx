@@ -40,9 +40,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Requirements">
 
-Drivers send their GPS location every few seconds. When a rider requests a trip, the system finds nearby available drivers, offers the trip, and assigns **exactly one** driver, then tracks trip state (`requested`, `assigned`, `in_progress`, `completed`).
-
-**Non-functional**: matching decisions complete within **~1 s**; location updates are loss-tolerant because a fresh ping arrives 4 seconds later; a driver is **never assigned two concurrent trips**; and dispatch for a city must survive a data-centre outage.
+<Compare title="uber / requirements" sides={[{"title": "Request, assign, track trips", "points": ["Nearby drivers; exactly one assignment; city outage isolation"]}, {"title": "Matching ~1s", "points": ["GPS pings loss-tolerant; never two concurrent trips/driver"]}]} />
 
 <Choice
   id="ping-vs-claim-consistency"
@@ -59,12 +57,7 @@ Drivers send their GPS location every few seconds. When a rider requests a trip,
 
 <Step id="estimates" title="Estimates">
 
-Assume **1M online drivers** pinging every **4 seconds** and **20M trips/day**:
-
-- **Location writes**: 1M ÷ 4 s ≈ **250,000 writes/s**, each ~100 B (≈ 75 MB/s ingress with headers).
-- **Supply index memory**: 1M drivers × ~200 B (driverId, H3 cell, lat/lng, state, timestamp) × 2 replicas ≈ **400 MB** total — the entire world's live driver index fits comfortably in memory.
-- **Ride requests**: 20M ÷ 86,400 × ~3 peak factor ≈ **700 requests/s** at peak — more than 300× lower than the ping rate.
-- **Geo query size**: a ~2 km search in a city inspects the rider's H3 cell and 1–2 rings of neighbours, returning tens to a few hundred candidate drivers.
+<Stats title="uber / estimates" items={[{"label": "Location writes/s", "value": "250k", "sub": "1M drivers / 4s"}, {"label": "Location ingress", "value": "~75 MB/s", "sub": "~100 B payload + headers"}, {"label": "Supply memory", "value": "400 MB", "sub": "1M / 200 B / 2 replicas"}, {"label": "Peak rides/s", "value": "~700", "sub": "20M/day / 3 / 86,400"}, {"label": "Search neighbourhood", "value": "~2 km", "sub": "H3 cell + covering rings; tens/hundreds of candidates"}]} />
 
 <Choice
   id="supply-index-storage"
@@ -81,9 +74,7 @@ Assume **1M online drivers** pinging every **4 seconds** and **20M trips/day**:
 
 <Step id="api" title="API">
 
-- `POST /v1/drivers/{id}/location` with `{ lat, lng, heading, ts }` → **200**. Idempotent with last-write-wins by device timestamp; stale out-of-order pings are dropped.
-- `POST /v1/rides` with `{ pickup, dropoff, product }` and `Idempotency-Key` → **200** `{ tripId, driver }` or **409** if the candidate driver was just claimed by another request (the dispatcher retries with the next candidate).
-- `POST /v1/trips/{id}/complete` → **200**, setting the driver's availability back to `1`.
+<Compare title="uber / api" sides={[{"title": "POST /v1/drivers/{id}/location", "points": ["lat/lng, heading, ts; discard stale pings"]}, {"title": "POST /v1/rides; POST /v1/trips/{id}/complete", "points": ["Idempotency-Key; claim conflict 409; completion restores availability"]}]} />
 
 <Choice
   id="claim-conflict-status"
@@ -100,8 +91,7 @@ Assume **1M online drivers** pinging every **4 seconds** and **20M trips/day**:
 
 <Step id="data-model" title="Data model">
 
-- **locations** (in-memory KV store `geo`): `driverId`, `cell` (H3 resolution 8–9 hexagon), `lat`, `lng`, `updatedAt`, indexed by `cell`. Quorum is `R = 1, W = 1` over 2 replicas with hinted handoff: speed beats strict durability because the next ping arrives in 4 s.
-- **drivers** (authoritative `dispatchdb`): `driverId`, `available` (`1` = free, `0` = on trip), `tripId`. Replicated semi-synchronously with fencing tokens on failover. Changed only via atomic conditional updates (`decrementIfPositive` / compare-and-set).
+<Compare title="uber / data-model" sides={[{"title": "Ephemeral geo", "points": ["driverId, H3 cell, lat/lng, updatedAt; R=1/W=1, two replicas"]}, {"title": "Authoritative dispatchdb", "points": ["driverId, available, tripId; conditional claims; semi-sync replication + fencing"]}]} />
 
 <Choice
   id="why-h3-hexagons"
@@ -118,7 +108,7 @@ Assume **1M online drivers** pinging every **4 seconds** and **20M trips/day**:
 
 <Step id="high-level" title="High-level design">
 
-Clients connect through a load balancer to stateless **Dispatch API** servers. Location pings go straight to the in-memory **Location index (`geo`)**, sharded by cell. Ride requests query `geo` by cell to get up to 30 nearby candidates, rank them by ETA, and execute an atomic `decrementIfPositive` on `available` in the **Dispatch state (`dispatchdb`)** store. Trip completion sets `available = 1`.
+<Flow title="uber / high-level" nodes={[{"id": "0", "label": "Dispatch API", "kind": "service", "x": 10, "y": 18}, {"id": "1", "label": "Location ring", "kind": "kvStore", "x": 50, "y": 18}, {"id": "2", "label": "Dispatch DB", "kind": "database", "x": 90, "y": 18}]} edges={[{"from": "0", "to": "1", "label": "pings / candidates"}, {"from": "0", "to": "2", "label": "atomic claim / complete"}]} height={300} caption={"Query up to 30 nearby candidates, rank ETA, then claim availability atomically. Location freshness and trip correctness use separate stores."} />
 
 <Ordering
   id="ride-matching-flow"
@@ -138,9 +128,7 @@ Clients connect through a load balancer to stateless **Dispatch API** servers. L
 
 <Step id="deep-dive" title="Deep dive: atomic claims, leases and city failover">
 
-1. **Assigning exactly one driver.** Read-then-write (`SELECT available` followed by `UPDATE available = 0`) has a classic race condition: two servers both read `1` and both assign the driver. Instead, use a single atomic conditional write (`UPDATE drivers SET available = 0, trip_id = :t WHERE driver_id = :d AND available = 1`, or `decrementIfPositive`). When offering a trip to a driver's phone, attach a **lease timeout** (e.g. 15 seconds) so an unanswered offer automatically releases the driver.
-2. **Batch matching vs greedy.** Greedy matching claims the nearest driver immediately. Waiting 1–2 seconds to collect all requests in a neighbourhood and solving a minimum-cost bipartite matching problem reduces overall pickup ETAs when demand is dense.
-3. **Regional failover.** Riders and drivers only interact within the same city, so **city is both the shard key and the failure domain**. If a data centre fails, only the cities hosted there fail over; the supply index rebuilds itself from scratch within 4 seconds of incoming driver pings.
+<Compare title="uber / deep-dive" sides={[{"title": "Claim + lease", "points": ["Atomic available=1 / 0; unanswered offer expires; fence stale responses"]}, {"title": "City matching", "points": ["Greedy or 1-2s batch optimisation; city failure domains; rebuild geo from pings"]}]} />
 
 <Choice
   id="index-loss-recovery"
@@ -157,9 +145,7 @@ Clients connect through a load balancer to stateless **Dispatch API** servers. L
 
 <Step id="alternatives" title="Alternatives">
 
-- **Read the driver's state, then write it.** The runnable `uber-unsafe-claim` alternative performs a `get` followed by an unconditional `increment(-1)`. Under the downtown surge scenario, concurrent requests read `available = 1` at the same time and double-book the driver (`oversell` violation).
-- **Store locations in the relational database.** Gives ACID durability and PostGIS spatial queries, but 250k writes/s of ephemeral coordinates saturates disk I/O and starves actual trip transactions.
-- **Quadtree instead of H3.** A quadtree adapts leaf sizes to density, which is great for static places (like restaurants), but constantly rebalancing a tree as a million cars drive across boundaries is much harder to shard and lock than fixed H3 hexagons.
+<Compare title="uber / alternatives" sides={[{"title": "uber-unsafe-claim", "points": ["Read-then-write double-books hot drivers"]}, {"title": "SQL locations", "points": ["Durable; ping writes starve trip transactions"]}, {"title": "Quadtree", "points": ["Adaptive density; moving-car rebalancing complicates sharding"]}]} />
 
 <Choice
   id="read-then-write-bug"
@@ -176,9 +162,11 @@ Clients connect through a load balancer to stateless **Dispatch API** servers. L
 
 <Step id="failures" title="Failure scenarios you can run">
 
-- **Everyone wants the same driver downtown** (20% of traffic targets one hot driver after a concert). Exactly one claim succeeds; concurrent contenders receive **409** and move to the next candidate. No double assignment occurs.
-- **Location pings triple** (a mobile app bug pings every 1 s instead of 4 s). The in-memory `geo` ring absorbs the 3× write storm in sub-millisecond time and ride matching latency barely moves.
-- **The dispatch database leader dies.** Location pings keep succeeding (`geo` is separate). Ride claims and completions fail for the ~0.5 s of heartbeat detection (3 × 100 ms) and election (200 ms), then resume on the promoted replica. Semi-synchronous replication and fencing guarantee that no confirmed trip is lost or split-brained.
+<Timeline title="uber / Hot driver: 20%" events={[{"at": "Inject", "label": "Hot driver: 20%", "tone": "warn"}, {"at": "Observe", "label": "Exactly one claim succeeds"}, {"at": "Result", "label": "409 contenders try next candidate"}]} />
+
+<Timeline title="uber / Ping storm: 3x fixture" events={[{"at": "Inject", "label": "Ping storm: 3x fixture", "tone": "warn"}, {"at": "Observe", "label": "Geo ring absorbs writes"}, {"at": "Result", "label": "Matching latency barely changes"}]} />
+
+<Timeline title="uber / Dispatch leader failure: ~0.5s" events={[{"at": "Inject", "label": "Dispatch leader failure: ~0.5s", "tone": "warn"}, {"at": "Observe", "label": "Pings continue; claims/completions pause"}, {"at": "Result", "label": "Semi-sync + fencing; no confirmed trip loss"}]} />
 
 <Choice
   id="dispatch-leader-down"
@@ -195,7 +183,9 @@ Clients connect through a load balancer to stateless **Dispatch API** servers. L
 
 <Step id="wrap-up" title="Wrap up">
 
-Summarise the design: **H3 hexagonal cells** in an in-memory store for the 250k/s ping firehose, an **authoritative transactional store** with atomic conditional claims for the 700/s dispatch decisions, and **city-scoped sharding** so a regional outage never affects other cities. Key operational metrics: **matching p99 latency**, **409 claim conflict rate** (signals hot-cell contention), and **supply index staleness**. Score yourself from 1 to 4 against the rubric.
+<Compare title="uber / wrap-up" sides={[{"title": "Watch", "points": ["Matching p99, 409 conflicts, supply staleness"]}, {"title": "Separate", "points": ["High-rate ephemeral coordinates; lower-rate authoritative claims; city shards"]}]} />
+
+Score yourself from 1 to 4 against the rubric.
 
 <Choice
   id="conflict-rate-signal"

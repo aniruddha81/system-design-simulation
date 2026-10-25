@@ -1,5 +1,6 @@
 "use client";
 
+import { DesignFlow, EstimateTiles, RubricMeter } from "./StudyVisuals";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { CaseStudy } from "@/content/case-studies";
@@ -102,7 +103,7 @@ export function InterviewSession({ study: c }: { study: CaseStudy }) {
       <h1 className="mt-4 font-display text-4xl">{c.title}</h1>
       <p className="mt-3 text-muted">{c.summary}</p>
       <p className="mt-3 text-sm text-muted">
-        Notes and self-ratings save locally in this browser (`localStorage`), and completing self-assessment records `interview:{c.id}` in your progress store.
+        Notes and ratings save in this browser. Completing self-assessment records your progress.
       </p>
       <section aria-label="Interview timer" className="mt-6 flex flex-wrap items-center gap-3 border-y border-rule py-4">
         <label>
@@ -157,9 +158,9 @@ export function InterviewSession({ study: c }: { study: CaseStudy }) {
         )}
       </section>
       <h2 className="mt-8 font-display text-2xl">Requirements checklist</h2>
-      <div className="mt-3 grid gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         {[...c.requirements.functional, ...c.requirements.nonFunctional].map((r) => (
-          <label key={r} className="flex min-h-6 items-start gap-3">
+          <label key={r} className="flex min-h-10 items-start gap-2 rounded-sm border border-rule bg-surface px-3 py-2 has-[:checked]:bg-surface-2">
             <input type="checkbox" className="mt-1 size-5 shrink-0" />
             {r}
           </label>
@@ -189,13 +190,15 @@ export function InterviewSession({ study: c }: { study: CaseStudy }) {
                 key={r.stage}
                 type="button"
                 aria-current={stage === i ? "step" : undefined}
-                className={`${button} capitalize aria-[current=step]:bg-surface-2`}
+                className={`${button} flex items-center gap-2 capitalize aria-[current=step]:bg-surface-2 aria-[current=step]:border-accent`}
                 onClick={() => setStage(i)}
               >
-                {i + 1}. {r.stage}
+                <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full border border-rule font-mono text-xs">{notes[r.stage]?.trim() ? "\u2713" : i + 1}</span>
+                {r.stage}<span className="sr-only">{notes[r.stage]?.trim() ? ", notes recorded" : ", no notes"}</span>
               </button>
             ))}
           </nav>
+          <progress aria-label="Interview stage progress" className="mt-4 h-2 w-full accent-accent" value={stage + 1} max={c.rubric.length} />
           <h2 id="stage-title" className="mt-6 font-display text-2xl capitalize">
             {current.stage}
           </h2>
@@ -245,7 +248,8 @@ export function InterviewSession({ study: c }: { study: CaseStudy }) {
             {c.rubric.map((r) => (
               <fieldset key={r.stage} className="mt-5 border-t border-rule py-4">
                 <legend className="px-1 font-medium capitalize">{r.stage}</legend>
-                {notes[r.stage] && <p className="mb-3 whitespace-pre-wrap text-muted">{notes[r.stage]}</p>}
+                <RubricMeter stage={r.stage} value={ratings[r.stage]} />
+                {notes[r.stage] && <details className="mb-3"><summary className="min-h-6 cursor-pointer">Your notes</summary><p className="whitespace-pre-wrap text-muted">{notes[r.stage]}</p></details>}
                 {r.descriptors.map((d, i) => (
                   <label key={d} className="mt-2 flex min-h-6 items-start gap-3">
                     <input
@@ -265,35 +269,28 @@ export function InterviewSession({ study: c }: { study: CaseStudy }) {
 
           <div className="border-t border-rule pt-6">
             <h2 className="font-display text-2xl">Component diff (learner vs reference)</h2>
-            <table className="mt-3 w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-rule text-muted">
-                  <th className="py-2 pr-4 font-normal">Component kind</th>
-                  <th className="py-2 pr-4 text-right font-normal">Learner</th>
-                  <th className="py-2 pr-4 text-right font-normal">Reference</th>
-                  <th className="py-2 text-right font-normal">Delta</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-rule font-mono">
-                {diffRows.map((row) => (
-                  <tr key={row.kind}>
-                    <td className="py-2 pr-4">{row.kind}</td>
-                    <td className="py-2 pr-4 text-right">{row.learner}</td>
-                    <td className="py-2 pr-4 text-right">{row.reference}</td>
-                    <td className="py-2 text-right">{row.delta > 0 ? `+${row.delta}` : row.delta}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <p className="mt-2 text-sm text-muted">Counts compare component kinds, not routing or correctness. Uses the matching saved canvas when available; otherwise a starter client.</p>
+            <ul className="mt-4 grid gap-3">
+              {diffRows.map((row) => (
+                <li key={row.kind} className="border-l-4 bg-surface p-3" style={{ borderColor: `var(--kind-${row.kind})` }}>
+                  <div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-mono">{row.kind}</span><span>Delta {row.delta > 0 ? `+${row.delta}` : row.delta}</span></div>
+                  {[{ label: "Learner", count: row.learner }, { label: "Reference", count: row.reference }].map(({ label, count }) => (
+                    <div key={label} className="mt-2 grid grid-cols-[5rem_1fr_2rem] items-center gap-2 text-sm">
+                      <span>{label}</span><span aria-hidden="true" className="h-3 bg-surface-2"><span className="block h-full" style={{ width: `${count / Math.max(row.learner, row.reference, 1) * 100}%`, background: label === "Learner" ? "var(--accent-2)" : "var(--text-muted)" }} /></span><span className="font-mono text-right">{count}</span>
+                    </div>
+                  ))}
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="border-t border-rule pt-6">
             <h2 className="font-display text-2xl">Reference trade-offs &amp; alternatives</h2>
+            <EstimateTiles estimates={c.estimates} />
+            <DesignFlow design={c.design} />
             <ul className="mt-3 list-disc space-y-2 pl-5">
               {c.alternatives.map((alt) => (
-                <li key={alt.title}>
-                  <span className="font-medium">{alt.title}:</span> {alt.tradeoffs}
-                </li>
+                <li key={alt.title}><details><summary className="min-h-6 cursor-pointer font-medium">{alt.title}</summary><p className="mt-2">{alt.tradeoffs}</p></details></li>
               ))}
             </ul>
             <div className="mt-4 flex flex-wrap gap-4">

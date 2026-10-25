@@ -39,11 +39,14 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what 'reliable scheduling' means">
 
-A distributed job scheduler runs one-off delayed tasks (`send reminder in 24h`) and recurring cron jobs (`0 * * * *`) across a fleet of workers. The hardest question to clarify right away is **what delivery guarantee is possible when a worker crashes mid-execution**.
-
-**Functional**: register, cancel, and inspect one-off or recurring cron jobs with a payload, retry policy (`maxAttempts`, exponential backoff), and execution timeout; dispatch due jobs to workers; record execution history and route exhausted failures to a dead-letter queue (DLQ).
-
-**Non-functional**: dispatch due jobs within **~1 second** of `scheduledAt` during normal load; guarantee **at-least-once dispatch** (zero lost jobs once committed) combined with **fencing tokens and idempotency keys** so retries look like effectively-once execution; and survive the **00:00 UTC cron spike** without starving latency-sensitive jobs.
+<Compare
+  title="job-scheduler - Pin down what 'reliable scheduling' means"
+  sides={[
+    {"title": "Features", "points": ["Delayed/cron jobs; cancel, inspect, history, retries, timeouts, DLQ"]},
+    {"title": "Targets", "points": ["Dispatch within about 1 s; survive midnight bursts"]},
+    {"title": "Safety", "points": ["At-least-once dispatch; downstream fencing + execution idempotency"]}
+  ]}
+/>
 
 <Choice
   id="scheduler-guarantee-truth"
@@ -60,12 +63,16 @@ A distributed job scheduler runs one-off delayed tasks (`send reminder in 24h`) 
 
 <Step id="estimates" title="Size the worker pool and the 00:00 UTC herd">
 
-Suppose tenants register **50 million active jobs** that trigger **500 million executions per day**, with an average job duration of `W = 500 ms`:
-
-- **Average execution rate (`λ`)**: 500M ÷ 86,400 s ≈ **5,800 executions/s**.
-- **Average concurrent workers (Little's law)**: `L = λ × W = 5,800/s × 0.5 s =` **2,900 busy worker slots**.
-- **The 00:00 UTC spike**: humans love scheduling cron jobs at midnight (`0 0 * * *`) or the top of the hour (`0 * * * *`). If 20% of daily cron runs fire at `00:00:00`, **~100,000 jobs become due in the same second** (~17× average!).
-- **Metadata storage**: 50M jobs × 500 B ≈ **25 GB**; 7 days of execution history (`3.5B × 200 B`) ≈ **700 GB**.
+<Stats
+  title="job-scheduler - Size the worker pool and the 00:00 UTC herd"
+  items={[
+    {"label": "Executions", "value": "5.8k/s", "sub": "500M/day / 86,400"},
+    {"label": "Busy slots", "value": "2,900", "sub": "5,800/s * 0.5 s; add headroom"},
+    {"label": "Midnight burst", "value": "100k jobs/s", "sub": "Illustrative 17x burst; specify schedule distribution"},
+    {"label": "Job metadata", "value": "25 GB", "sub": "50M * 500 B"},
+    {"label": "History", "value": "700 GB/week", "sub": "3.5B * 200 B"}
+  ]}
+/>
 
 <Choice
   id="scheduler-littles-law"
@@ -82,10 +89,15 @@ Suppose tenants register **50 million active jobs** that trigger **500 million e
 
 <Step id="api" title="Design the submission and lease heartbeat APIs">
 
-- `POST /v1/jobs` with `Idempotency-Key` and `{ schedule, payload, timeoutSec, maxAttempts }` → **201** `{ jobId, nextRunAt }`.
-- `GET /v1/jobs/{jobId}/executions` → **200** `{ executions: [{ executionId, scheduledAt, status, leaseEpoch }] }`.
-- `POST /v1/executions/{executionId}/heartbeat` with `{ workerId, leaseEpoch }` → **200** `{ leaseUntil }` or **409 Conflict** if the job was cancelled or the lease expired and was reassigned (`leaseEpoch` advanced).
-- `POST /v1/executions/{executionId}/complete` with `{ workerId, leaseEpoch, output }` → **200** only if `executions.leaseEpoch == request.leaseEpoch`; otherwise **409 Stale Lease**.
+<Timeline
+  title="job-scheduler - Design the submission and lease heartbeat APIs"
+  events={[
+    {"at": "Submit", "label": "POST /v1/jobs + Idempotency-Key; schedule, payload, timeoutSec, maxAttempts"},
+    {"at": "Inspect", "label": "GET /v1/jobs/{id}/executions; status + leaseEpoch"},
+    {"at": "Heartbeat", "label": "POST /v1/executions/{id}/heartbeat; workerId + epoch"},
+    {"at": "Complete", "label": "POST /v1/executions/{id}/complete; stale epoch -> 409"}
+  ]}
+/>
 
 <Choice
   id="scheduler-heartbeat-409"
@@ -102,13 +114,14 @@ Suppose tenants register **50 million active jobs** that trigger **500 million e
 
 <Step id="data-model" title="Model sharded time buckets and execution state">
 
-Why not let 500 workers run `SELECT * FROM jobs WHERE status='SCHEDULED' AND next_run_at <= NOW() LIMIT 10` on one table? At scale, hundreds of concurrent range scans contend on the same B-tree head.
-
-Instead, partition `jobs` across **$B$ virtual buckets** (e.g., `bucketId = hash(jobId) % 64`):
-- **`jobs`**: primary key `(bucketId, jobId)`, composite index **`(bucketId, status, nextRunAt)`**.
-- **`executions`**: primary key `executionId = "{jobId}:{scheduledAtEpoch}"`, columns `status` (`ENQUEUED | RUNNING | SUCCEEDED | FAILED | DEAD_LETTER`), `attempt`, `leaseEpoch`, `leaseUntil`.
-
-Because `executionId` is deterministically derived from `(jobId, scheduledAtEpoch)`, even if two scheduler nodes race to enqueue the `12:00` cron tick for `job:99`, the unique primary key on `executionId` guarantees at most one execution row is created!
+<Timeline
+  title="job-scheduler - Model sharded time buckets and execution state"
+  events={[
+    {"at": "Jobs", "label": "hash(jobId)%64; index bucketId, status, nextRunAt"},
+    {"at": "Execution ID", "label": "jobId + scheduledAtEpoch; unique row prevents duplicate creation"},
+    {"at": "Lease", "label": "attempt, leaseEpoch, leaseUntil; ENQUEUED/RUNNING/SUCCEEDED/FAILED/DEAD_LETTER"}
+  ]}
+/>
 
 <Choice
   id="scheduler-deterministic-exec-id"
@@ -125,10 +138,26 @@ Because `executionId` is deterministically derived from `(jobId, scheduledAtEpoc
 
 <Step id="high-level" title="Connect the durable schedule store to the ready queue">
 
-A scalable scheduler separates **waiting for a future timestamp** from **dispatching ready work**:
-1. **Submission (`api1`, `api2`)**: deduplicates via `dedup`, writes the job to `jobdb`, and if the job is due immediately (or within the current lookahead window), publishes it to the **Ready Queue** (`readyqueue`).
-2. **Bucket Pollers**: each scheduler instance holds a lease on a subset of `bucketId`s (`0..63`), scans `WHERE bucket_id = ? AND status = 'SCHEDULED' AND next_run_at <= NOW()`, atomically creates the `executions` row (and advances `nextRunAt` for cron jobs), and pushes `executionId` to `readyqueue`.
-3. **Worker Fleet (`runners`)**: pulls ready messages from `readyqueue`, claims/verifies the execution lease in `execdedup` / `jobdb`, executes the task, and records completion.
+<Flow
+  title="job-scheduler - Connect the durable schedule store to the ready queue"
+  nodes={[
+    {"id": "0", "label": "Poller", "kind": "service", "x": 10, "y": 25},
+    {"id": "1", "label": "Jobs DB", "kind": "database", "x": 50, "y": 25},
+    {"id": "2", "label": "Ready queue", "kind": "queue", "x": 90, "y": 25},
+    {"id": "3", "label": "Runners", "kind": "worker", "x": 10, "y": 80},
+    {"id": "4", "label": "Exec dedup", "kind": "dedupStore", "x": 50, "y": 80},
+    {"id": "5", "label": "Status cache", "kind": "cache", "x": 90, "y": 80}
+  ]}
+  edges={[
+    {"from": "0", "to": "1", "label": "due index"},
+    {"from": "0", "to": "2", "label": "executionId"},
+    {"from": "2", "to": "3", "label": "lease"},
+    {"from": "3", "to": "4", "label": "execution key"},
+    {"from": "3", "to": "1", "label": "fenced result"},
+    {"from": "5", "to": "1", "label": "miss"}
+  ]}
+  height={300}
+/>
 
 <Ordering
   id="scheduler-dispatch-steps"
@@ -147,16 +176,15 @@ A scalable scheduler separates **waiting for a future timestamp** from **dispatc
 
 <Step id="deep-dive" title="Deep dive: fencing tokens and the 00:00 UTC herd">
 
-### Why visibility timeouts alone are not enough (Kleppmann's fencing tokens)
-Suppose Worker 1 claims an execution with a 60-second lease (`leaseEpoch = 1`), starts generating a PDF invoice, and hits a 75-second stop-the-world GC pause (or network stall).
-1. At `t = 60 s`, the scheduler sees the expired lease, increments `leaseEpoch = 2`, and dispatches the execution to Worker 2.
-2. At `t = 75 s`, Worker 1 wakes up from GC and tries to write its output to storage and mark the execution `SUCCEEDED`.
-3. Because both the storage service and `jobdb` check `WHERE lease_epoch = :token`, Worker 1's write carrying `leaseEpoch = 1` is rejected (`1 < 2`). The monotonic fencing token stops the zombie worker cold!
-
-### Surviving 00:00 UTC
-When 20% of all daily cron jobs specify `0 0 * * *`:
-- **Hash-jittered cron (`H 0 * * *`)**: encourage or default recurring schedules to spread deterministically by `hash(jobId) % 3600` seconds unless exact wall-clock second is required.
-- **Priority lanes**: keep separate ready queues for `HIGH` (real-time user webhooks, SLA under 1 s) and `BATCH` (nightly reports, SLA under 10 min) so midnight batch jobs never delay user-facing tasks.
+<Compare
+  title="job-scheduler - Deep dive: fencing tokens and the 00:00 UTC herd"
+  sides={[
+    {"title": "Lease 1", "points": ["Worker freezes 75 s; lease expires at 60 s"]},
+    {"title": "Lease 2", "points": ["Reassign epoch 2; downstream storage and DB enforce token"]},
+    {"title": "Zombie", "points": ["Epoch 1 resumes; reject stale writes"]},
+    {"title": "Midnight", "points": ["Hash-jitter where allowed; separate HIGH and BATCH lanes"]}
+  ]}
+/>
 
 <Choice
   id="scheduler-zombie-fencing"
@@ -173,9 +201,14 @@ When 20% of all daily cron jobs specify `0 0 * * *`:
 
 <Step id="alternatives" title="Compare the alternatives">
 
-- **No execution idempotency or fencing (`scheduler-no-fencing`)**: runnable in the simulator. When the worker fleet crashes in `runner-crash` and in-flight jobs are redelivered after the visibility timeout, appending results without `execdedup`/fencing causes `duplicateEffect` violations.
-- **Unindexed table scan (`scheduler-table-scan`)**: runnable in the simulator. Polling the jobs table without an index saturates `jobdb` and drops goodput below 70%.
-- **In-memory hierarchical timing wheel**: O(1) insertion and tick advancement in RAM (used inside Kafka and Netty for request timeouts), paired with a durable database lookahead loader that pre-fetches jobs due in the next 60 seconds.
+<Compare
+  title="job-scheduler - Compare the alternatives"
+  sides={[
+    {"title": "scheduler-no-fencing", "points": ["Crash/replay causes duplicateEffect"]},
+    {"title": "scheduler-table-scan", "points": ["Unindexed polling; goodput <70%"]},
+    {"title": "Timing wheel", "points": ["O(1) RAM timers; durable loader fetches next 60 s"]}
+  ]}
+/>
 
 <Choice
   id="scheduler-poison-pill"
@@ -192,9 +225,32 @@ When 20% of all daily cron jobs specify `0 0 * * *`:
 
 <Step id="failures" title="Run the failure scenarios">
 
-1. **Worker fleet crash (`runner-crash`)**: `runners` die from t = 1.3 s to 1.8 s. Unacknowledged executions reappear after the 400 ms visibility timeout and are re-executed cleanly once workers recover, with `execdedup` preventing any `duplicateEffect` violation.
-2. **Midnight cron spike (`midnight-cron-spike`)**: traffic triples at the top of the hour. `readyqueue` buffers the surge and feeds `runners` at steady capacity with >99% goodput.
-3. **Jobs DB failover (`db-leader-failover`)**: `jobdb` leader crashes at t = 1.5 s. Cached execution status reads keep working while a replica is promoted in ~0.5 s with leader fencing enabled.
+<Timeline
+  title="job-scheduler - runner-crash"
+  events={[
+    {"at": "Inject", "label": "Workers down 1.3-1.8 s", "tone": "bad"},
+    {"at": "Observe", "label": "Replay after 400 ms visibility timeout", "tone": "warn"},
+    {"at": "Recover", "label": "execdedup prevents duplicate effects", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="job-scheduler - midnight-cron-spike"
+  events={[
+    {"at": "Inject", "label": "Traffic x3", "tone": "bad"},
+    {"at": "Observe", "label": "readyqueue buffers burst", "tone": "warn"},
+    {"at": "Recover", "label": "Steady worker rate; >99% goodput", "tone": "ok"}
+  ]}
+/>
+
+<Timeline
+  title="job-scheduler - db-leader-failover"
+  events={[
+    {"at": "Inject", "label": "DB leader dies at 1.5 s", "tone": "bad"},
+    {"at": "Observe", "label": "Cached status reads continue", "tone": "warn"},
+    {"at": "Recover", "label": "About 0.5 s promotion; fence old leader", "tone": "ok"}
+  ]}
+/>
 
 <Choice
   id="scheduler-crash-recovery"
@@ -211,9 +267,14 @@ When 20% of all daily cron jobs specify `0 0 * * *`:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Close your interview by naming the two SLIs that matter most for a job scheduler:
-- **Dispatch lag (`startedAt - scheduledAt`)**: p99 under 1 s for real-time priority queues; alert if any `bucketId` poller falls behind `NOW()`.
-- **Dead-letter rate & zombie rejection rate**: alert tenants when jobs enter the DLQ, and track `409 Stale Lease` rejections to spot jobs whose execution time exceeds their configured lease/heartbeat window.
+<Timeline
+  title="job-scheduler - Wrap up and self-assess"
+  events={[
+    {"at": "Lag", "label": "startedAt - scheduledAt; real-time p99 <1 s"},
+    {"at": "Failure", "label": "Alert tenants on DLQ entries"},
+    {"at": "Lease", "label": "Track 409 Stale Lease; compare runtime against heartbeat window"}
+  ]}
+/>
 
 <Choice
   id="scheduler-sli-choice"

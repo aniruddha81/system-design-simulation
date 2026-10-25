@@ -40,11 +40,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-A web crawler starts from a set of seed URLs, downloads pages, extracts outgoing links, and repeats across billions of pages. The challenge is not making HTTP requests — it is fetching at **6,000+ pages per second** without ever overloading a small web server, getting stuck in an infinite calendar trap, or wasting storage on duplicate pages.
-
-**Functional**: ingest seed URLs, fetch HTML, parse outgoing links, canonicalise and deduplicate URLs, deduplicate near-identical page content, obey `robots.txt` (`Disallow` and `Crawl-delay`), and prioritise high-value or frequently changing pages for recrawl.
-
-**Non-functional**: sustain ~15 billion pages per month (~5,800 pages/s average, ~12,000/s peak), guarantee strict **per-host politeness** (at most one in-flight request per host with a minimum delay between fetches), and survive worker crashes without losing the crawl frontier.
+<Compare title="web-crawler / requirements" sides={[{"title": "Fetch, parse, deduplicate", "points": ["Seed URLs; canonicalisation; robots directives; prioritised recrawls"]}, {"title": "Polite and durable", "points": ["One in-flight request/host + delay; persistent frontier; trap protection"]}]} />
 
 <Choice
   id="crawler-core-constraint"
@@ -61,14 +57,7 @@ A web crawler starts from a set of seed URLs, downloads pages, extracts outgoing
 
 <Step id="estimates" title="Work out the numbers">
 
-Assume **15 billion pages per month** and **100 KB average compressed HTML per page**:
-
-- **Crawl rate**: 15B ÷ (30 × 86,400 s) ≈ **5,800 pages/s** average, ~12,000 pages/s at peak.
-- **Ingress bandwidth**: 5,800/s × 100 KB ≈ **580 MB/s (4.6 Gbit/s)** sustained, ~10 Gbit/s peak.
-- **Raw HTML storage**: 15B × 100 KB ≈ **1.5 PB** per crawl cycle in object storage.
-- **URL deduplication volume**: if each page has ~80 outgoing links, parsers check ~460,000 URLs/s against the seen-URL filter.
-- **Bloom filter memory**: 15B URLs × ~14.4 bits/URL (for a 0.1% false-positive rate) ≈ **27 GB of RAM** — fits across a handful of nodes.
-- **Fetcher concurrency**: by Little's law, 6,000 pages/s × 0.5 s mean response time = **3,000 fetches in flight**.
+<Stats title="web-crawler / estimates" items={[{"label": "Fetches/s", "value": "5,800", "sub": "15B/month / 30 / 86,400; 12k peak"}, {"label": "Ingress", "value": "580 MB/s", "sub": "5,800 / 100 KB; 4.6 Gbit/s"}, {"label": "HTML/cycle", "value": "1.5 PB", "sub": "15B / 100 KB"}, {"label": "URL checks/s", "value": "460k", "sub": "~80 links/page"}, {"label": "Bloom memory", "value": "27 GB", "sub": "15B / 14.4 bits; 0.1% false positives"}, {"label": "Fetch concurrency", "value": "3,000", "sub": "6,000/s / 0.5s"}]} />
 
 <Choice
   id="bloom-memory-estimate"
@@ -85,11 +74,7 @@ Assume **15 billion pages per month** and **100 KB average compressed HTML per p
 
 <Step id="api" title="Design the internal interfaces">
 
-A crawler is an internal pipeline, so its APIs connect the parser, frontier scheduler, and politeness caches:
-
-- `POST /v1/frontier/urls` — parser workers submit batches of discovered `{ rawUrl, sourceHost, depth }`; the scheduler canonicalises each URL, checks the seen filter, and enqueues unseen URLs into the frontier.
-- `GET /v1/robots/{domain}` — returns the parsed `Disallow` prefixes and `Crawl-delay` for a host, cached for up to 24 hours.
-- `POST /v1/frontier/lease` — fetcher workers lease the next ready batch of URLs for hosts whose politeness timer has expired and acknowledge completion (`200`) once the HTML blob and metadata are stored.
+<Compare title="web-crawler / api" sides={[{"title": "POST /v1/frontier/urls; GET /v1/robots/{domain}", "points": ["Batch rawUrl/sourceHost/depth; cached directives up to 24h"]}, {"title": "POST /v1/frontier/lease", "points": ["Lease ready hosts; acknowledge after durable HTML + metadata"]}]} />
 
 <Choice
   id="robots-cache-ttl"
@@ -106,10 +91,7 @@ A crawler is an internal pipeline, so its APIs connect the parser, frontier sche
 
 <Step id="data-model" title="Model the data">
 
-- **urlseen (Bloom filter + KV store)**: tracks canonicalised URLs that have already been enqueued so cycles in the web graph do not cause infinite recrawls.
-- **robotsRules**: keyed by `domainId`, storing parsed robots directives and expiration timestamps.
-- **pages**: keyed by `urlId`, storing `domain`, HTTP `status`, `crawledAt`, and a 64-bit `contentHash` (SimHash) indexed to detect near-duplicate pages.
-- **htmlBlobs**: compressed raw HTML in an immutable object store, separate from the fast metadata store.
+<Compare title="web-crawler / data-model" sides={[{"title": "Dedup + politeness", "points": ["urlseen Bloom/KV; robotsRules by domain + expiry"]}, {"title": "Page archive", "points": ["urlId / domain/status/crawledAt/SimHash; immutable HTML blobs separate"]}]} />
 
 <Choice
   id="separate-blobs"
@@ -126,11 +108,7 @@ A crawler is an internal pipeline, so its APIs connect the parser, frontier sche
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-Followed links flow through a clean loop:
-
-1. **Frontier schedulers** canonicalise incoming URLs and check the **URL seen filter**.
-2. Unseen URLs enter the **Politeness frontier queues**.
-3. **Fetcher + parser workers** pull ready URLs, verify cached `robots.txt` rules, download the page, write the raw HTML to the **object store** and metadata/SimHash to the **metadata KV store**, and feed newly extracted links back to the scheduler.
+<Flow title="web-crawler / high-level" nodes={[{"id": "0", "label": "Scheduler", "kind": "service", "x": 10, "y": 18}, {"id": "1", "label": "Seen filter", "kind": "dedupStore", "x": 50, "y": 18}, {"id": "2", "label": "Frontier", "kind": "queue", "x": 90, "y": 18}, {"id": "3", "label": "Fetcher/parser", "kind": "worker", "x": 10, "y": 82}, {"id": "4", "label": "Robots cache", "kind": "cache", "x": 50, "y": 82}, {"id": "5", "label": "HTML archive", "kind": "objectStore", "x": 90, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "canonical URL"}, {"from": "0", "to": "2", "label": "unseen"}, {"from": "2", "to": "3", "label": "host-ready lease"}, {"from": "3", "to": "4", "label": "robots check"}, {"from": "3", "to": "5", "label": "durable HTML"}, {"from": "3", "to": "0", "label": "discovered links"}]} height={300} caption={"Acknowledge leased work after durable storage. Host timers enforce politeness; metadata stores status and content fingerprints."} />
 
 <Ordering
   id="crawl-lifecycle"
@@ -150,18 +128,9 @@ Followed links flow through a clean loop:
 
 <Step id="deep-dive" title="Deep dive: Mercator frontier, Bloom filters, and SimHash">
 
-### 1. The Mercator two-tier frontier
-A crawler needs both **prioritisation** (fetch high-PageRank news homepages before obscure forum archives) and **politeness** (never send concurrent requests to the same host). Mercator solves this with two tiers of queues:
-- **Front queues (`F_1 .. F_k`)**: `k` priority levels. A classifier assigns each URL to a priority queue based on domain authority and change frequency.
-- **Back queues (`B_1 .. B_n`)**: each active host maps to exactly one back FIFO queue. A min-heap tracks the earliest next fetch time `t_next` for each host; when a worker pops the heap root, it fetches one URL from that host's back queue and re-inserts the host at `t_now + crawlDelay`.
-
-### 2. URL deduplication with a Bloom filter
-Explore how a Bloom filter's bit array size $m$ and hash count $k$ control false positives in the interactive model below:
+<Compare title="web-crawler / deep-dive" sides={[{"title": "Mercator frontier", "points": ["Priority front queues / host FIFOs; min-heap next-fetch times"]}, {"title": "Dedup mechanisms", "points": ["Bloom: possible false positives; SimHash: near-duplicate text by <=3 differing bits"]}]} />
 
 <SketchesPlayer />
-
-### 3. Content deduplication with SimHash
-Different URLs often serve identical or near-identical text (`example.com/item?ref=a` vs `example.com/print/item`). Cryptographic hashes like SHA-256 change completely if a single timestamp or ad banner changes. **SimHash** hashes each word/shingle into a 64-bit vector, weights bits by term weight, and collapses the sign of each position into a 64-bit fingerprint. Two pages are near-duplicates if the Hamming distance between their 64-bit fingerprints is at most $d = 3$.
 
 <Choice
   id="simhash-vs-sha256"
@@ -178,9 +147,7 @@ Different URLs often serve identical or near-identical text (`example.com/item?r
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **No `robots.txt` cache (hit the store on every check)**: in the simulator, removing the in-memory `robotscache` forces every check to scan/read the metadata store, saturating it and dropping goodput below 90%.
-- **Database lookup instead of a Bloom filter for URL dedup**: checking 460k outgoing links/s against disk-backed indexes requires a massive database cluster; an in-memory Bloom filter rejects 99.9% of duplicates in nanoseconds.
-- **Consistent host-to-worker hashing**: pinning each hostname to one fetcher partition via consistent hashing ensures both the host's back queue and its connection pool stay local to one worker.
+<Compare title="web-crawler / alternatives" sides={[{"title": "No robots cache", "points": ["Store saturates; <90% fixture goodput"]}, {"title": "Disk URL dedup", "points": ["460k checks/s require substantial capacity"]}, {"title": "Host-worker hashing", "points": ["Local politeness queue and connection reuse"]}]} />
 
 <Choice
   id="bloom-false-positive-tradeoff"
@@ -197,11 +164,11 @@ Different URLs often serve identical or near-identical text (`example.com/item?r
 
 <Step id="failures" title="Run the failure scenarios">
 
-Test the reference design against three failure modes in the simulator:
+<Timeline title="web-crawler / link-burst: 2x" events={[{"at": "Inject", "label": "link-burst: 2x", "tone": "warn"}, {"at": "Observe", "label": "Seen filter removes duplicates"}, {"at": "Result", "label": "Frontier queues buffer; fetchers stay polite"}]} />
 
-- **Link discovery burst (`link-burst`)**: crawlers hit directory/sitemap hub pages and traffic doubles. The URL dedup store drops already-seen links and the frontier queue absorbs the burst so fetchers continue at a polite pace.
-- **Fetcher worker crash (`fetcher-crash`)**: fetcher workers die for 500 ms while holding leased URLs. Because frontier leases use a visibility timeout, unacknowledged URLs become visible again and are fetched cleanly on recovery.
-- **Slow archive object store (`slow-archive`)**: writing compressed HTML blobs degrades 4×. Because fetching happens asynchronously behind the frontier queue, scheduling and robots lookups stay fast.
+<Timeline title="web-crawler / fetcher-crash: 500ms" events={[{"at": "Inject", "label": "fetcher-crash: 500ms", "tone": "warn"}, {"at": "Observe", "label": "Unacknowledged leases expire"}, {"at": "Result", "label": "URLs become visible for safe recovery"}]} />
+
+<Timeline title="web-crawler / slow-archive: 4x" events={[{"at": "Inject", "label": "slow-archive: 4x", "tone": "warn"}, {"at": "Observe", "label": "Blob writes slow workers"}, {"at": "Result", "label": "Queue decouples scheduling/robots; monitor backlog"}]} />
 
 <Choice
   id="fetcher-lease-recovery"
@@ -218,10 +185,7 @@ Test the reference design against three failure modes in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Close your design by addressing **spider traps** — dynamic pages like infinite calendars (`/calendar/2099/12/31`), session IDs in URLs, or faceted filters that generate billions of useless URLs. Defend against them with:
-1. Strict URL canonicalisation and maximum URL length / path depth caps.
-2. Per-host crawl budgets (maximum pages fetched per domain per cycle).
-3. Monitoring repeat SimHash rates per host (if a host produces 10,000 URLs with near-identical SimHashes, demote its priority).
+<Compare title="web-crawler / wrap-up" sides={[{"title": "Trap defences", "points": ["Canonical URLs; length/depth limits; per-host crawl budgets"]}, {"title": "Detect waste", "points": ["Repeated near-identical SimHashes demote host priority"]}]} />
 
 <Choice
   id="spider-trap-defence"

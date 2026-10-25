@@ -26,13 +26,11 @@ estimatedMinutes: 8
 
 <Step id="scale-driver" title="What drives the scale">
 
-Discord’s March 2023 storage account describes replacing 177 Cassandra nodes with 72 ScyllaDB nodes. Those historical machine counts do not measure channel API throughput or define a universal capacity ratio.
+Illustrative budgets, not production topology. Public scale figures do not determine API throughput.
 
-This **illustrative** sketch chooses 200,000 requests/s, 80% history reads and 20% sends, with fixed 1 KiB responses. Each region has channel-message buckets, a durable queue and delivery workers. Read handlers consult a shared US channel directory and local message storage in parallel; sends consult the directory and acknowledge the queue.
+<Flow title={"Architecture paths"} nodes={[{"id": "0", "label": "Channel API", "kind": "service", "x": 8.0, "y": 30}, {"id": "1", "label": "US directory", "kind": "kvStore", "x": 29.0, "y": 70}, {"id": "2", "label": "Messages", "kind": "database", "x": 50.0, "y": 30}, {"id": "3", "label": "Queue", "kind": "queue", "x": 71.0, "y": 70}, {"id": "4", "label": "Delivery", "kind": "worker", "x": 92.0, "y": 30}]} edges={[{"from": "0", "to": "1"}, {"from": "0", "to": "2"}, {"from": "0", "to": "3"}, {"from": "3", "to": "4"}]} height={280} caption={"Reads join directory and local storage; sends consult directory then queue. One worker operation -> mailbox write; sockets, fan-out and voice/media omitted. Hotspot contention predictions disabled; worker cost uses global mix."} />
 
-One worker operation approximates a mailbox write; websocket fan-out and voice/media traffic are omitted. Consumers use the global read/write mix for service cost. A busy-channel hotspot cannot establish actual shard affinity or lock contention: affected predictions are disabled for that scenario.
-
-[Public scale anchor](https://discord.com/blog/how-discord-stores-trillions-of-messages). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+<Stats title={"Illustrative assumptions"} items={[{"label": "Global offered rate", "value": "200k requests/s"}, {"label": "Fixed response / payload", "value": "1 KiB"}, {"label": "Model choice", "value": "80% reads / 20% sends"}]} />
 
 <Choice
   id="driver-check"
@@ -45,15 +43,19 @@ One worker operation approximates a mailbox write; websocket fan-out and voice/m
 
 <Step id="test-remedy" title="Failure ladder and what to try">
 
-**Observed Failure ladder.** At 4x, delivery-0 and delivery-1 saturate. At 16x, the US admission-to-API edge saturates. Background delivery therefore appears before that client-facing edge in this short sweep.
+Failure ladder: short model sweeps, not production limits. Change one budget in a copy; compare unchanged scenarios. Remedies remain unverified; correctness stays **unknown**.
 
-These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+<Timeline title={"Observed Failure ladder"} events={[{"at": "4x", "label": "Both delivery workers saturate", "tone": "warn"}, {"at": "16x", "label": "US admission -> API saturates", "tone": "warn"}]} />
 
-**What to try.** Try additional delivery concurrency and compare consumer age before changing history-read capacity. Then remove the shared directory dependency in a copy and repeat its brownout and the US region outage. A larger database alone is not a verified fix for worker holding time or a cross-region directory failure. Remedies are suggestions to test; none is verified here.
+<Stats title={"Sweep limits"} items={[{"label": "Independent levels", "value": "1x / 4x / 16x"}, {"label": "Per level", "value": "2 s + 8 s", "sub": "Warm-up + measurement; no drain"}, {"label": "Step", "value": "250 ms"}, {"label": "Steady state", "value": "Unstable", "sub": "Window < required 30 s"}, {"label": "Edge ceiling", "value": "~1M/s", "sub": "1 microsecond minimum service time"}]} />
 
-The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+<Timeline title={"Incident window"} events={[{"at": "0 s", "label": "Normal day; celebrity concentration starts"}, {"at": "4 s", "label": "Disturbance begins", "tone": "warn"}, {"at": "8 s", "label": "Disturbance ends"}]} />
 
-When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+<Compare title={"Scenario pack"} sides={[{"title": "Traffic", "points": ["Normal day", "Peak event: 4x", "Celebrity: 4x concentrated", "DDoS: 50x competing application traffic"]}, {"title": "Dependencies", "points": ["US region outage: regional entry retained", "No automatic evacuation", "Brownout: 10x service time", "DDoS does not identify legitimate users"]}]} />
+
+<Compare title={"Experiments to compare"} sides={[{"title": "Delivery concurrency", "points": ["Compare consumer age", "History-read capacity is separate"]}, {"title": "Remove shared directory", "points": ["Compare brownout and US outage", "A larger database does not remove dependence"]}]} />
+
+When integration is available, select this reference's normal-day pack in Scale mode. Check fidelity reasons before using disabled metrics.
 
 <Choice
   id="remedy-check"

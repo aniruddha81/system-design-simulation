@@ -26,13 +26,11 @@ estimatedMinutes: 8
 
 <Step id="scale-driver" title="What drives the scale">
 
-Meta described a WhatsApp network carrying over 100 billion messages/day in April 2021, roughly 1.16 million/s on average. This **illustrative** model chooses 1.2 million sends/s and fixed 1 KiB payloads, without inferring delivery fan-out from that public count.
+Illustrative budgets, not production topology. Public scale figures do not determine API throughput.
 
-Each regional ingress consults a shared US session directory, then acknowledges a regional durable queue. Delivery workers write a regional recipient-mailbox aggregate. One consumed message represents one mailbox operation; group fan-out, persistent sockets and encryption cost are omitted.
+<Flow title={"Architecture paths"} nodes={[{"id": "0", "label": "Ingress", "kind": "service", "x": 8.0, "y": 30}, {"id": "1", "label": "US directory", "kind": "kvStore", "x": 29.0, "y": 70}, {"id": "2", "label": "Queue", "kind": "queue", "x": 50.0, "y": 30}, {"id": "3", "label": "Delivery", "kind": "worker", "x": 71.0, "y": 70}, {"id": "4", "label": "Mailbox", "kind": "database", "x": 92.0, "y": 30}]} edges={[{"from": "0", "to": "1"}, {"from": "0", "to": "2"}, {"from": "2", "to": "3"}, {"from": "3", "to": "4"}]} height={280} caption={"Queue acceptance does not prove delivery. Regional queues share a US directory. Group fan-out, sockets and encryption costs omitted."} />
 
-An API success means queue acceptance. Inspect message depth and consumer age separately to learn whether delivery keeps up. The shared directory creates a cross-region dependency even though the queues and mailboxes are regional.
-
-[Public scale anchor](https://engineering.fb.com/2021/04/16/security/dit/). All other rates, byte sizes, service times, prices and capacities are illustrative assumptions in the reference design.
+<Stats title={"Illustrative assumptions"} items={[{"label": "Global offered rate", "value": "1.2M sends/s"}, {"label": "Fixed response / payload", "value": "1 KiB"}, {"label": "Model choice", "value": "1 mailbox operation/message"}]} />
 
 <Choice
   id="driver-check"
@@ -45,15 +43,19 @@ An API success means queue acceptance. Inspect message depth and consumer age se
 
 <Step id="test-remedy" title="Failure ladder and what to try">
 
-**Observed Failure ladder.** At 4x, both admission-to-ingress edges saturate, followed by the US ingress-to-directory edge. The observed first three rungs are link resources; they include the engine exchange-rate ceiling rather than proving a production bottleneck.
+Failure ladder: short model sweeps, not production limits. Change one budget in a copy; compare unchanged scenarios. Remedies remain unverified; correctness stays **unknown**.
 
-These are the first three rungs of an independent normal-day sweep at **1x, 4x and 16x**, with 2 s warm-up and 8 s measurement per level, fixed 250 ms steps and no sweep drain. Levels report **unstable — no steady state** because the observation window is shorter than the required 30 s. The engine floors edge service time at one microsecond, limiting an edge to roughly one million exchanges/s even when its configured bandwidth permits more. Treat the ladder as a diagnostic for this model.
+<Timeline title={"Observed Failure ladder"} events={[{"at": "4x", "label": "Both admission -> ingress edges saturate", "tone": "warn"}, {"at": "Next", "label": "US ingress -> directory saturates", "tone": "warn"}]} />
 
-**What to try.** Try reducing the global offered rate, then replace the shared directory with regional dependencies and rewire the matching ingress handlers. Compare the directory brownout and US region outage before claiming isolation. Also test worker capacity while watching queue depth; a send-success ratio alone cannot verify delivery. Remedies are suggestions to test; none is verified here.
+<Stats title={"Sweep limits"} items={[{"label": "Independent levels", "value": "1x / 4x / 16x"}, {"label": "Per level", "value": "2 s + 8 s", "sub": "Warm-up + measurement; no drain"}, {"label": "Step", "value": "250 ms"}, {"label": "Steady state", "value": "Unstable", "sub": "Window < required 30 s"}, {"label": "Edge ceiling", "value": "~1M/s", "sub": "1 microsecond minimum service time"}]} />
 
-The six Scale scenarios are normal day, peak event (4x), US region outage, hot key/celebrity (4x concentrated demand), dependency brownout (10x service time) and DDoS (50x application traffic). Disturbances run from second 4 through second 8; celebrity concentration applies from the start. The outage retains each client's regional entry, with no automatic evacuation. DDoS adds competing traffic without identifying legitimate users.
+<Timeline title={"Incident window"} events={[{"at": "0 s", "label": "Normal day; celebrity concentration starts"}, {"at": "4 s", "label": "Disturbance begins", "tone": "warn"}, {"at": "8 s", "label": "Disturbance ends"}]} />
 
-When sandbox integration is available, select this reference and its normal-day pack in Scale mode, copy it, change one budget, and compare against the unchanged scenario. Check fidelity reasons before reading a disabled metric; correctness stays **unknown**.
+<Compare title={"Scenario pack"} sides={[{"title": "Traffic", "points": ["Normal day", "Peak event: 4x", "Celebrity: 4x concentrated", "DDoS: 50x competing application traffic"]}, {"title": "Dependencies", "points": ["US region outage: regional entry retained", "No automatic evacuation", "Brownout: 10x service time", "DDoS does not identify legitimate users"]}]} />
+
+<Compare title={"Experiments to compare"} sides={[{"title": "Lower offered rate", "points": ["Compare the same edge ladder", "Inspect queue depth and consumer age"]}, {"title": "Regional directories", "points": ["Rewire ingress handlers", "Compare directory brownout and US outage"]}]} />
+
+When integration is available, select this reference's normal-day pack in Scale mode. Check fidelity reasons before using disabled metrics.
 
 <Choice
   id="remedy-check"

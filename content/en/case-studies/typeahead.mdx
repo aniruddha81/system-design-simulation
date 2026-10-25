@@ -36,11 +36,7 @@ estimatedMinutes: 35
 
 <Step id="requirements" title="Pin down what you are building">
 
-As a user types into a search bar, **typeahead (autocomplete)** predicts the top $k$ (typically 5–10) query completions after every keystroke. Because human typing speed is ~150–200 ms per character, suggestions feel broken unless the round-trip finishes in under **100 ms** (meaning under **50 ms server-side p99**).
-
-**Functional**: given a prefix string `q`, return the top $k$ completions ranked by popularity and recency; log completed searches to update rankings; filter blocked or offensive phrases rapidly.
-
-**Non-functional**: p99 server latency < 50 ms; extreme read-to-write asymmetry (~10 keystroke reads per completed search); high availability; eventual consistency (minutes) for popularity updates, but fast propagation for safety blocklists.
+<Compare title="typeahead / requirements" sides={[{"title": "Top 5-10 completions", "points": ["Rank popularity/recency; log completed queries; block unsafe phrases"]}, {"title": "Server p99 <50ms", "points": ["Round trip <100ms; eventual popularity; fast safety updates"]}]} />
 
 <Choice
   id="typeahead-latency-driver"
@@ -57,12 +53,7 @@ As a user types into a search bar, **typeahead (autocomplete)** predicts the top
 
 <Step id="estimates" title="Work out the numbers">
 
-Assume **5 billion searches per day** and an average of **6 characters typed per search**:
-
-- **Keystroke read QPS**: (5B × 6) ÷ 86,400 s ≈ **350,000 requests/s** average, ~700,000/s at peak (cut roughly in half if the client debounces rapid keystrokes by 50 ms).
-- **Write QPS (completed searches)**: 5B ÷ 86,400 s ≈ **58,000/s** raw, or **~5,800/s** after 10% sampling.
-- **Compiled trie memory**: 50 million active prefixes × ~500 B (prefix + top-10 strings + scores) ≈ **25 GB**.
-- **Key insight**: 25 GB fits **entirely in RAM** on a single modern server (or a handful of shards for redundancy and throughput).
+<Stats title="typeahead / estimates" items={[{"label": "Keystroke reads/s", "value": "350k", "sub": "5B / 6 / 86,400; ~700k peak"}, {"label": "Query writes/s", "value": "58k", "sub": "5B/day; ~5,800/s at 10% sample"}, {"label": "Compiled trie", "value": "25 GB", "sub": "50M prefixes / 500 B; RAM replicas"}]} />
 
 <Choice
   id="trie-fits-in-ram"
@@ -79,10 +70,7 @@ Assume **5 billion searches per day** and an average of **6 characters typed per
 
 <Step id="api" title="Design the API">
 
-- `GET /v1/suggest?q={prefix}&limit=10&lang=en` → `200 { suggestions: [{ text, score }] }` with `Cache-Control: public, max-age=60`.
-  - Cap `prefix` length at ~50 characters.
-  - The client debounces ~50 ms, caches prefixes locally in memory for the session, and cancels in-flight requests if the user types another character.
-- `POST /v1/queries` → `200` when the user actually submits a search (`{ query, locale, ts }`).
+<Compare title="typeahead / api" sides={[{"title": "GET /v1/suggest?q={prefix}&limit=10&lang=en", "points": ["Cap prefix ~50 chars; max-age=60"]}, {"title": "POST /v1/queries", "points": ["query, locale, ts; debounce 50ms; cancel obsolete requests; session cache"]}]} />
 
 <Choice
   id="what-to-log"
@@ -99,12 +87,7 @@ Assume **5 billion searches per day** and an average of **6 characters typed per
 
 <Step id="data-model" title="Model the data">
 
-A naive trie stores frequencies only at terminal words: to answer `GET /suggest?q=sc`, you walk 2 edges to node `sc` ($O(L)$) and then **traverse every descendant leaf in the `sc*` subtree** ($O(V)$) to find the top 10 — millions of nodes for short prefixes!
-
-Instead, **precompute and store the top-k completions directly on every trie node** (or materialise every active prefix as a flat key `pfx:{prefix}` in an in-memory KV/trie store):
-
-- Lookup becomes $O(L)$ pointer steps (or $O(1)$ hash lookup) with zero subtree traversal and zero sorting at query time.
-- Compressing single-child chains into a **radix (Patricia) trie** further reduces node count and CPU cache misses.
+<Compare title="typeahead / data-model" sides={[{"title": "Naive trie", "points": ["O(L) prefix walk + O(V) descendant scan/sort"]}, {"title": "Materialised top-k", "points": ["Every node/pfx:key holds winners; O(L) trie or O(1) hash; radix compression"]}]} />
 
 <Choice
   id="cached-topk-complexity"
@@ -121,10 +104,7 @@ Instead, **precompute and store the top-k completions directly on every trie nod
 
 <Step id="high-level" title="Draw the high-level architecture">
 
-The architecture strictly separates the **read path** from the **write/aggregation path**:
-
-- **Read path**: `Client → Load Balancer → Suggest API → Hot-prefix Cache → In-memory Trie Shards`. Short prefixes (`a`, `s`, `th`, `wea`) hit the front cache; longer misses read an in-memory trie replica in < 1 ms.
-- **Write path**: `Client → Suggest API → Sampled Query Log (Queue) → Stream Aggregators + Trie Builder → Trie Shards`. Aggregators window query counts with exponential time decay and push updated prefix records or immutable trie snapshots asynchronously.
+<Flow title="typeahead / high-level" nodes={[{"id": "0", "label": "Suggest API", "kind": "service", "x": 10, "y": 18}, {"id": "1", "label": "Prefix cache", "kind": "cache", "x": 50, "y": 18}, {"id": "2", "label": "Trie shards", "kind": "kvStore", "x": 90, "y": 18}, {"id": "3", "label": "Query log", "kind": "queue", "x": 10, "y": 82}, {"id": "4", "label": "Aggregator", "kind": "worker", "x": 50, "y": 82}]} edges={[{"from": "0", "to": "1", "label": "suggest"}, {"from": "1", "to": "2", "label": "miss"}, {"from": "0", "to": "3", "label": "sampled searches"}, {"from": "3", "to": "4", "label": "window / decay"}, {"from": "4", "to": "2", "label": "snapshot / updates"}]} height={300} caption={"Reads use precomputed top-k. Aggregate query logs asynchronously; never scan a prefix subtree on the serving path."} />
 
 <Ordering
   id="typeahead-update-pipeline"
@@ -144,18 +124,7 @@ The architecture strictly separates the **read path** from the **write/aggregati
 
 <Step id="deep-dive" title="Deep dive: time decay, trending overlays, and shard balance">
 
-### 1. Time-decayed scoring
-If you rank purely by all-time query count, `"2018 world cup"` outranks `"2026 world cup"` for years. Multiply historical counts by an exponential decay factor every hour/day:
-
-`score_new = score_old × λ + count_window` (e.g. `λ = 0.95`)
-
-so fresh queries naturally rise while evergreen queries stay strong.
-
-### 2. Two-speed updates: snapshots + trending overlay
-Rebuilding a 25 GB radix trie takes minutes. Run a full offline snapshot build every hour, and pair it with a small **streaming trending overlay** (top ~10,000 spiking prefixes over a 2-minute sliding window) merged at read time so breaking news appears within ~60 seconds.
-
-### 3. Avoiding hot-letter shard skew
-Sharding alphabetically (`a–d` on shard 1, `s–z` on shard 5) overloads the `s` and `c` shards. Instead, replicate the tiny top-level prefixes (length 1–3, only $36^3 = 46,656$ combinations!) on every front cache node, and hash-partition longer prefixes across shards.
+<Compare title="typeahead / deep-dive" sides={[{"title": "Fresh ranking", "points": ["score = old / 0.95 + window count; hourly snapshot + trending overlay"]}, {"title": "Balanced serving", "points": ["Replicate short prefixes; hash longer ones; serving-time safety blocklist"]}]} />
 
 <Choice
   id="why-not-mutate-in-place"
@@ -172,9 +141,7 @@ Sharding alphabetically (`a–d` on shard 1, `s–z` on shard 5) overloads the `
 
 <Step id="alternatives" title="Evaluate alternatives">
 
-- **Uncached prefix scan (`typeahead-scan`)**: in the simulator, replacing the `O(1)` cached prefix lookup with an uncached `query` scan causes the store to saturate and goodput to drop below 85% against the 100 ms deadline.
-- **Relational database `LIKE 'prefix%'`**: even with a B-tree index on `query`, finding the top 10 by frequency for `q=s` must scan all rows starting with `s` unless every prefix's top-k is materialised.
-- **Browser-only local history**: zero server cost for repeat queries by the same user, which is why production search bars merge 2–3 local user history matches with the server's global top-k.
+<Compare title="typeahead / alternatives" sides={[{"title": "typeahead-scan", "points": ["Saturates; <85% fixture goodput"]}, {"title": "SQL LIKE prefix", "points": ["Still scans unless top-k materialised"]}, {"title": "Local history", "points": ["Free repeat suggestions; merge with global winners"]}]} />
 
 <Choice
   id="prefix-shard-strategy"
@@ -191,11 +158,11 @@ Sharding alphabetically (`a–d` on shard 1, `s–z` on shard 5) overloads the `
 
 <Step id="failures" title="Run the failure scenarios">
 
-Run the three failure scenarios in the simulator:
+<Timeline title="typeahead / trending-event: 40%" events={[{"at": "Inject", "label": "trending-event: 40%", "tone": "warn"}, {"at": "Observe", "label": "Hot prefix requests coalesce"}, {"at": "Result", "label": "prefixcache sustains >99% fixture goodput"}]} />
 
-- **Breaking news hotspot (`trending-event`)**: 40% of all keystrokes ask for the same hot prefix. Request coalescing and the front `prefixcache` absorb the hotspot with > 99% goodput.
-- **Hot-prefix cache restarts cold (`cache-flush`)**: `prefixcache` is killed for 300 ms and restarts empty. Requests fail during the kill window, then rapidly repopulate the Zipf head on recovery.
-- **Stream aggregator pause (`aggregator-down`)**: the `aggregator` workers are killed for a full second. Because reads hit `prefixcache` and `triestore` while `log` writes stop at the `querylog` queue, user-facing goodput stays at 100%.
+<Timeline title="typeahead / cache-flush: 300ms" events={[{"at": "Inject", "label": "cache-flush: 300ms", "tone": "warn"}, {"at": "Observe", "label": "Fixture requests fail during kill"}, {"at": "Result", "label": "Empty cache rapidly refills Zipf head"}]} />
+
+<Timeline title="typeahead / aggregator-down: 1s" events={[{"at": "Inject", "label": "aggregator-down: 1s", "tone": "warn"}, {"at": "Observe", "label": "querylog queues completed searches"}, {"at": "Result", "label": "Cached/trie reads stay available; rankings age"}]} />
 
 <Choice
   id="aggregator-outage-impact"
@@ -212,10 +179,7 @@ Run the three failure scenarios in the simulator:
 
 <Step id="wrap-up" title="Wrap up and self-assess">
 
-Summarise the key trade-offs:
-1. **Memory for speed**: precomputing top-k at every prefix node turns a subtree scan into an $O(1)$ / $O(L)$ memory read.
-2. **Read/write separation**: never mutate the live trie on the request path; aggregate logs asynchronously with time decay and swap snapshots.
-3. **Fast safety kill-switch**: apply a lightweight blocklist filter at serving time so legal or safety removals happen in seconds rather than waiting for the next hourly trie build.
+<Compare title="typeahead / wrap-up" sides={[{"title": "Trade", "points": ["Memory for bounded lookup; async aggregation for freshness lag"]}, {"title": "Safety", "points": ["Serving-time blocklist bypasses slow snapshot cycle"]}]} />
 
 <Choice
   id="urgent-blocklist-removal"
