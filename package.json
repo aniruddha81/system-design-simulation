@@ -12,7 +12,7 @@
     "pretest": "node scripts/build-search-index.mjs",
     "e2e": "playwright test",
     "check:bundle": "node scripts/check-bundle.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "bench": "node src/engine/bench/run.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
