@@ -310,6 +310,39 @@ export class Store {
     get: () => this.get("settings", "settings"),
     put: (record: SettingsRecord) => this.save("settings", record, record.revision),
   };
+  /** Cloud sync entry point: applies pulled records. Progress max-merges; designs and reviews are last-write-wins by `updatedAt`. Invalid records are skipped. */
+  remote = {
+    apply: async (incoming: { store: "designs" | "progress" | "reviews"; key: string; data?: unknown; deleted?: boolean }[]) => {
+      let applied = 0;
+      await this.transaction(async tx => {
+        await this.assertGeneration(tx);
+        for (const r of incoming) {
+          if (r.store === "designs" && r.deleted) {
+            await tx.delete("designs", r.key);
+            for (const run of await readAll(tx, "runs")) if (run.designId === r.key) await tx.delete("runs", run.id);
+            applied++;
+            continue;
+          }
+          const parsed = recordSchemas[r.store].safeParse({ revision: 0, ...(r.data as object) });
+          if (!parsed.success) continue;
+          const old = await readRecord(tx, r.store, r.key);
+          if (r.store === "progress") {
+            const merged = mergeProgress(old as ProgressRecord | undefined, parsed.data as ProgressRecord);
+            merged.revision = await this.nextRevision(tx, old?.revision ?? 0);
+            await tx.put("progress", merged);
+          } else {
+            const next = parsed.data as DesignRecord | ReviewRecord;
+            if (old && (old as DesignRecord | ReviewRecord).updatedAt >= next.updatedAt) continue;
+            const revision = await this.nextRevision(tx, old?.revision ?? 0, r.store === "designs" ? r.key : undefined);
+            await tx.put(r.store, r.store === "designs" ? { ...next, revision, restoreGeneration: this.generation } : { ...next, revision });
+          }
+          applied++;
+        }
+      }, true);
+      if (applied) this.changed("restore");
+      return applied;
+    },
+  };
   quarantine = { list: () => this.list("quarantine") };
 }
 

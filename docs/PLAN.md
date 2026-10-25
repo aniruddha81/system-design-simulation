@@ -1003,7 +1003,7 @@ flowchart LR
 - **Not a packet-level network simulator.** TCP congestion control, kernel scheduling and GC pauses are abstracted as latency distributions.
 - **Costs are illustrative**, based on a fixed price table that is dated in the UI.
 - **Request-based availability** over a short run does not equal yearly SLA attainment.
-- **No accounts, cross-device sync, public leaderboards, AI tutor, or user-generated lessons in v1.**
+- **No public leaderboards, AI tutor, or user-generated lessons in v1.** Optional accounts and cross-device sync were added after launch scope (see `docs/DEPLOY.md`); the app stays local-first and fully usable signed out.
 - **Hybrid (DES probe inside a fluid background) is deferred** until its coupling is specified and validated.
 - **Scale mode never claims correctness.** Duplicates, stale reads and lost writes need Exact mode.
 - **No guaranteed offline mode in v1.** Once a page is loaded, the engine needs no network. A PWA/offline cache is a later candidate (see the Next offline guide).

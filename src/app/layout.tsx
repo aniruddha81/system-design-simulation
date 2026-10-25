@@ -3,6 +3,8 @@ import { Fraunces, IBM_Plex_Mono, Schibsted_Grotesk } from "next/font/google";
 import Link from "next/link";
 import { ViewTransition } from "react";
 import { MobileNavMenu, NavLinks, Providers, ThemeToggle } from "@/components/ui/shell";
+import { CloudSync } from "@/components/auth/CloudSync";
+import { UserMenu } from "@/components/auth/UserMenu";
 import { CommandPalette } from "@/components/search";
 import { SITE_NAME, SITE_URL } from "@/lib/content/schema";
 import "./globals.css";
@@ -52,6 +54,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           Skip to content
         </a>
         <Providers>
+          <CloudSync />
           <header className="sticky top-0 z-40 border-b border-rule bg-surface-2">
             <nav
               aria-label="Main"
@@ -72,6 +75,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <div className="ml-auto flex shrink-0 items-center justify-end gap-1.5 sm:gap-2 lg:ml-0 lg:justify-self-end">
                 <CommandPalette />
                 <ThemeToggle />
+                <UserMenu />
                 <MobileNavMenu />
               </div>
             </nav>
@@ -97,7 +101,7 @@ function Colophon() {
           </p>
           <div className="grid gap-3 text-sm text-muted">
             <p>
-              <strong className="font-medium text-fg">Progress lives on this device.</strong> No account, no server copy. Export a backup from{" "}
+              <strong className="font-medium text-fg">Works without an account.</strong> Sign in to sync progress and designs across devices; back up from{" "}
               <Link href="/settings" className="text-fg underline underline-offset-4 hover:text-accent">
                 Settings
               </Link>

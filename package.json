@@ -13,7 +13,10 @@
     "e2e": "playwright test",
     "check:bundle": "node scripts/check-bundle.mjs",
     "typecheck": "tsc --noEmit",
-    "bench": "node src/engine/bench/run.mjs"
+    "bench": "node src/engine/bench/run.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
