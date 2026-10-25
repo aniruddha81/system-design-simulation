@@ -10,11 +10,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Build-only placeholders: the build never contacts the database. Real values arrive at runtime.
-ENV NEXT_TELEMETRY_DISABLED=1 BUILD_STANDALONE=1 \
-    DATABASE_URL=postgresql://build:build@localhost/build \
+ENV NEXT_TELEMETRY_DISABLED=1 BUILD_STANDALONE=1
+# Inline on the RUN line (not ENV) so the placeholders never land in image metadata.
+RUN DATABASE_URL=postgresql://build:build@localhost/build \
     BETTER_AUTH_SECRET=build-only-secret-build-only-secret-build-only \
-    BETTER_AUTH_URL=http://localhost:3000
-RUN npm run build
+    BETTER_AUTH_URL=http://localhost:3000 \
+    npm run build
 
 FROM node:24-slim AS run
 WORKDIR /app
