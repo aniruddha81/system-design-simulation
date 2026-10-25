@@ -40,7 +40,7 @@ export function Library({ allowed, onAdd }: { allowed?: ComponentKind[]; onAdd: 
         }}
         placeholder="Search components"
         aria-label="Search components (Enter adds the first match)"
-        className="h-9 w-full rounded-(--radius-sm) border border-(--rule,var(--border)) bg-(--bg) px-2.5 text-sm text-(--text) placeholder:text-(--text-muted) focus-visible:outline-2 focus-visible:outline-(--accent)"
+        className="h-9 w-full shrink-0 rounded-(--radius-sm) border border-(--rule,var(--border)) bg-(--bg) px-2.5 text-sm text-(--text) placeholder:text-(--text-muted) focus-visible:outline-2 focus-visible:outline-(--accent)"
       />
       <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto px-1 pb-1" onScroll={() => setTip(null)}>
         {ORDER.map((cat) => {

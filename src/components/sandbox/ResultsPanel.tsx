@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Design, InvariantKind, NodeStats, RunMetrics, SeriesPoint, Violation } from "@/engine/types";
 import { openStore, type RunRecord } from "@/lib/persistence";
 import { useRun } from "@/lib/run-manager";
+import { Stats, Bars } from "@/components/visual/kit";
+import { EmptyPlot } from "./visuals";
 import { elementName } from "./design-ops";
 import { fmtMoney, fmtMs, fmtNum, fmtPct } from "./units";
 
@@ -10,16 +12,6 @@ function hitRate(nodes: NodeStats[]): number | null {
   let hits = 0, total = 0;
   for (const n of nodes) if (n.cache) { hits += n.cache.hits; total += n.cache.hits + n.cache.misses; }
   return total ? hits / total : null;
-}
-
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-(--radius-sm) border border-(--border) bg-(--bg) p-2.5">
-      <p className="text-[11px] uppercase tracking-wider text-(--text-muted)">{label}</p>
-      <p className="mt-0.5 text-lg font-semibold tabular-nums text-(--text)">{value}</p>
-      {sub && <p className="text-[11px] text-(--text-muted)">{sub}</p>}
-    </div>
-  );
 }
 
 export function summarize(m: RunMetrics): string {
@@ -210,7 +202,7 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
   if (!metrics) {
     return (
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-(--text-muted)">Run the simulation to see goodput, latency and where it saturates.</p>
+        <EmptyPlot caption="Run to reveal throughput, latency and bottlenecks." />
         <RunHistory designId={runKey} rev={run.historyRev} />
       </div>
     );
@@ -223,13 +215,28 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
       <p className="sr-only" aria-live="polite">{announce}</p>
       {run.status === "stale" && <p role="status" className="rounded-(--radius-sm) border border-(--warning) p-2 text-xs text-(--warning)">⚠ Stale: design changed. These results are from the earlier design.</p>}
       {result?.outcome === "inconclusive" && <p className="rounded-(--radius-sm) border border-(--warning) p-2 text-xs text-(--warning)">⚠ Inconclusive: {result.inconclusiveReason}</p>}
-      <div className="grid grid-cols-2 gap-2">
-        <Tile label="Goodput" value={fmtPct(metrics.goodput, 2)} sub={`${fmtNum(metrics.succeeded)} ok · ${fmtNum(metrics.failed)} failed`} />
-        <Tile label="Success p50 / p99" value={metrics.successLatency.p99 == null ? "—" : fmtMs(metrics.successLatency.p99)} sub={`p50 ${fmtMs(metrics.successLatency.p50)}`} />
-        <Tile label="Throughput" value={`${fmtNum(metrics.throughput.completedPerSec)}/s`} sub={`offered ${fmtNum(metrics.throughput.offeredPerSec)}/s`} />
-        <Tile label="Cache hit rate" value={result ? fmtPct(hr) : "…"} sub={`cost ${fmtMoney(metrics.costPerMonth)}/mo`} />
-      </div>
+      <Stats title="Run headline" items={[
+        { label: "Goodput", value: fmtPct(metrics.goodput, 2), sub: `${fmtNum(metrics.succeeded)} ok · ${fmtNum(metrics.failed)} failed` },
+        { label: "Success p99", value: fmtMs(metrics.successLatency.p99), sub: `p50 ${fmtMs(metrics.successLatency.p50)}` },
+        { label: "Throughput", value: `${fmtNum(metrics.throughput.completedPerSec)}/s`, sub: `offered ${fmtNum(metrics.throughput.offeredPerSec)}/s` },
+        { label: "Cache hit rate", value: result ? fmtPct(hr) : "…", sub: `${fmtMoney(metrics.costPerMonth)}/mo` },
+      ]} />
       {metrics.successLatency.p99 == null && <p className="text-xs text-(--text-muted)">p99: insufficient data (too few successful requests to estimate).</p>}
+
+      {result && result.series.length > 1 && (
+        <>
+          <LineChart
+            title="Requests per second"
+            points={result.series}
+            format={(v) => fmtNum(v)}
+            series={[
+              { name: "Succeeded", color: "var(--accent)", get: (p) => p.succeededPerSec },
+              { name: "Failed", color: "var(--danger)", get: (p) => p.failedPerSec },
+            ]}
+          />
+          <LineChart title="p99 latency" points={result.series} format={(v) => fmtMs(v)} series={[{ name: "p99", color: "var(--accent-2)", get: (p) => p.p99Us }]} />
+        </>
+      )}
 
       {bn && (
         <section className="rounded-(--radius-sm) border border-(--accent) bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] p-3 text-sm">
@@ -262,24 +269,12 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
         </section>
       )}
 
-      {result && result.series.length > 1 && (
-        <>
-          <LineChart
-            title="Requests per second"
-            points={result.series}
-            format={(v) => fmtNum(v)}
-            series={[
-              { name: "Succeeded", color: "var(--accent)", get: (p) => p.succeededPerSec },
-              { name: "Failed", color: "var(--danger)", get: (p) => p.failedPerSec },
-            ]}
-          />
-          <LineChart title="p99 latency" points={result.series} format={(v) => fmtMs(v)} series={[{ name: "p99", color: "var(--accent-2)", get: (p) => p.p99Us }]} />
-        </>
-      )}
 
       {nodes.length > 0 && (
-        <section className="overflow-x-auto">
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-(--text-muted)">Per component</h3>
+        <section>
+          <Bars title="Component utilisation" items={nodes.map((n) => ({ label: name(n.nodeId), value: Math.round(n.utilisation * 100), unit: "%", tone: n.utilisation >= 0.9 ? "bad" : "info" }))} />
+          <details className="overflow-x-auto">
+          <summary className="min-h-6 cursor-pointer text-xs">Show data table · per component</summary>
           <table className="w-full text-xs tabular-nums">
             <thead>
               <tr className="text-left text-(--text-muted)">
@@ -303,6 +298,7 @@ export function ResultsPanel({ runKey, design }: { runKey: string; design: Desig
               ))}
             </tbody>
           </table>
+          </details>
         </section>
       )}
       <ComponentDetails nodes={nodes} name={name} />

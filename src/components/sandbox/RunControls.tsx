@@ -61,6 +61,7 @@ export function RunControls({ runKey, onRun, blockedReason, onFix }: { runKey: s
       <label className="flex items-center gap-1 text-xs text-(--text-muted)">
         <span className="sr-only">Speed</span>
         <select
+          aria-label="Speed"
           value={String(run.speed)}
           onChange={(e) => runs.setSpeed(runKey, e.target.value === "max" ? "max" : (Number(e.target.value) as Speed))}
           className="h-8 rounded-(--radius-sm) border border-(--border) bg-(--bg) px-1.5 text-sm text-(--text) focus-visible:outline-2 focus-visible:outline-(--accent)"

@@ -4,7 +4,7 @@ import {
   Background, BackgroundVariant, Controls, MiniMap, ReactFlow, useConnection, useReactFlow, ViewportPortal, type NodeChange,
 } from "@xyflow/react";
 import { useEffect, useRef, useState } from "react";
-import type { ComponentKind, Design, GroupSpec, NodeId } from "@/engine/types";
+import type { ComponentKind, Design, GroupSpec, NodeId, ValidationIssue } from "@/engine/types";
 import { useRun } from "@/lib/run-manager";
 import { AnnotationLayer, type Tool } from "./Annotations";
 import {
@@ -73,6 +73,7 @@ async function autoLayout(d: Design): Promise<Design> {
 }
 
 export function Whiteboard(props: {
+  issues?: ValidationIssue[];
   runKey: string;
   allowedKinds?: ComponentKind[];
   look: Look;
@@ -145,6 +146,8 @@ export function Whiteboard(props: {
         ariaLabel: `${n.label}, ${KIND_LABEL[n.kind]}${healthOf(n.id) === "down" ? ", down" : ""}${sel.has(n.id) && sel.size > 1 ? ", in selection" : ""}`,
         data: {
           spec: n, look, util: utilOf(n.id), health: healthOf(n.id), flagged: flagged.has(n.id),
+          issues: (props.issues ?? []).filter((issue) => issue.nodeId === n.id || design.edges.some((e) => e.id === issue.edgeId && (e.from === n.id || e.to === n.id))).map((issue) => issue.message),
+          onInspect: props.openInspector,
           heat: props.heat?.[n.id], fresh: fresh.has(n.id), rewritten: rewrittenOwners.has(n.id),
         },
       };
@@ -560,7 +563,10 @@ export function Whiteboard(props: {
           onClick={() => setShowLibrary(!showLibrary)}
           className="flex h-10 shrink-0 items-center justify-between px-3 text-sm font-medium text-(--text) hover:bg-(--surface-2) focus-visible:outline-2 focus-visible:outline-(--accent)"
         >
-          Components <span aria-hidden="true" className="text-(--text-muted)">{showLibrary ? "−" : "+"}</span>
+          Components
+          <svg aria-hidden viewBox="0 0 12 12" className="size-3 text-(--text-muted)" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <path d={showLibrary ? "M2 6h8" : "M2 6h8M6 2v8"} />
+          </svg>
         </button>
         {showLibrary && (
           <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">

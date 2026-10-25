@@ -22,28 +22,13 @@ function markDone() {
 }
 
 type Side = "right" | "below" | "left";
-const STEPS: { anchor: string; side: Side; title: string; body: string }[] = [
-  {
-    anchor: '[data-tour="library"]', side: "right",
-    title: "Drag a component onto the board",
-    body: "Start with a Client — it plays your users — then a Service. Hover or focus any entry to see what it is for. Pressing an entry adds it too.",
-  },
-  {
-    anchor: ".react-flow__node .react-flow__handle-right", side: "below",
-    title: "Connect what calls what",
-    body: "Drag from the dot on a component's right edge onto the next component. An arrow means “may call”. If a link isn't allowed, the reason appears right there.",
-  },
-  {
-    anchor: '[data-tour="run"]', side: "below",
-    title: "Press Run",
-    body: "Requests flow through your design as moving dots. If Run is greyed out, the note beside it says why — one click jumps to the problem.",
-  },
-  {
-    anchor: '[data-tour="results"]', side: "left",
-    title: "Read the results",
-    body: "Goodput is the share of requests that succeeded in time; p99 is how slow the slowest 1 % were. The bottleneck note names what saturated first — change it and run again.",
-  },
-];
+export const STEPS = [
+  { anchor: '[data-tour="library"]', side: "right", title: "Add components", body: "Drag or press Client, then Service.", sketch: "Client + Service" },
+  { anchor: ".react-flow__node .react-flow__handle-right", side: "below", title: "Connect", body: "Drag between ports. Keyboard: select, then C.", sketch: "Client → Service" },
+  { anchor: '[data-tour="run"]', side: "below", title: "Run", body: "Watch requests travel. Resolve checks if blocked.", sketch: "○ → ○ → ○" },
+  { anchor: '[data-tour="results"]', side: "left", title: "Observe", body: "Read goodput, latency and the busiest component.", sketch: "▂ ▃ ▅ ▇" },
+  { anchor: '[data-tour="results"]', side: "left", title: "Improve", body: "Adjust the bottleneck. Run again and compare.", sketch: "Run → Edit → Run" },
+] satisfies { anchor: string; side: Side; title: string; body: string; sketch: string }[];
 
 const NOTE_W = 300;
 const gen = rough.generator();
@@ -161,6 +146,7 @@ export function Tour({ open, onClose, rootRef, nodes, edges, runStatus }: {
             <span className="font-mono text-[11px] text-(--accent)">{step + 1}/{STEPS.length}</span>
             <span id="tour-title" className="margin-note text-lg leading-snug">{s.title}</span>
           </p>
+          <p aria-hidden="true" className="my-3 border-y border-(--rule) py-3 text-center font-mono text-xl text-(--accent-2)">{s.sketch}</p>
           <p className="mt-1.5 text-sm leading-relaxed text-(--ink-2,var(--text))">{s.body}</p>
         </div>
         <div className="mt-3 flex items-center gap-2">

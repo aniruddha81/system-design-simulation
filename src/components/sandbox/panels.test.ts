@@ -6,6 +6,7 @@ import { cacheAsideDesign, cachingScenario } from "@/engine/fixtures";
 import type { InvariantKind, RunResult } from "@/engine/types";
 import { addNode, KIND_LABEL } from "./design-ops";
 import { createDesignStore, DesignCtx } from "./design-store";
+import { UnitField } from "./fields";
 import { Inspector } from "./Inspector";
 import { KINDS } from "./kinds";
 import { ResultsPanel } from "./ResultsPanel";
@@ -40,4 +41,12 @@ it("renders all P2 stats and every correctness invariant, including zero values"
   for (const text of ["mean queue wait 0", "0 in flight", "0 dropped by live edits", "replication lag", "queue depth max", "breaker opened", "scaled 2", "failover", "wasted work"])
     expect(html).toContain(text);
   for (const kind of invariants) expect(html).toContain(`detected ${kind}`);
+});
+
+it("shows the configured field limit without changing its stored value", () => {
+  const commit = vi.fn();
+  const html = renderToStaticMarkup(createElement(UnitField, { label: "Capacity", value: 50, kind: "count", max: 100, onCommit: commit }));
+  expect(html).toContain('aria-label="Capacity limit"');
+  expect(html).toContain('max="100"');
+  expect(commit).not.toHaveBeenCalled();
 });

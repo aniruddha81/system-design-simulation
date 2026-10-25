@@ -19,6 +19,8 @@ export type ComponentNodeData = {
   spec: NodeSpec; look: Look; util?: number; health?: NodeHealth; flagged?: boolean;
   /** Scale-mode failure-ladder heat (0..1+), painted while the Scale tab plays a rung. */
   heat?: number;
+  issues?: string[];
+  onInspect?: () => void;
   /** Just added: plays the entrance once. */
   fresh?: boolean;
   /** A route here was rewritten by an insertion rule and awaits review. */
@@ -65,6 +67,8 @@ const HEALTH_TEXT: Record<NodeHealth, string> = { up: "", degraded: "Slow", gray
 
 export function ComponentNode({ data, selected }: NodeProps<ComponentFlowNode>) {
   const { spec, look, util, health = "up", flagged } = data;
+  const api = useDesignApi();
+  const apiSelect = () => { api.getState().select({ kind: "node", id: spec.id }); data.onInspect?.(); };
   const color = KIND_COLOR[spec.kind];
   const down = health === "down";
   const stroke = down ? "var(--danger)" : selected ? "var(--accent)" : color;
@@ -83,7 +87,7 @@ export function ComponentNode({ data, selected }: NodeProps<ComponentFlowNode>) 
       data-selected={selected || undefined}
       style={{ width: NODE_W, height: NODE_H, ["--kind" as string]: color }}
     >
-      <Handle type="target" position={Position.Left} aria-label={`Connect into ${spec.label}`} />
+      <Handle type="target" position={Position.Left} />
       <div key={health} className={`absolute inset-0 ${down ? styles.shake : ""}`}>
       <svg className="pointer-events-none absolute inset-0 overflow-visible" width={NODE_W} height={NODE_H} aria-hidden="true">
         <path d={outlinePath} className={styles.nodeBody} style={{ fill: tint }} />
@@ -133,7 +137,13 @@ export function ComponentNode({ data, selected }: NodeProps<ComponentFlowNode>) 
         </span>
       )}
       </div>
-      <Handle type="source" position={Position.Right} aria-label={`Connect from ${spec.label}`} />
+      {!!data.issues?.length && <button type="button"
+        className="nodrag nopan absolute -top-3 -left-2 grid min-h-6 min-w-6 place-items-center rounded-full border border-(--danger) bg-(--surface) px-1 text-xs font-bold text-(--danger) focus-visible:outline-2 focus-visible:outline-(--accent)"
+        aria-label={`${spec.label}: ${data.issues.join("; ")}. Inspect component`}
+        title={data.issues.join("\n")}
+        onClick={(e) => { e.stopPropagation(); apiSelect(); }}
+      >! {data.issues.length}</button>}
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }

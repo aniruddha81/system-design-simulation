@@ -423,6 +423,7 @@ function WorkspaceInner({ designId, scenario: baseScenario, challenge, initialTa
         <main className="relative min-h-0 overflow-hidden" aria-label={view === "board" ? "Whiteboard" : "Component list"}>
           {view === "board" ? (
             <Whiteboard
+              issues={issues}
               runKey={designId}
               allowedKinds={challenge?.spec.allowedKinds}
               look={look}

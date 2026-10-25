@@ -12,6 +12,8 @@ export const btn =
   "h-8 rounded-(--radius-sm) border border-(--border) px-3 text-sm text-(--text) hover:bg-(--surface-2) focus-visible:outline-2 focus-visible:outline-(--accent) disabled:opacity-40";
 export const sectionTitle = "text-xs font-medium uppercase tracking-wider text-(--text-muted)";
 
+const UNIT_ICON: Record<UnitKind, string> = { duration: "◷", bytes: "▤", rate: "↗", money: "$", count: "#", fraction: "%", number: "№" };
+
 export function UnitField({ label, value, kind, unit = DEFAULT_UNIT[kind], optional, onCommit, hint, max, maxError, slider }: {
   label: string; value: number | undefined; kind: UnitKind; unit?: string; optional?: boolean; hint?: string;
   /** Values above max are rejected inline (last valid value kept). */
@@ -42,7 +44,7 @@ export function UnitField({ label, value, kind, unit = DEFAULT_UNIT[kind], optio
   }
   return (
     <div className="grid grid-cols-[minmax(0,9rem)_1fr] items-start gap-x-3 gap-y-1">
-      <label htmlFor={id} className="pt-1.5 text-xs text-(--text-muted)">{label}</label>
+      <label htmlFor={id} className="pt-1.5 text-xs text-(--text-muted)"><span aria-hidden="true" className="mr-1 font-mono">{UNIT_ICON[kind]}</span>{label}</label>
       <div>
         <div className="flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
@@ -75,6 +77,12 @@ export function UnitField({ label, value, kind, unit = DEFAULT_UNIT[kind], optio
             />
           )}
         </div>
+        {value !== undefined && (max !== undefined ? max > 0 : slider !== undefined) && (
+          <meter aria-label={`${label} ${max !== undefined ? "limit" : "range"}`}
+            value={max !== undefined ? value : Number(fmt(value))}
+            min={max !== undefined ? 0 : slider![0]} max={max ?? slider![1]}
+            className="mt-1 h-2 w-full" />
+        )}
         {error ? (
           <p id={`${id}-err`} className="mt-1 text-xs text-(--danger)">⚠ {error}. Kept {fmt(value) || "none"} {unit}.</p>
         ) : hint ? <p className="mt-1 text-xs text-(--text-muted)">{hint}</p> : null}

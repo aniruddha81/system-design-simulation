@@ -7,6 +7,7 @@ import type { FailureRung, Prediction, ScaleResult, SweepKind, SweepLevel, Sweep
 import type { Design, NodeId, Scenario } from "@/engine/types";
 import { toPeakRps } from "@/engine/workload";
 import { formatDuration, formatNumber, formatPercent, formatRps, formatUsdEstimate } from "@/lib/format";
+import { EmptyPlot } from "@/components/sandbox/visuals";
 import { Chart } from "./Chart";
 import { LiveSummary } from "./LiveSummary";
 import { WhatIfTable } from "./WhatIfTable";
@@ -320,7 +321,6 @@ export function ScalePanel({ design, scenario, onHeat }: ScalePanelProps) {
             <Stat label="Cost per 1M requests">{!enabled("cost") ? <Disabled /> : run.result.metrics.costPerMillionRequests === null ? "n/a" : formatUsd(run.result.metrics.costPerMillionRequests)}</Stat>
           </dl>
           <p className="-mt-2 text-xs text-muted">Costs are estimates (USD).</p>
-          <NodeTable run={run} enabled={enabled} />
           <DisabledList predictions={fidelity} />
           {run.result.series.length > 1 && (
             <Chart
@@ -345,6 +345,10 @@ export function ScalePanel({ design, scenario, onHeat }: ScalePanelProps) {
               }}
             />
           )}
+          <details>
+            <summary className="min-h-6 cursor-pointer text-sm">Show data table · nodes and links</summary>
+            <NodeTable run={run} enabled={enabled} />
+          </details>
           {run.result.warnings.length > 0 && (
             <ul className="grid gap-1 text-sm">
               {run.result.warnings.map((w) => (
@@ -365,14 +369,14 @@ export function ScalePanel({ design, scenario, onHeat }: ScalePanelProps) {
       )}
 
       {/* ---- sweep ---- */}
-      <Figure className="" no="S3" title="Breaking-point sweep" note="Load climbs log-spaced from 1× to 1000× the selected load. The two kinds answer different questions, so each result says which it is.">
+      <Figure className="" no="S3" title="Breaking-point sweep" note="Log-spaced load: 1× → 10× → 100× → 1000×.">
         {sweep && (sweep.design !== design || sweep.inputScenario !== scenario || sweep.loadKey !== loadKey) && <p className="text-sm text-warning">! Design, scenario or load changed since this sweep; results use its original snapshot.</p>}
         <fieldset className="grid gap-2 sm:grid-cols-2">
           <legend className="sr-only">Sweep kind</legend>
           {(
             [
-              ["independent", "Independent levels", "Each level starts fresh after a warm-up: caches, autoscaling and queues reset."],
-              ["continuous", "Continuous ramp", "State carries over between levels: exposes retry storms, autoscaling lag and cache churn."],
+              ["independent", "Independent levels", "Reset → warm up → measure each level."],
+              ["continuous", "Continuous ramp", "Carry state → raise load → observe lag."],
             ] as const
           ).map(([value, title, text]) => (
             <label key={value} className={`flex cursor-pointer items-start gap-2 rounded-md border p-3 transition-colors ${kind === value ? "border-fg bg-surface-2" : "border-border"}`}>
@@ -412,9 +416,9 @@ export function ScalePanel({ design, scenario, onHeat }: ScalePanelProps) {
 
       {/* ---- failure ladder ---- */}
       {sweep && (sweep.outcome !== null || ladder.length > 0) && (
-        <Figure className="" no="S4" title="Failure ladder" note={`What breaks first, then next, under this scenario (${sweep.kind === "independent" ? "independent levels" : "continuous ramp"}). Remedies are suggestions until a what-if verifies them.`}>
+        <Figure className="" no="S4" title="Failure ladder" note={`Failure order (${sweep.kind === "independent" ? "independent levels" : "continuous ramp"}). Verify suggested remedies with a what-if.`}>
           {ladder.length === 0 ? (
-            <p className="text-sm text-muted">✓ No rung: nothing saturated, overflowed or lost timely-success in the completed levels.</p>
+            <EmptyPlot caption="Completed levels stayed within capacity." />
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Ladder playback on the board">
@@ -446,6 +450,20 @@ export function ScalePanel({ design, scenario, onHeat }: ScalePanelProps) {
                 <HeatLegend />
               </div>
               {reduced && <p className={nb.note}>Reduced motion: step through the rungs; nothing advances on its own.</p>}
+              <ol className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2" aria-label="Failure heat sequence">
+                {ladder.map((rung, i) => {
+                  const h = rungHeat(i);
+                  return <li key={rungKey(rung)}><button type="button"
+                    className="grid min-h-16 w-full gap-1 border-2 bg-surface p-2 text-left text-xs motion-safe:transition-colors focus-visible:outline-2 focus-visible:outline-(--accent)"
+                    style={{ borderColor: playIndex === i ? "var(--text)" : "var(--rule)" }}
+                    aria-current={playIndex === i ? "step" : undefined} onClick={() => { setPlaying(false); show(i); }}>
+                    <span aria-hidden="true" className="h-2 w-full" style={{ background: h === null ? "var(--text-muted)" : HEAT[h] }} />
+                    <strong>{i + 1}. {multipleText(rung.multiple)}</strong>
+                    <span>{componentName(sweep.design, rung.component)}</span>
+                    <span>{h === null ? "Heat unavailable" : HEAT_WORDS[h]}</span>
+                  </button></li>;
+                })}
+              </ol>
               <ol className={nb.ladder}>
                 {ladder.map((rung, i) => {
                   const key = rungKey(rung);
