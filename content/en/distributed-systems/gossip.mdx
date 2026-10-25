@@ -46,9 +46,24 @@ estimatedMinutes: 30
 
 <Step id="why-gossip" title="Spreading state without a centre">
 
-A cluster of thousands of nodes needs everyone to learn things: who is a member, who looks dead, which schema version is current, CRDT state for a shared counter. Broadcasting from one node does not scale, and that node is a single point of failure. Demers et al. at Xerox PARC (1987) borrowed from epidemiology instead: every node periodically picks a random peer and exchanges what it knows. Information spreads like a rumour.
-
-Gossip is robust because no path is special: a lost message or a crashed node simply means the information arrives by another route a round later. It is also gentle on the network: each node sends a constant number of messages per round, whatever the cluster size.
+<Flow
+  title="Gossip: random pairs, every round"
+  height={260}
+  nodes={[
+    { id: "a", label: "Node A", kind: "service", x: 0, y: 10, note: "knows" },
+    { id: "b", label: "Node B", kind: "service", x: 50, y: 0 },
+    { id: "c", label: "Node C", kind: "service", x: 100, y: 20 },
+    { id: "d", label: "Node D", kind: "service", x: 20, y: 90 },
+    { id: "e", label: "Node E", kind: "service", x: 80, y: 90 }
+  ]}
+  edges={[
+    { from: "a", to: "b", label: "round 1" },
+    { from: "a", to: "d", label: "round 1" },
+    { from: "b", to: "c", label: "round 2" },
+    { from: "d", to: "e", label: "round 2" }
+  ]}
+  caption="Constant messages per node per round, no special path. Xerox PARC, 1987: spreads like a rumour."
+/>
 
 <Choice
   id="gossip-property"
@@ -66,11 +81,16 @@ Gossip is robust because no path is special: a lost message or a crashed node si
 
 <Step id="epidemic" title="Logarithmic spread">
 
-In push gossip with fanout 1, each informed node tells one random peer per round. At first the informed set roughly doubles each round, which takes about log₂ N rounds to reach half the cluster. Then it slows: most pushes hit nodes that already know, and the last few holdouts are found only by chance. Pittel (1987) showed the total is about **log₂ N + ln N** rounds. For a million nodes that is roughly 34 rounds; with a one-second round, the cluster learns in well under a minute.
-
-Push-pull gossip, where the contacted peer also sends back what it knows, finishes the tail much faster, because uninformed nodes now pull from informed ones as well as being pushed.
-
-Select **push spread** in Script and step through the infection curve. Compare **pull spread** and **pushPull spread** with the same seed, especially as the last uninformed nodes are reached.
+<Bars
+  title="Rounds to reach every node (about log2 N + ln N)"
+  items={[
+    { label: "1,000 nodes", value: 17, unit: "rounds", tone: "ok" },
+    { label: "100,000 nodes", value: 28, unit: "rounds", tone: "info" },
+    { label: "1,000,000 nodes", value: 34, unit: "rounds", tone: "warn" }
+  ]}
+  caption="Push doubles at first, then stalls on the last holdouts. Push-pull finishes the tail much faster."
+/>
+Select **push spread**, then compare **pull spread** and **pushPull spread** in Script.
 
 <GossipPlayer />
 
@@ -80,12 +100,16 @@ Select **push spread** in Script and step through the infection curve. Compare *
 
 <Step id="fd-properties" title="No failure detector is perfect">
 
-To decide a node is dead, you wait for a heartbeat that does not come. But a missed heartbeat cannot distinguish a crashed node from a slow node, a paused process or a dropped packet. Chandra and Toueg (1996) framed failure detectors by two properties:
-
-- **Completeness**: every crashed node is eventually suspected.
-- **Accuracy**: live nodes are not suspected, or at least not forever.
-
-In an asynchronous network, no detector can be both complete and perfectly accurate. Every real detector picks a point on the trade-off: suspect fast and sometimes wrongly, or suspect slowly and seldom wrongly.
+<Compare
+  title="Failure detector trade-off"
+  sides={[
+    { title: "Completeness", tone: "info", points: ["Every crash is eventually suspected"] },
+    { title: "Accuracy", tone: "info", points: ["Live nodes are not suspected"] },
+    { title: "Fast timeout", tone: "bad", points: ["500 ms: quick, but wrong on slow nodes"] },
+    { title: "Slow timeout", tone: "warn", points: ["10 s: rarely wrong, slow failover"] }
+  ]}
+  caption="A missed heartbeat cannot tell crashed from slow, paused or dropped. No async detector gets both."
+/>
 
 <Choice
   id="fd-tradeoff"
@@ -103,11 +127,16 @@ In an asynchronous network, no detector can be both complete and perfectly accur
 
 <Step id="phi" title="Phi accrual: a suspicion level, not a verdict">
 
-A fixed timeout is a yes/no answer that ignores how regular a node's heartbeats usually are. The **φ accrual failure detector** (Hayashibara et al., 2004) instead outputs a continuous suspicion level. It keeps a window of recent inter-arrival gaps and asks: given that distribution, how unlikely is the current silence? φ = −log₁₀ of that probability. φ = 1 means about a 10% chance the heartbeat is merely late; φ = 3 means 0.1%.
-
-Cassandra approximates the gap distribution as exponential, which gives a simple formula: φ = silence ÷ (mean gap × ln 10). Its default conviction threshold is 8.
-
-Select **phi false positive** in Script. Watch a delayed heartbeat make a live node suspected, then clear suspicion when it arrives. The player fits a normal heartbeat-gap distribution; the calculation below uses the exponential approximation.
+<Stats
+  title="Phi accrual (Cassandra, exponential model)"
+  items={[
+    { label: "phi", value: "-log10(P late)", tone: "info" },
+    { label: "phi = 1", value: "10%", sub: "chance it is just late", tone: "ok" },
+    { label: "phi = 3", value: "0.1%", sub: "chance it is just late", tone: "warn" },
+    { label: "Cassandra default", value: "phi 8", sub: "silence / (mean gap x ln 10)", tone: "bad" }
+  ]}
+/>
+Select **phi false positive** in Script.
 
 <GossipPlayer />
 
@@ -117,9 +146,16 @@ Select **phi false positive** in Script. Watch a delayed heartbeat make a live n
 
 <Step id="threshold" title="Choosing the threshold">
 
-The application chooses a threshold on φ. A low threshold suspects quickly and makes mistakes more often; a high threshold suspects slowly and rarely errs. The useful property is that the same threshold adapts: on a jittery network, the mean gap rises and so does the silence needed to reach the same φ.
-
-Select **phi failure detection** in Script and watch the higher threshold delay suspicion after a crash. Compare **phi false positive** to see the cost of the lower threshold.
+<Timeline
+  title="Low versus high phi threshold after a crash"
+  events={[
+    { at: "t = 0", label: "Last heartbeat", tone: "ok" },
+    { at: "Low threshold", label: "Suspect early, may be wrong", tone: "warn" },
+    { at: "High threshold", label: "Suspect later, rarely wrong", tone: "info" },
+    { at: "Jittery network", label: "Mean gap rises, so does the silence needed", tone: "muted" }
+  ]}
+/>
+Select **phi failure detection**, then **phi false positive** in Script.
 
 <GossipPlayer />
 
@@ -129,9 +165,18 @@ Select **phi failure detection** in Script and watch the higher threshold delay 
 
 <Step id="swim" title="SWIM: ask someone else before you accuse">
 
-SWIM (Das, Gupta and Motivala, 2002) reduces false positives in a different way. Each round, a node pings one random member. If there is no reply, it does not declare failure; it asks k other members to ping the target **indirectly**. Only if none of them get a reply is the target marked *suspect*, and the suspicion is gossiped. A suspected node that is actually alive can refute it by gossiping a higher **incarnation number**. Membership changes themselves spread by piggybacking on the pings, infection style.
-
-HashiCorp's memberlist, used by Consul and Serf, is based on SWIM with extensions.
+<Sequence
+  title="SWIM indirect probe: only the A-C link is broken"
+  actors={["A", "B", "C"]}
+  messages={[
+    { from: "A", to: "C", label: "ping", lost: true },
+    { from: "A", to: "B", label: "ping-req(C)", tone: "info" },
+    { from: "B", to: "C", label: "ping" },
+    { from: "C", to: "B", label: "ack", tone: "ok" },
+    { from: "B", to: "A", label: "C is alive", tone: "ok" }
+  ]}
+  caption="If no helper hears back, C becomes suspect. C refutes with a higher incarnation number."
+/>
 
 <Choice
   id="indirect-probe"
@@ -149,10 +194,15 @@ HashiCorp's memberlist, used by Consul and Serf, is based on SWIM with extension
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. Keep log base 10 and natural log straight for phi.
+<Stats
+  title="Easy to mix up"
+  items={[
+    { label: "phi", value: "log base 10", tone: "info" },
+    { label: "mean gap", value: "ln 10", sub: "natural log", tone: "warn" }
+  ]}
+/>
+Score 80% or more. Each false suspicion feeds a needless election in [consensus](/learn/distributed-systems/consensus).
 
 <MasteryCheck templates={["gossip.rounds", "gossip.phi", "gossip.phi-silence"]} count={5} />
-
-Failure detection feeds the elections in the [consensus lesson](/learn/distributed-systems/consensus): every false suspicion there is a needless election.
 
 </Step>

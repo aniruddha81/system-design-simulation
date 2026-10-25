@@ -37,7 +37,13 @@ estimatedMinutes: 20
 
 <Step id="jumping" title="Designing before understanding">
 
-The most common mistake is starting to draw in the first minute. It feels productive, and it commits you to a design before you know the read-to-write ratio, the consistency needs or the scale. When the requirements arrive later, you are defending boxes instead of reasoning.
+<Compare
+  title="Draw first or understand first?"
+  sides={[
+    { title: "Draw in minute one", tone: "bad", points: ["Commits before read/write ratio, consistency, scale", "Defending boxes"] },
+    { title: "Understand first", tone: "ok", points: ["Requirements, then numbers", "Design follows reasoning"] }
+  ]}
+/>
 
 <Choice
   id="too-fast"
@@ -55,7 +61,15 @@ The most common mistake is starting to draw in the first minute. It feels produc
 
 <Step id="units" title="Unit errors in estimates">
 
-Estimation mistakes are rarely about arithmetic. They are about **units and time bases**: dividing by 3,600 instead of 86,400, mixing bits and bytes, forgetting replication or the peak factor. Each one is a 3× to 24× error that makes the design either absurdly large or too small to work. Say each unit out loud as you go, and sanity-check the result against something you know.
+<Stats
+  title="Classic unit errors"
+  items={[
+    { label: "Seconds per day", value: "86,400", sub: "not 3,600", tone: "warn" },
+    { label: "Bits vs bytes", value: "x8", tone: "warn" },
+    { label: "Forgotten", value: "replication, peak factor", tone: "bad" },
+    { label: "Effect", value: "3x to 24x off", tone: "bad" }
+  ]}
+/>
 
 <VariantQuestion template="mistakes.qps" />
 
@@ -63,7 +77,13 @@ Estimation mistakes are rarely about arithmetic. They are about **units and time
 
 <Step id="buzzwords" title="Buzzword architecture">
 
-Naming a technology is not a design decision. "We'll use Kafka" says nothing until you say what it decouples, what ordering it gives, and what happens when consumers fall behind.
+<Compare
+  title="Naming Kafka is not a decision"
+  sides={[
+    { title: "Say instead", tone: "ok", points: ["What it decouples", "What ordering it gives", "What happens when consumers lag"] },
+    { title: "Red flag", tone: "bad", points: ["Technology name with no reason"] }
+  ]}
+/>
 
 <Choice
   id="red-flags"
@@ -82,7 +102,17 @@ Naming a technology is not a design decision. "We'll use Kafka" says nothing unt
 
 <Step id="failures" title="Forgetting that things fail">
 
-A design that only works when every component is healthy is half a design. Strong candidates bring up failure modes before being asked: what happens when the cache restarts cold, the database primary fails, a region is lost, or a retry storm begins. The failure modes lesson is your checklist.
+<Flow
+  title="One Redis for every rate-limit counter"
+  height={200}
+  nodes={[
+    { id: "api", label: "API fleet", kind: "service", x: 0, y: 50 },
+    { id: "rd", label: "Redis (single)", kind: "kvStore", x: 100, y: 50, note: "SPOF" }
+  ]}
+  edges={[ { from: "api", to: "rd", label: "every request" } ]}
+  failed={["rd"]}
+  caption="Raise failure modes before asked: cold cache, primary loss, region loss, retry storm."
+/>
 
 <Choice
   id="raise-failure"
@@ -100,7 +130,15 @@ A design that only works when every component is healthy is half a design. Stron
 
 <Step id="silence" title="Going silent">
 
-Interviewers can only score what they hear. Long silences, or drawing without narrating, leave them guessing whether you are stuck or brilliant. Think aloud, summarise at each stage boundary ("so far: these requirements, these numbers, this API"), and ask whether they want you to go deeper or move on. That also lets them steer you toward what they want to evaluate.
+<Timeline
+  title="Narrate at every boundary"
+  events={[
+    { at: "Requirements", label: "Summarise: these needs", tone: "info" },
+    { at: "Numbers", label: "These estimates", tone: "info" },
+    { at: "Design", label: "Ask: go deeper or move on?", tone: "ok" }
+  ]}
+  caption="Interviewers can only score what they hear."
+/>
 
 <Choice
   id="check-in"
@@ -118,10 +156,12 @@ Interviewers can only score what they hear. Long silences, or drawing without na
 
 <Step id="practice" title="Check your mastery, then run a mock">
 
-The mastery check draws fresh estimation variants. Score 80% or more to master the lesson.
+<Stats
+  title="After a mock"
+  items={[ { label: "Look for", value: "each mistake in your own session", tone: "warn" } ]}
+/>
+Score 80% or more. Run a full mock in [interview mode](/interview), then score against the rubric.
 
 <MasteryCheck templates={["mistakes.qps"]} count={3} />
-
-Now run a full mock in [interview mode](/interview). Afterwards, score yourself against the rubric and look for each mistake in this lesson in your own session.
 
 </Step>

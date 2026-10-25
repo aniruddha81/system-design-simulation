@@ -46,13 +46,15 @@ estimatedMinutes: 25
 
 <Step id="what-cap-says" title="What the theorem actually says">
 
-Brewer stated CAP as a conjecture in 2000; Gilbert and Lynch proved it in 2002 with precise definitions, and those definitions are the whole point:
-
-- **Consistency** means *linearizability*: every operation appears to take effect at a single instant between its call and its return, so a read never returns a value older than a write that already completed. This is not the C in ACID.
-- **Availability** means every request to a node that has not crashed eventually gets a non-error response. A timeout or "try again later" counts as unavailable.
-- **Partition tolerance** means the system keeps its promises while the network drops an arbitrary set of messages between nodes.
-
-The theorem: when a partition happens, a replicated store must give up one of C or A for the operations that cross it. You cannot opt out of partitions in a system that spans more than one machine, so "CA" is not a real third option. It only describes a system that has not yet met a partition.
+<Compare
+  title="The three CAP terms, as proven"
+  sides={[
+    { title: "Consistency", tone: "info", points: ["Linearizable", "A read never misses a finished write", "Not the C in ACID"] },
+    { title: "Availability", tone: "ok", points: ["Every live node answers", "A timeout counts as down"] },
+    { title: "Partition tolerance", tone: "warn", points: ["Network drops messages", "Not optional across machines"] }
+  ]}
+  caption="During a partition you give up C or A. Without one, you keep both."
+/>
 
 <Choice
   id="cap-statement"
@@ -70,9 +72,26 @@ The theorem: when a partition happens, a replicated store must give up one of C 
 
 <Step id="partition" title="Who loses availability, and how many">
 
-"Giving up availability" sounds like an outage, but it is usually much narrower. Take a five-replica store that commits a write only when three replicas, a strict majority, have it. A partition cuts two replicas away from the other three.
-
-The three-replica side still holds a majority and keeps committing. The two-replica side cannot form a majority, so to stay linearizable it must refuse writes and refuse reads it cannot prove are current. Only the clients stuck with the minority see errors. That is what etcd, ZooKeeper and every Raft- or Paxos-based store do.
+<Flow
+  title="Five replicas, a partition cuts two off"
+  height={260}
+  nodes={[
+    { id: "c1", label: "Client A", kind: "client", x: 0, y: 25 },
+    { id: "c2", label: "Client B", kind: "client", x: 0, y: 80 },
+    { id: "r1", label: "Replica 1", kind: "database", x: 50, y: 0, note: "majority side" },
+    { id: "r2", label: "Replica 2", kind: "database", x: 50, y: 28, note: "majority side" },
+    { id: "r3", label: "Replica 3", kind: "database", x: 50, y: 56, note: "majority side" },
+    { id: "r4", label: "Replica 4", kind: "database", x: 100, y: 70, note: "minority side" },
+    { id: "r5", label: "Replica 5", kind: "database", x: 100, y: 100, note: "minority side" }
+  ]}
+  edges={[
+    { from: "c1", to: "r2", label: "writes OK" },
+    { from: "c2", to: "r4", label: "refused", dashed: true },
+    { from: "r3", to: "r4", dashed: true }
+  ]}
+  failed={["r4", "r5"]}
+  caption="3 of 5 is a majority and keeps committing. Only clients stuck with the 2 see errors."
+/>
 
 <VariantQuestion template="cap.minority-clients" />
 
@@ -80,9 +99,19 @@ The three-replica side still holds a majority and keeps committing. The two-repl
 
 <Step id="ap-side" title="The available choice, and its bill">
 
-The alternative is to keep answering on both sides. Amazon's Dynamo did this for the shopping cart: an "add to cart" must never fail, so any reachable replica accepts the write, and the two sides diverge. When the partition heals, the system must reconcile. Dynamo returned all concurrent versions to the application, which merged carts by union. The known side effect: a deleted item could reappear, because a union cannot tell "removed on one side" from "never added on the other".
-
-Availability is a real business choice, but it moves work to conflict resolution. Before you choose it, say what happens when both sides change the same thing.
+<Sequence
+  title="Available choice: both sides accept, then merge"
+  actors={["Cart client", "Side 1", "Side 2", "Merge"]}
+  messages={[
+    { from: "Cart client", to: "Side 1", label: "add book" },
+    { from: "Cart client", to: "Side 2", label: "remove pen" },
+    { from: "Side 1", to: "Side 2", label: "sync", lost: true },
+    { from: "Side 1", to: "Merge", label: "{pen, book}" },
+    { from: "Side 2", to: "Merge", label: "{}" },
+    { from: "Merge", to: "Cart client", label: "union: pen is back", tone: "warn" }
+  ]}
+  caption="Dynamo's cart never failed an add, but a union cannot tell removed from never added."
+/>
 
 <Choice
   id="choose-ap"
@@ -100,9 +129,17 @@ Availability is a real business choice, but it moves work to conflict resolution
 
 <Step id="else-latency" title="PACELC: the trade-off you pay every day">
 
-Partitions are rare. Abadi's 2012 observation is that the trade-off people actually feel is present all the time: **if there is a Partition, choose Availability or Consistency; Else, choose Latency or Consistency.**
-
-Consistency costs latency because a write cannot be acknowledged until enough replicas have it, and replicas worth having are far apart. Put five replicas in five regions and require a majority: every write waits for the round trip to the second-nearest follower. Serve reads and writes from the local replica alone and you answer in microseconds, at the price of stale or conflicting data.
+<Bars
+  title="Write latency by where the second replica lives"
+  log
+  items={[
+    { label: "Local replica only", value: 0.5, unit: "ms", tone: "ok" },
+    { label: "Majority, same zone", value: 2, unit: "ms", tone: "info" },
+    { label: "Majority, cross-region", value: 80, unit: "ms", tone: "warn" },
+    { label: "Majority, cross-continent", value: 150, unit: "ms", tone: "bad" }
+  ]}
+  caption="Else, choose Latency or Consistency: a majority write waits for the second-nearest follower. Illustrative numbers."
+/>
 
 <VariantQuestion template="pacelc.majority-latency" />
 
@@ -110,11 +147,16 @@ Consistency costs latency because a write cannot be acknowledged until enough re
 
 <Step id="classify" title="Classify a configuration, not a product">
 
-PACELC gives two letters per configuration. Abadi's own examples: Dynamo-style stores such as Cassandra and Riak, in their default setup, are **PA/EL**: available under partition and low-latency otherwise. Fully consistent systems built on consensus are **PC/EC**. Yahoo's PNUTS was **PC/EL**: it kept a per-record master, so it gave up availability for that record under partition, but read from local replicas that could be stale.
-
-Most modern stores let each request choose. A Cassandra read at consistency level ONE and a read at QUORUM are different points in the space, issued against the same cluster.
-
-Select **quorum overlap** in Script and inspect the read and write sets. Then keep Sloppy quorum with spare replicas checked and select **sloppy quorum and hinted handoff**. A spare acknowledges for an unavailable home replica; watch the home-only read miss the write before handoff repairs it. R + W > N guarantees overlap only when both sets come from the same fixed replica group.
+<Compare
+  title="PACELC in two letters"
+  sides={[
+    { title: "PA/EL", tone: "ok", points: ["Cassandra, Riak defaults", "Available and fast", "Stale or conflicting reads"] },
+    { title: "PC/EC", tone: "info", points: ["Consensus stores", "Refuses minority side", "Pays a round trip always"] },
+    { title: "PC/EL", tone: "warn", points: ["Yahoo PNUTS", "Per-record master", "Local reads may be stale"] }
+  ]}
+  caption="Each request can pick its own point: Cassandra ONE and QUORUM differ on one cluster."
+/>
+Select **quorum overlap** in Script, then **sloppy quorum and hinted handoff**. R + W > N guarantees overlap only for a fixed replica group.
 
 <QuorumPlayer />
 
@@ -134,7 +176,17 @@ Select **quorum overlap** in Script and inspect the read and write sets. Then ke
 
 <Step id="beyond-cap" title="What CAP does not tell you">
 
-CAP is a statement about one corner case, so it is easy to over-apply. In 2012 Brewer suggested designing for partitions explicitly instead: detect the partition, enter a partition mode that limits risky operations, and run a recovery step that merges state and repairs invariants afterwards. ATMs famously do this: offline, they still dispense cash up to a limit and reconcile later.
+<Timeline
+  title="Brewer's partition mode (2012)"
+  events={[
+    { at: "Before", label: "Normal operation", tone: "ok" },
+    { at: "Detect", label: "Timeout fires: partition suspected", tone: "warn" },
+    { at: "Partition", label: "Limit risky operations (ATM cash cap)", tone: "bad" },
+    { at: "Heal", label: "Merge state", tone: "info" },
+    { at: "Recover", label: "Repair broken invariants", tone: "ok" }
+  ]}
+  caption="Slow is indistinguishable from partitioned, so every timeout is a small CAP decision."
+/>
 
 <Choice
   id="cap-limits"
@@ -153,10 +205,15 @@ CAP is a statement about one corner case, so it is easy to over-apply. In 2012 B
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. For each one, ask which side keeps a majority, and which replica's round trip the client waits for.
+<Stats
+  title="Two questions for every variant"
+  items={[
+    { label: "Majority side?", value: "N/2 + 1", sub: "keeps committing", tone: "ok" },
+    { label: "Round trip paid?", value: "2nd nearest", sub: "follower for a majority", tone: "warn" }
+  ]}
+/>
+Score 80% or more. Next: [consistency models](/learn/distributed-systems/consistency-models) and [CRDTs](/learn/distributed-systems/crdts).
 
 <MasteryCheck templates={["cap.minority-clients", "pacelc.majority-latency"]} count={4} />
-
-Next, the [consistency models lesson](/learn/distributed-systems/consistency-models) unpacks what "C" can mean between linearizable and eventual, and [CRDTs](/learn/distributed-systems/crdts) show how to make the available side merge safely.
 
 </Step>

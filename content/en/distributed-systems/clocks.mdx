@@ -44,9 +44,14 @@ estimatedMinutes: 30
 
 <Step id="drift" title="Every clock is wrong, differently">
 
-A server's clock is a quartz oscillator counted by the kernel. Oscillators run slightly fast or slow, specified in **parts per million**: 1 ppm is one microsecond of error per second, or about 86 ms per day. NTP corrects clocks periodically, usually by slewing (running slightly faster or slower) and sometimes by stepping, which can move the clock **backwards**.
-
-Between corrections, two clocks drift apart. If each can drift ρ ppm in either direction, after T seconds they can disagree by 2ρT microseconds, before even counting the error of the synchronisation itself. Measure durations with a monotonic clock, never the wall clock.
+<Stats
+  title="Clock error from drift"
+  items={[
+    { label: "1 ppm", value: "1 us / s", sub: "about 86 ms per day", tone: "info" },
+    { label: "Two clocks, T seconds", value: "2 x ppm x T us", sub: "before sync error", tone: "warn" },
+    { label: "NTP step", value: "can go backwards", sub: "use a monotonic clock for durations", tone: "bad" }
+  ]}
+/>
 
 <VariantQuestion template="clocks.drift" />
 
@@ -54,9 +59,18 @@ Between corrections, two clocks drift apart. If each can drift ρ ppm in either 
 
 <Step id="lww" title="Last-writer-wins silently loses writes">
 
-Many stores resolve conflicting writes with **last-writer-wins** (LWW): keep the value with the larger timestamp. With wall-clock timestamps this discards data whenever clocks disagree by more than the gap between two writes. Node A's clock runs 100 ms fast. A writes "first" at its time 1,100. Node B, whose clock is accurate, reads that value and then writes "later" at its time 1,050. B's write happened after A's, but it carries a smaller timestamp, so LWW keeps "first" and drops B's update, without any error.
-
-Select **last-writer-wins loses an update under skew** in Script. Follow the message from A to B, then watch B's causally later write lose to the larger physical timestamp.
+<Sequence
+  title="Last-writer-wins under skew"
+  actors={["Node A (+100 ms)", "Node B (accurate)", "Store"]}
+  messages={[
+    { from: "Node A (+100 ms)", to: "Store", label: "'first', ts 1,100" },
+    { from: "Store", to: "Node B (accurate)", label: "reads 'first'" },
+    { from: "Node B (accurate)", to: "Store", label: "'later', ts 1,050", tone: "warn" },
+    { from: "Store", to: "Node B (accurate)", label: "LWW keeps ts 1,100: update lost", tone: "bad" }
+  ]}
+  caption="B wrote after A, but its timestamp is smaller. Silent data loss."
+/>
+Select **last-writer-wins loses an update under skew** in Script.
 
 <ClocksPlayer />
 
@@ -76,17 +90,16 @@ Select **last-writer-wins loses an update under skew** in Script. Follow the mes
 
 <Step id="lamport" title="Lamport clocks capture happens-before">
 
-Lamport (1978) replaced physical time with the **happens-before** relation: a happens before b if they are on the same process in that order, if a sends a message that b receives, or by transitivity. Events with neither order are **concurrent**.
-
-A Lamport clock is a counter per process with three rules:
-
-1. Before each local event, increment the counter.
-2. Stamp every message with the counter.
-3. On receive, set the counter to max(local, message stamp) and then increment.
-
-This guarantees that if a happens before b, then L(a) is less than L(b).
-
-Select **lamport clock** in Script. Step through sends and receives and check that every receive advances beyond both the local counter and the message stamp.
+<Stats
+  title="Lamport clock rules"
+  items={[
+    { label: "1. Local event", value: "C = C + 1", tone: "info" },
+    { label: "2. Send", value: "stamp with C", tone: "info" },
+    { label: "3. Receive", value: "C = max(C, stamp) + 1", tone: "ok" }
+  ]}
+  caption="If a happens before b, then L(a) < L(b). One way only."
+/>
+Select **lamport clock** in Script.
 
 <ClocksPlayer />
 
@@ -96,7 +109,14 @@ Select **lamport clock** in Script. Step through sends and receives and check th
 
 <Step id="lamport-limits" title="What a Lamport timestamp cannot tell you">
 
-The guarantee runs one way only. A smaller Lamport timestamp does not mean the event happened first; two concurrent events can have any timestamps. Ties are broken by process ID to give a **total order** consistent with causality, which is enough for things like Lamport's mutual exclusion algorithm, or ordering a replicated log. It is not enough to detect conflicts.
+<Compare
+  title="L(a) = 7, L(b) = 12"
+  sides={[
+    { title: "Known", tone: "ok", points: ["b did not happen before a"] },
+    { title: "Unknown", tone: "warn", points: ["a before b?", "or concurrent?", "Vector clocks can tell"] }
+  ]}
+  caption="Ties break by process ID for a total order. That is not conflict detection."
+/>
 
 <Choice
   id="lamport-implication"
@@ -114,11 +134,15 @@ The guarantee runs one way only. A smaller Lamport timestamp does not mean the e
 
 <Step id="vector" title="Vector clocks detect concurrency">
 
-A **vector clock** keeps one counter per process. A process increments its own entry on each event, sends the whole vector, and on receive takes the element-wise maximum and then increments its own entry. Now the comparison is exact: V(a) ≤ V(b) in every entry, and different in at least one, if and only if a happened before b. If each vector is larger in some entry, the events are concurrent.
-
-Dynamo used vector clocks to keep concurrent versions of an object as siblings for the application to merge, instead of silently dropping one. The cost is size: one entry per writer, so systems truncate or use dotted version vectors bounded by replicas rather than clients.
-
-Select **vector clock** in Script. Compare the vectors before the exchange to find concurrent events, then watch a receive merge the sender's causal history.
+<Compare
+  title="Compare vectors [A, B, C]"
+  sides={[
+    { title: "X = [2, 1, 0] vs Y = [3, 1, 1]", tone: "ok", points: ["All entries <= and one <", "X happened before Y"] },
+    { title: "X = [2, 1, 0] vs Y = [1, 2, 0]", tone: "warn", points: ["Each ahead somewhere", "Concurrent: keep both"] }
+  ]}
+  caption="Dynamo kept concurrent versions as siblings. Cost: one entry per writer."
+/>
+Select **vector clock** in Script.
 
 <ClocksPlayer />
 
@@ -138,11 +162,16 @@ Select **vector clock** in Script. Compare the vectors before the exchange to fi
 
 <Step id="hlc" title="Hybrid logical clocks">
 
-Logical clocks capture causality but say nothing about real time, so you cannot ask "what was the state at 10:00?". Physical clocks give real time but break causality. A **hybrid logical clock** (Kulkarni et al., 2014) combines them: the timestamp is a pair (l, c), where l is the largest physical time the node has heard of and c is a small counter for events that share the same l.
-
-On each event or receive, l becomes the maximum of the local physical clock, its previous l, and any incoming l; c increments if l did not change and resets to zero if it did; on a receive that adopts the sender's l, c continues from the sender's counter. The result respects happens-before like a Lamport clock, fits in a 64-bit timestamp, and never strays from physical time by more than the clock offset. CockroachDB uses HLC timestamps for its transactions.
-
-Select **hlc clock** in Script. Watch the physical clock move backwards while the hybrid timestamp continues to respect causal order.
+<Stats
+  title="Hybrid logical clock (l, c)"
+  items={[
+    { label: "l", value: "max physical time seen", tone: "info" },
+    { label: "c", value: "counter for same l", tone: "info" },
+    { label: "Size", value: "64 bits", sub: "CockroachDB uses it", tone: "ok" }
+  ]}
+  caption="Respects happens-before like Lamport and stays within the clock offset of real time."
+/>
+Select **hlc clock** in Script.
 
 <ClocksPlayer />
 
@@ -162,9 +191,16 @@ Select **hlc clock** in Script. Watch the physical clock move backwards while th
 
 <Step id="truetime" title="TrueTime: admit the uncertainty, then wait it out">
 
-Google's Spanner took a different approach: instead of pretending to know the time, its TrueTime API returns an interval, TT.now() = [earliest, latest], guaranteed to contain true time. GPS receivers and atomic clocks in every data centre keep the half-width ε small; the paper reports ε moving between about 1 and 7 ms between synchronisations.
-
-To make commit order match real time across the planet, a transaction picks its commit timestamp s = TT.now().latest and then performs **commit wait**: it does not make its writes visible until TT.now().earliest has passed s. That wait is about 2ε. Spanner pays a few milliseconds per write to get externally consistent transactions, which is why it invests so much in shrinking ε.
+<Timeline
+  title="Spanner commit wait"
+  events={[
+    { at: "TT.now()", label: "[earliest, latest], width 2e", tone: "info" },
+    { at: "Pick", label: "s = latest", tone: "warn" },
+    { at: "Wait", label: "Hold writes until earliest passes s (about 2e)", tone: "bad" },
+    { at: "Visible", label: "Externally consistent commit", tone: "ok" }
+  ]}
+  caption="e is about 1-7 ms. A few milliseconds per write buy real-time order."
+/>
 
 <VariantQuestion template="clocks.commit-wait" />
 
@@ -172,10 +208,15 @@ To make commit order match real time across the planet, a transaction picks its 
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. Convert ppm × seconds to microseconds carefully, and remember that the receive event itself ticks the Lamport clock.
+<Stats
+  title="Watch the units"
+  items={[
+    { label: "ppm x seconds", value: "microseconds", tone: "warn" },
+    { label: "Receive event", value: "also ticks", sub: "Lamport clock", tone: "info" }
+  ]}
+/>
+Score 80% or more. [Leader election](/learn/distributed-systems/leader-election) leases depend on these drift bounds.
 
 <MasteryCheck templates={["clocks.drift", "clocks.lamport", "clocks.commit-wait"]} count={5} />
-
-Leases and fencing in the [leader election lesson](/learn/distributed-systems/leader-election) depend directly on the drift bounds from this lesson.
 
 </Step>

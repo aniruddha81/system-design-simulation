@@ -38,18 +38,20 @@ estimatedMinutes: 20
 
 <Step id="stages" title="A path you can follow under pressure">
 
-A system design interview tests whether you can take a vague goal to a defensible design, out loud, in under an hour. The interviewer is watching *how* you get there as much as where you land. A fixed sequence of stages keeps you from skipping the parts that earn the most signal:
-
-1. **Requirements**: what the system must do, and how well (scale, latency, availability, consistency).
-2. **Estimates**: the few numbers that change the design.
-3. **API**: the operations clients call, with inputs and outputs.
-4. **Data model**: the entities, keys and access patterns.
-5. **High-level design**: the boxes and arrows that serve the API at the estimated scale.
-6. **Deep dives**: two or three components examined in detail, especially where it could break.
-7. **Trade-offs**: what you chose, what it cost, and what you would change under different requirements.
-8. **Wrap-up**: summarise, name the risks, say what you would do next.
-
-The SRE Workbook's "non-abstract large system design" exercise follows the same arc: start from requirements, then make the design concrete enough to provision.
+<Timeline
+  title="Eight stages, in order"
+  events={[
+    { at: "1", label: "Requirements", tone: "info" },
+    { at: "2", label: "Estimates", tone: "info" },
+    { at: "3", label: "API", tone: "info" },
+    { at: "4", label: "Data model", tone: "info" },
+    { at: "5", label: "High-level design", tone: "ok" },
+    { at: "6", label: "Deep dives", tone: "warn" },
+    { at: "7", label: "Trade-offs", tone: "warn" },
+    { at: "8", label: "Wrap-up", tone: "ok" }
+  ]}
+  caption="Each stage consumes the previous one's output. Same arc as the SRE Workbook's large-system design exercise."
+/>
 
 <Ordering
   id="framework-order"
@@ -71,7 +73,14 @@ The SRE Workbook's "non-abstract large system design" exercise follows the same 
 
 <Step id="requirements" title="Start with requirements, not boxes">
 
-The first minutes decide whether you design the right system. Ask what the core use cases are, who the users are, what scale to plan for, and which qualities matter most. Then write the list down where the interviewer can see it, and refer back to it.
+<Compare
+  title="First minutes"
+  sides={[
+    { title: "Ask", tone: "ok", points: ["Core use cases", "Users", "Scale", "Qualities that matter most"] },
+    { title: "Not yet", tone: "bad", points: ["Drawing boxes"] }
+  ]}
+  caption="Write the list where the interviewer can see it."
+/>
 
 <Choice
   id="first-minutes"
@@ -89,7 +98,15 @@ The first minutes decide whether you design the right system. Ask what the core 
 
 <Step id="estimates" title="Estimates that decide something">
 
-Do estimates that change a decision, not estimates for show. Does the data fit on one machine? Is the system read-heavy enough to cache? Will one database handle the write rate? Round aggressively, say the assumptions aloud, and state the conclusion: "about 4 TB per year, so a single database works for now, but we will shard within a few years."
+<Stats
+  title="Estimates that decide something"
+  items={[
+    { label: "Fits one machine?", value: "storage", tone: "info" },
+    { label: "Cache it?", value: "read / write", tone: "info" },
+    { label: "One DB enough?", value: "write rate", tone: "info" },
+    { label: "Conclusion", value: "4 TB/yr: one DB, shard later", tone: "ok" }
+  ]}
+/>
 
 <VariantQuestion template="interview.storage-years" />
 
@@ -97,7 +114,18 @@ Do estimates that change a decision, not estimates for show. Does the data fit o
 
 <Step id="high-level" title="Simple first, then evolve">
 
-Draw the simplest design that serves the API at the estimated scale, then walk one request through it end to end. Only then add what the requirements force: a cache because reads dominate, a queue because writes can be asynchronous, sharding because the data will not fit.
+<Flow
+  title="Simple first, then evolve"
+  height={220}
+  nodes={[
+    { id: "cl", label: "Clients", kind: "client", x: 0, y: 50 },
+    { id: "sv", label: "Service", kind: "service", x: 35, y: 50, note: "2k writes/s" },
+    { id: "ca", label: "Cache", kind: "cache", x: 70, y: 15, note: "200k reads/s" },
+    { id: "db", label: "Database", kind: "database", x: 100, y: 85 }
+  ]}
+  edges={[ { from: "cl", to: "sv" }, { from: "sv", to: "ca", label: "reads dominate" }, { from: "sv", to: "db" } ]}
+  caption="Walk one request end to end, then add what the numbers force."
+/>
 
 <Choice
   id="evolve"
@@ -115,7 +143,13 @@ Draw the simplest design that serves the API at the estimated scale, then walk o
 
 <Step id="deep-dive" title="Dive where it could break">
 
-Deep dives are where you show depth. Choose them yourself if the interviewer does not: the component with the highest load, the hardest consistency requirement, or the most likely failure. For each, say how it fails and what happens to users when it does.
+<Compare
+  title="Where to dive"
+  sides={[
+    { title: "Pick", tone: "ok", points: ["Highest load", "Hardest consistency", "Most likely failure"] },
+    { title: "For each, say", tone: "info", points: ["How it fails", "What users see"] }
+  ]}
+/>
 
 <Choice
   id="pick-dive"
@@ -133,7 +167,16 @@ Deep dives are where you show depth. Choose them yourself if the interviewer doe
 
 <Step id="time" title="Budget the clock">
 
-Run out of time before the deep dives and you have shown only the easy half. Plan the minutes before you start, glance at the clock at each stage boundary, and move on when a stage has produced what the next one needs. Keep the wrap-up: summarising your design and its risks is part of the signal.
+<Bars
+  title="A 45-minute plan, minutes per stage"
+  items={[
+    { label: "Requirements and estimates", value: 8, unit: "min", tone: "info" },
+    { label: "API, data, high-level", value: 12, unit: "min", tone: "info" },
+    { label: "Deep dives", value: 15, unit: "min", tone: "warn" },
+    { label: "Trade-offs and wrap-up", value: 10, unit: "min", tone: "ok" }
+  ]}
+  caption="Illustrative. Glance at the clock at each boundary and keep the wrap-up."
+/>
 
 <VariantQuestion template="interview.time-budget" />
 
@@ -141,10 +184,12 @@ Run out of time before the deep dives and you have shown only the easy half. Pla
 
 <Step id="practice" title="Check your mastery, then rehearse">
 
-The mastery check draws fresh time-budget and estimation variants. Score 80% or more to master the lesson.
+<Stats
+  title="Rehearse"
+  items={[ { label: "Interview mode", value: "checklist, calculator, canvas, rubric", tone: "info" } ]}
+/>
+Score 80% or more. Rehearse in [interview mode](/interview).
 
 <MasteryCheck templates={["interview.time-budget", "interview.storage-years"]} count={4} />
-
-Then rehearse the whole framework in [interview mode](/interview): a timed (or untimed) session with a requirements checklist, the estimation calculator and the canvas, ending with a self-assessment rubric and a reference solution.
 
 </Step>

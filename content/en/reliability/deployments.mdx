@@ -49,13 +49,15 @@ estimatedMinutes: 30
 
 <Step id="strategies" title="Three ways to replace running code">
 
-Most outages start with a change. The deployment strategy decides how many users see a bad change, and how fast you can take it back.
-
-- **Rolling**: replace instances in batches. No extra capacity, but old and new versions serve side by side for the whole rollout, and rollback is another rolling deploy.
-- **Blue/green**: bring up a complete new fleet (green) next to the old one (blue), test it, then switch traffic at the router. Rollback is switching back, in seconds, at the cost of running two fleets during the switch.
-- **Canary**: send a small share of real traffic to the new version, compare its metrics with the old version, and widen in stages only if they match.
-
-Strategies combine: a canary first, then a rolling or blue/green widening, with **bake time** at each stage. AWS's deployment pipelines go one zone in one region first, then widen across regions in waves.
+<Compare
+  title="Three ways to replace running code"
+  sides={[
+    { title: "Rolling", tone: "info", points: ["Replace in batches", "Old and new side by side", "Rollback = another rollout"] },
+    { title: "Blue/green", tone: "ok", points: ["Full new fleet, switch at router", "Rollback in seconds", "Pays for two fleets"] },
+    { title: "Canary", tone: "warn", points: ["Small share of real traffic", "Compare metrics", "Widen in stages with bake time"] }
+  ]}
+  caption="Combine them: canary one zone first, then widen in waves."
+/>
 
 <Choice
   id="pick-strategy"
@@ -73,9 +75,18 @@ Strategies combine: a canary first, then a rolling or blue/green widening, with 
 
 <Step id="canary" title="A canary's blast radius">
 
-A canary turns "will this break production?" into a bounded experiment. Its blast radius is the traffic share × the time until rollback × how badly it fails. Halving the canary share or the detection time halves the damage, which is why automated rollback on SLO metrics matters more than a careful human watching a dashboard.
-
-A canary also needs enough traffic to be statistically meaningful: at 0.1% of a quiet service, it may take hours to see a single error.
+<Flow
+  title="Canary at 5% of traffic"
+  height={230}
+  nodes={[
+    { id: "lb", label: "Router", kind: "loadBalancer", x: 0, y: 50 },
+    { id: "old", label: "Version N", kind: "service", x: 100, y: 15, note: "95%" },
+    { id: "new", label: "Version N+1", kind: "service", x: 100, y: 85, note: "5%, watched" }
+  ]}
+  edges={[ { from: "lb", to: "old", label: "95%" }, { from: "lb", to: "new", label: "5%" } ]}
+  hot={["new"]}
+  caption="Blast radius = share x time to rollback x severity. Automate rollback on SLO metrics."
+/>
 
 <VariantQuestion template="deploy.canary-blast" />
 
@@ -83,7 +94,20 @@ A canary also needs enough traffic to be statistically meaningful: at 0.1% of a 
 
 <Step id="rolling" title="Rolling updates need headroom">
 
-During a rolling update, the instances in the current batch are out of service: draining, restarting, warming caches. The rest carry all the traffic. Pick the batch so the remaining instances stay under your utilisation target at peak, not just under 100%, because a freshly restarted instance is slower until it warms up.
+<Flow
+  title="Rolling batch: the rest carry the load"
+  height={220}
+  nodes={[
+    { id: "lb", label: "Router", kind: "loadBalancer", x: 0, y: 50 },
+    { id: "a", label: "Batch (draining)", kind: "service", x: 100, y: 10 },
+    { id: "b", label: "Instance B", kind: "service", x: 100, y: 50, note: "carries extra" },
+    { id: "c", label: "Instance C", kind: "service", x: 100, y: 90, note: "carries extra" }
+  ]}
+  edges={[ { from: "lb", to: "a" }, { from: "lb", to: "b" }, { from: "lb", to: "c" } ]}
+  failed={["a"]}
+  hot={["b", "c"]}
+  caption="Survivors must stay under the utilisation target at peak."
+/>
 
 <VariantQuestion template="deploy.rolling-batch" />
 
@@ -91,7 +115,16 @@ During a rolling update, the instances in the current batch are out of service: 
 
 <Step id="config" title="Configuration is a deployment too">
 
-On July 2, 2019, Cloudflare deployed a new web-application-firewall rule containing a regular expression that backtracked catastrophically. The rule went to every machine worldwide at once, CPU hit 100% everywhere, and traffic dropped for about 27 minutes. The code was fine; the **configuration** had skipped the staged rollout code would have had.
+<Timeline
+  title="Cloudflare, 2 July 2019"
+  events={[
+    { at: "Deploy", label: "WAF rule with a backtracking regex", tone: "warn" },
+    { at: "Seconds", label: "Pushed to every machine at once", tone: "bad" },
+    { at: "CPU", label: "100% worldwide", tone: "bad" },
+    { at: "About 27 min", label: "Traffic dropped, then rolled back", tone: "ok" }
+  ]}
+  caption="The code was fine. The configuration skipped the staged rollout code gets."
+/>
 
 <Choice
   id="config-rollout"
@@ -109,9 +142,17 @@ On July 2, 2019, Cloudflare deployed a new web-application-firewall rule contain
 
 <Step id="flags" title="Separate deploy from release">
 
-A **feature flag** ships new code dark and turns it on at runtime, for internal users, then 1%, then everyone. Turning the flag off is a rollback that takes seconds and needs no deploy. Flags carry costs: every flag doubles a code path to test, and stale flags pile up, so give each one an owner and a removal date.
-
-A rollback is only safe if the old code can read what the new code wrote. Database changes therefore use **expand/contract**: add the new column or table first (both versions work), deploy code that writes both, migrate, switch reads, and only in a later release remove the old shape.
+<Timeline
+  title="Expand/contract: rename a column safely"
+  events={[
+    { at: "1 Add", label: "New column; old code ignores it", tone: "ok" },
+    { at: "2 Dual write", label: "Write both, read old", tone: "ok" },
+    { at: "3 Backfill", label: "Fill existing rows", tone: "info" },
+    { at: "4 Read new", label: "Behind a flag", tone: "info" },
+    { at: "5 Drop", label: "After bake: irreversible", tone: "bad" }
+  ]}
+  caption="Flags separate deploy from release. Give each an owner and removal date."
+/>
 
 <Ordering
   id="expand-contract"
@@ -131,7 +172,15 @@ A rollback is only safe if the old code can read what the new code wrote. Databa
 
 <Step id="rollback" title="Roll back first, debug later">
 
-When a deploy correlates with a symptom, the fastest mitigation is usually to undo it. Debugging forward with a hotfix while users are failing spends error budget on your curiosity.
+<Stats
+  title="Checkout errors ten minutes after a deploy"
+  items={[
+    { label: "Before", value: "0.1%", tone: "ok" },
+    { label: "After", value: "3%", tone: "bad" },
+    { label: "Action", value: "roll back first", sub: "debug later", tone: "info" }
+  ]}
+  caption="Hotfixing forward spends error budget on curiosity."
+/>
 
 <Choice
   id="rollback-decision"
@@ -149,10 +198,15 @@ When a deploy correlates with a symptom, the fastest mitigation is usually to un
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh canary and rolling-update variants. Score 80% or more to master the lesson.
+<Stats
+  title="Deploy math"
+  items={[
+    { label: "Canary", value: "share x time", sub: "x severity", tone: "warn" },
+    { label: "Rolling", value: "survivors <= target", sub: "at peak", tone: "info" }
+  ]}
+/>
+Score 80% or more. Next: [capacity planning](/learn/reliability/capacity-planning).
 
 <MasteryCheck templates={["deploy.canary-blast", "deploy.rolling-batch"]} count={4} />
-
-Next: [capacity planning](/learn/reliability/capacity-planning), which tells you how much headroom those rollouts and failovers have to work with.
 
 </Step>

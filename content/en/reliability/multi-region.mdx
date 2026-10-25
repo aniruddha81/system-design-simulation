@@ -46,11 +46,22 @@ estimatedMinutes: 30
 
 <Step id="active-passive" title="Active-passive: one region writes">
 
-In **active-passive**, one region serves writes (and usually reads). A second region holds a replica and stands by. On a regional failure you **promote** the standby and move traffic to it.
-
-It is simple, because there is one writer and no conflicts. Its costs: the standby's capacity is mostly idle; RPO equals the replication lag at the moment of failure (unless replication is synchronous); and RTO includes detection, the failover decision, promotion and moving traffic, where DNS TTLs and client connection pools keep some clients on the dead region for minutes.
-
-The dangerous step is promotion. If the old primary is only partitioned rather than dead, you now have two writers. GitHub's October 2018 incident started with a 43-second partition and an automated cross-country failover; writes accepted on both sides took about a day to reconcile. Fence the old primary before promoting the new one.
+<Flow
+  title="Active-passive failover"
+  height={240}
+  nodes={[
+    { id: "cl", label: "Clients", kind: "client", x: 0, y: 50 },
+    { id: "a", label: "Region A (writer)", kind: "database", x: 100, y: 10, note: "partitioned, maybe alive" },
+    { id: "b", label: "Region B (standby)", kind: "database", x: 100, y: 90, note: "promoted" }
+  ]}
+  edges={[
+    { from: "cl", to: "a", label: "old route", dashed: true },
+    { from: "cl", to: "b", label: "after DNS TTL" },
+    { from: "a", to: "b", label: "async replication", dashed: true }
+  ]}
+  failed={["a"]}
+  caption="Simple (one writer), idle standby. RPO = lag at failure. RTO includes DNS TTLs. Fence the old primary before promoting, or you get two writers (GitHub 2018)."
+/>
 
 <Choice
   id="topology"
@@ -68,9 +79,15 @@ The dangerous step is promotion. If the old primary is only partitioned rather t
 
 <Step id="capacity" title="The survivors must carry the peak">
 
-In **active-active**, every region serves live traffic. When one fails, the others absorb its share instantly, so there is no promotion step. But only if they have the capacity **already running**. Autoscaling during a regional failure means depending on a control plane that may itself be degraded, while every customer of that provider scales at the same moment.
-
-AWS calls the alternative **static stability**: provision enough capacity in advance that the system keeps working through a failure without making any changes. With N regions, each must handle peak ÷ (N − 1).
+<Bars
+  title="Per-region load after a region fails (peak = 300)"
+  items={[
+    { label: "2 regions: survivor", value: 300, unit: "units (100% of peak)", tone: "bad" },
+    { label: "3 regions: each survivor", value: 150, unit: "units (peak / 2)", tone: "warn" },
+    { label: "4 regions: each survivor", value: 100, unit: "units (peak / 3)", tone: "ok" }
+  ]}
+  caption="Each region needs peak / (N - 1) already running. Static stability: no scaling during the failure."
+/>
 
 <VariantQuestion template="region.n-plus-one" />
 
@@ -78,11 +95,14 @@ AWS calls the alternative **static stability**: provision enough capacity in adv
 
 <Step id="conflicts" title="Active-active writes: who wins?">
 
-If two regions accept writes to the same record concurrently, they conflict. There are three ways out, and each costs something:
-
-- **Home each record in one region.** A user's data is written only in their home region; other regions forward writes or serve stale reads. No conflicts, but a region failure makes its users' writes unavailable until you re-home them.
-- **Merge automatically.** Last-writer-wins by timestamp is simple and silently loses one update. CRDTs (counters, sets, registers designed to merge) keep every update but fit only some data types.
-- **Agree before committing.** A consensus protocol across regions, as Spanner does with Paxos, gives one serial order everywhere and costs at least one cross-region round trip per write.
+<Compare
+  title="Active-active write conflicts"
+  sides={[
+    { title: "Home region", tone: "info", points: ["One writer per record", "No conflicts", "Region down: users blocked until re-homed"] },
+    { title: "Merge", tone: "warn", points: ["LWW silently loses one", "CRDTs keep both, some types only"] },
+    { title: "Agree first", tone: "bad", points: ["Consensus (Spanner)", "One order everywhere", "Cross-region round trip per write"] }
+  ]}
+/>
 
 <Choice
   id="cart-conflicts"
@@ -100,9 +120,16 @@ If two regions accept writes to the same record concurrently, they conflict. The
 
 <Step id="consensus-latency" title="The price of agreeing across regions">
 
-Speed of light sets a floor: a round trip between US coasts is roughly 60 to 80 ms, and between continents often well over 100 ms. A write that must reach a majority of regions pays at least the round trip to the **nearest** replica that completes the majority, because the leader does not wait for the slowest.
-
-That is why consensus deployments place a majority of replicas close together (for example three regions on one continent plus witnesses elsewhere), and why reads that need the latest value pay a similar cost.
+<Bars
+  title="Round trips, approximate"
+  items={[
+    { label: "Same zone", value: 1, unit: "ms", tone: "ok" },
+    { label: "US coast to coast", value: 70, unit: "ms", tone: "warn" },
+    { label: "Between continents", value: 130, unit: "ms", tone: "bad" }
+  ]}
+  log
+  caption="A majority write waits for the nearest replica that completes the majority, not the slowest. Keep a majority close."
+/>
 
 <VariantQuestion template="region.quorum-latency" />
 
@@ -110,7 +137,20 @@ That is why consensus deployments place a majority of replicas close together (f
 
 <Step id="hidden-coupling" title="Shared fate across regions">
 
-Multi-region buys independence only if nothing important is shared. Global configuration pushes, a single identity provider, one DNS provider, a global deployment pipeline and cross-region control planes can each take down every region together.
+<Flow
+  title="Shared fate across regions"
+  height={250}
+  nodes={[
+    { id: "g", label: "Global config / pipeline", kind: "service", x: 50, y: 0, note: "one push" },
+    { id: "r1", label: "Region 1", kind: "service", x: 0, y: 90 },
+    { id: "r2", label: "Region 2", kind: "service", x: 50, y: 90 },
+    { id: "r3", label: "Region 3", kind: "service", x: 100, y: 90 }
+  ]}
+  edges={[ { from: "g", to: "r1" }, { from: "g", to: "r2" }, { from: "g", to: "r3" } ]}
+  hot={["g"]}
+  failed={["r1", "r2", "r3"]}
+  caption="Also: one identity provider, one DNS provider, cross-region control planes."
+/>
 
 <Choice
   id="shared-fate"
@@ -129,10 +169,15 @@ Multi-region buys independence only if nothing important is shared. Global confi
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh capacity and commit-latency variants. Score 80% or more to master the lesson.
+<Stats
+  title="Lab: N + 1 at small scale"
+  items={[
+    { label: "Chaos", value: "crash 1 replica", sub: "Scenario tab", tone: "bad" },
+    { label: "Check", value: "survivors saturate?", sub: "Scale tab", tone: "warn" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox?template=cache-aside), add a replica crash to the chaos timeline, then run the Scale tab.
 
 <MasteryCheck templates={["region.n-plus-one", "region.quorum-latency"]} count={4} />
-
-Try it at scale: in the [sandbox](/sandbox?template=cache-aside), add a crash of one service replica to the chaos timeline in the **Scenario** tab, then run the **Scale** tab. Watch whether the survivors saturate: that is the N + 1 question at a smaller scale.
 
 </Step>

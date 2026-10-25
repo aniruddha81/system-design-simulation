@@ -40,9 +40,15 @@ estimatedMinutes: 25
 
 <Step id="why-timeouts" title="Every remote call needs a timeout">
 
-A remote call can fail in a way that never returns: the server is alive but stuck, the connection is half-open after a network change, a response packet was lost and the TCP retransmission timer backs off into minutes. Without a timeout, the caller waits forever, holding a thread, a connection and memory.
-
-A timeout turns "unknown" into a decision. It does not tell you what happened on the other side; a timed-out request may have completed. That matters as soon as you retry, which is why the [idempotency lesson](/learn/distributed-systems/idempotency) follows this one.
+<Sequence
+  title="A call that never returns"
+  actors={["Caller", "Payments"]}
+  messages={[
+    { from: "Caller", to: "Payments", label: "charge" },
+    { from: "Payments", to: "Caller", label: "response lost", lost: true },
+  ]}
+  caption="The caller waits forever. A timeout turns unknown into a decision. It does not say whether the call completed."
+/>
 
 <Choice
   id="timeout-meaning"
@@ -60,9 +66,15 @@ A timeout turns "unknown" into a decision. It does not tell you what happened on
 
 <Step id="from-data" title="Set the timeout from the latency distribution">
 
-A timeout is a bet on the latency distribution. Amazon's Builders' Library describes the usual starting point: pick an acceptable rate of false timeouts, say 0.1%, and set the timeout at that percentile of the dependency's healthy latency, here p99.9, plus a little padding. Then check it fits inside what your own caller will wait.
-
-Both errors hurt. Too short, and healthy slow requests fail and get retried, adding load exactly when latency is rising. Too long, and a dead dependency ties up resources for the whole wait.
+<Bars
+  title="Dependency latency, healthy"
+  items={[
+    { label: "p50", value: 20, unit: "ms", tone: "ok" },
+    { label: "p99", value: 120, unit: "ms", tone: "info" },
+    { label: "p99.9", value: 300, unit: "ms", tone: "warn" }
+  ]}
+  caption="Accept 0.1% false timeouts: set at p99.9 plus padding (Builders' Library). Too short adds retries, too long holds resources."
+/>
 
 <Choice
   id="pick-timeout"
@@ -80,7 +92,13 @@ Both errors hurt. Too short, and healthy slow requests fail and get retried, add
 
 <Step id="too-long" title="What an overlong timeout holds hostage">
 
-When a dependency hangs, every in-flight call to it sits waiting until the timeout. By Little's law, the number stuck equals the call rate times the time each call is held. A generous timeout on a busy path can exhaust a whole thread pool in seconds, and then the service fails every request, including ones that never touch the broken dependency. That is how one slow dependency cascades into a full outage.
+<Stats
+  title="Little's law on a hang"
+  items={[
+    { label: "Stuck calls", value: "rate x timeout", sub: "100/s x 10 s = 1,000", tone: "bad" },
+    { label: "Result", value: "pool exhausted", sub: "even unrelated requests fail", tone: "bad" }
+  ]}
+/>
 
 <VariantQuestion template="timeouts.threads" />
 
@@ -88,7 +106,16 @@ When a dependency hangs, every in-flight call to it sits waiting until the timeo
 
 <Step id="attempts" title="Retries must fit inside the deadline">
 
-The caller has its own deadline. Every attempt, and every sleep between attempts, comes out of the same budget. A per-try timeout of 1 s with three attempts behind an API that the user abandons after 2 s means the third attempt is wasted work. Budget backwards: user deadline, then attempts × per-try timeout plus sleeps.
+<Timeline
+  title="One 2 s deadline, per-try 1 s, three attempts"
+  events={[
+    { at: "0-1 s", label: "Attempt 1 times out", tone: "warn" },
+    { at: "1-2 s", label: "Attempt 2 times out", tone: "warn" },
+    { at: "2 s", label: "User gone", tone: "bad" },
+    { at: "2-3 s", label: "Attempt 3: wasted work", tone: "bad" }
+  ]}
+  caption="Budget backwards: deadline, then attempts x per-try plus sleeps."
+/>
 
 <VariantQuestion template="timeouts.retry-window" />
 
@@ -96,9 +123,16 @@ The caller has its own deadline. Every attempt, and every sleep between attempts
 
 <Step id="deadline" title="Propagate the deadline, not a fixed timeout">
 
-In a chain of calls, fixed per-hop timeouts do not compose. If the gateway gives up after 1 s but service A gives B a fresh 1 s timeout, B can keep working long after the user is gone. Worse, each hop's retries multiply under the same wasted budget.
-
-The fix is **deadline propagation**: pass the absolute deadline, or the remaining time, with the request. gRPC does this natively; each server sees how much time is left and passes that on, minus what it has already spent and what it needs to respond. A server that receives a request whose deadline has already passed should reject it immediately instead of doing the work.
+<Sequence
+  title="Deadline propagation"
+  actors={["Gateway", "Service A", "Service B"]}
+  messages={[
+    { from: "Gateway", to: "Service A", label: "deadline 1,000 ms" },
+    { from: "Service A", to: "Service B", label: "remaining 700 ms", tone: "info" },
+    { from: "Service B", to: "Service A", label: "deadline passed: rejected", tone: "bad" }
+  ]}
+  caption="Pass remaining time, not a fresh timeout. gRPC does this natively."
+/>
 
 <VariantQuestion template="timeouts.remaining" />
 
@@ -106,7 +140,18 @@ The fix is **deadline propagation**: pass the absolute deadline, or the remainin
 
 <Step id="expired-work" title="Stop work nobody is waiting for">
 
-Google's SRE book singles out work for timed-out requests as a key ingredient of cascading failure. Under overload, queues grow, so requests spend longer waiting; more of them expire while queued; the server keeps executing them anyway and produces responses no one reads. Goodput falls while utilisation stays at 100%.
+<Flow
+  title="Work nobody is waiting for"
+  height={200}
+  nodes={[
+    { id: "cl", label: "Clients", kind: "client", x: 0, y: 50, note: "gave up" },
+    { id: "q", label: "Queue", kind: "queue", x: 50, y: 50, note: "expired items" },
+    { id: "sv", label: "Server", kind: "service", x: 100, y: 50, note: "100% busy" }
+  ]}
+  edges={[ { from: "cl", to: "q" }, { from: "q", to: "sv", label: "still executed", dashed: true } ]}
+  hot={["sv"]}
+  caption="Goodput falls while utilisation stays at 100%. Check the deadline on dequeue."
+/>
 
 <Choice
   id="deadline-checks"
@@ -125,10 +170,15 @@ Google's SRE book singles out work for timed-out requests as a key ingredient of
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. Convert milliseconds to seconds before Little's law, and remember the last attempt has no sleep after it.
+<Stats
+  title="Two slips to avoid"
+  items={[
+    { label: "Little's law", value: "ms to s first", tone: "warn" },
+    { label: "Last attempt", value: "no sleep after", tone: "info" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox), give a call to a slow service a long timeout, watch queueing climb, then shorten it.
 
 <MasteryCheck templates={["timeouts.threads", "timeouts.retry-window", "timeouts.remaining"]} count={5} />
-
-In the [sandbox](/sandbox), every call step in a route has its own timeout and retry policy. Give a call to a slow service a long timeout, drive traffic, and watch queueing and latency climb in the caller; then shorten it and compare.
 
 </Step>

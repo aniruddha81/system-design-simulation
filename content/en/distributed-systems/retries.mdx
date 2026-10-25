@@ -43,9 +43,14 @@ estimatedMinutes: 30
 
 <Step id="when-to-retry" title="Retries fix transient failures, and only those">
 
-A retry is a bet that the failure was transient: a dropped packet, a leader election in progress, a server that restarted. Against those, one quick retry turns a visible error into a slightly slower success. Against a persistent failure, such as an overloaded or broken dependency, a retry is just more load on the thing that is already failing.
-
-So classify the error before retrying. A 400 Bad Request or 403 Forbidden will fail identically every time. A 503 or 429 that says "slow down" deserves a retry only after waiting, and only within a budget. And a retry of a non-idempotent operation after a timeout risks doing it twice.
+<Compare
+  title="Classify before retrying"
+  sides={[
+    { title: "Retry", tone: "ok", points: ["Dropped packet", "Election in progress", "503 / 429 after waiting"] },
+    { title: "Never", tone: "bad", points: ["400 Bad Request", "403 Forbidden", "Fails identically"] },
+    { title: "Careful", tone: "warn", points: ["Non-idempotent op after timeout", "Might run twice"] }
+  ]}
+/>
 
 <Choice
   id="retryable"
@@ -64,9 +69,19 @@ So classify the error before retrying. A 400 Bad Request or 403 Forbidden will f
 
 <Step id="amplification" title="Retries multiply across layers">
 
-The trap is that every layer of a system retries independently. A client retries the API, the API retries the service, the service retries the database. Each layer is reasonable on its own; together they multiply. With 3 attempts at each of 4 layers, one user request becomes 3⁴ = 81 attempts on the database, arriving precisely when it is least able to cope.
-
-This is the **retry storm**. It turns a brief overload into a sustained one: the dependency recovers a little, gets flooded by retried traffic, falls over again. Google's SRE book recommends retrying at one layer only, typically just above the failing dependency, and having the other layers fail fast.
+<Flow
+  title="3 attempts at each of 4 layers = 81 on the database"
+  height={200}
+  nodes={[
+    { id: "c", label: "Client", kind: "client", x: 0, y: 50, note: "x3" },
+    { id: "a", label: "API", kind: "apiGateway", x: 33, y: 50, note: "x3" },
+    { id: "s", label: "Service", kind: "service", x: 66, y: 50, note: "x3" },
+    { id: "d", label: "Database", kind: "database", x: 100, y: 50, note: "3^4 = 81" }
+  ]}
+  edges={[ { from: "c", to: "a" }, { from: "a", to: "s" }, { from: "s", to: "d" } ]}
+  hot={["d"]}
+  caption="Retry at one layer only; the others fail fast (SRE book)."
+/>
 
 <VariantQuestion template="retries.amplification" />
 
@@ -74,9 +89,17 @@ This is the **retry storm**. It turns a brief overload into a sustained one: the
 
 <Step id="backoff" title="Exponential backoff with a cap">
 
-Retrying immediately repeats the failure at full speed. **Exponential backoff** waits longer after each failure: base, 2 × base, 4 × base and so on, giving the dependency room to recover. A **cap** stops waits from growing absurd: without one, the tenth retry with a 100 ms base would wait 51 seconds.
-
-Backoff alone also bounds how fast one client can hammer a server. It does not bound how many clients do it at once.
+<Bars
+  title="Wait before retry n, base 100 ms"
+  items={[
+    { label: "Retry 1", value: 100, unit: "ms", tone: "ok" },
+    { label: "Retry 4", value: 800, unit: "ms", tone: "info" },
+    { label: "Retry 7", value: 6400, unit: "ms", tone: "warn" },
+    { label: "Retry 10 (uncapped)", value: 51200, unit: "ms", tone: "bad" }
+  ]}
+  log
+  caption="A cap stops waits growing absurd. Backoff bounds one client, not many at once."
+/>
 
 <VariantQuestion template="retries.capped-backoff" />
 
@@ -84,9 +107,13 @@ Backoff alone also bounds how fast one client can hammer a server. It does not b
 
 <Step id="jitter" title="Jitter spreads the herd">
 
-If a thousand clients fail at the same moment, as they do when a shared dependency blips, plain exponential backoff makes them all retry at the same moments too: at 100 ms, 200 ms, 400 ms. Each retry wave is a synchronised spike. Brooker's 2015 simulations at AWS compared strategies and found that adding randomness, **jitter**, removes the spikes and cuts total work substantially.
-
-**Full jitter** sleeps a uniformly random time between 0 and the capped exponential value. It spreads retries evenly across the window. The trade-off is a little more variance for any one client in exchange for far less contention across all of them.
+<Compare
+  title="A thousand clients fail together"
+  sides={[
+    { title: "Plain backoff", tone: "bad", points: ["All retry at 100, 200, 400 ms", "Synchronised spikes"] },
+    { title: "Full jitter", tone: "ok", points: ["Sleep random(0, capped exp)", "Even spread, less total work", "Brooker, AWS 2015"] }
+  ]}
+/>
 
 <VariantQuestion template="retries.full-jitter" />
 
@@ -94,9 +121,14 @@ If a thousand clients fail at the same moment, as they do when a shared dependen
 
 <Step id="budget" title="Retry budgets bound the worst case">
 
-Backoff and jitter shape *when* retries arrive. A **retry budget** caps *how many*. The client tracks the ratio of retries to first attempts and stops retrying once retries exceed a fraction, commonly around 10%. The SRE book describes both a per-request limit and a per-client budget of this kind.
-
-When things are healthy, the budget is never reached and transient failures are still retried. When a dependency is truly failing, total load rises by at most 10% instead of multiplying, and the budget turns retries off precisely when they are useless.
+<Stats
+  title="Retry budget"
+  items={[
+    { label: "Healthy", value: "never reached", sub: "transients still retried", tone: "ok" },
+    { label: "Dependency failing", value: "+10% load max", sub: "instead of multiplying", tone: "warn" },
+    { label: "Rule", value: "retries / first attempts", sub: "commonly about 10%", tone: "info" }
+  ]}
+/>
 
 <VariantQuestion template="retries.budget" />
 
@@ -104,7 +136,17 @@ When things are healthy, the budget is never reached and transient failures are 
 
 <Step id="storm-story" title="Anatomy of a retry storm">
 
-A database slows down for 30 seconds during a failover. Client requests time out, and every layer retries. Load on the database jumps to several times normal. The database finishes failing over and is healthy, but now faces a traffic level it was never sized for, so it stays slow, which keeps the timeouts and retries coming. The original cause is gone, yet the outage continues. That self-sustaining state is a **metastable failure**, covered in the reliability track.
+<Timeline
+  title="A metastable retry storm"
+  events={[
+    { at: "0 s", label: "Failover slows the database", tone: "warn" },
+    { at: "5 s", label: "Timeouts, every layer retries", tone: "bad" },
+    { at: "30 s", label: "Database healthy again", tone: "ok" },
+    { at: "40 s", label: "Retry load keeps it slow", tone: "bad" },
+    { at: "Later", label: "Outage persists, cause gone", tone: "bad" }
+  ]}
+  caption="Self-sustaining overload: a metastable failure."
+/>
 
 <Choice
   id="fix-storm"
@@ -122,10 +164,15 @@ A database slows down for 30 seconds during a failover. Client requests time out
 
 <Step id="practice" title="Check your mastery, then start a storm">
 
-Score at least 80% on fresh variants: amplification, capped backoff, jitter and budgets.
+<Stats
+  title="Lab: count attempts per client request"
+  items={[
+    { label: "3 retries, no backoff", value: "storm", tone: "bad" },
+    { label: "Backoff + full jitter, fewer retries", value: "less load", tone: "ok" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox), build client, service, circuit breaker, downstream returning 503. Set three retries with no backoff, run, then add backoff with full jitter.
 
 <MasteryCheck templates={["retries.amplification", "retries.capped-backoff", "retries.full-jitter", "retries.budget"]} count={6} />
-
-Now watch a storm form in the [sandbox](/sandbox). Build client → service → circuit breaker → downstream service, and make the downstream return 503. On the service's call step, set three retries with no backoff and no jitter, then run it: count the attempts reaching the downstream per client request. Add exponential backoff with full jitter, then lower the retries, and compare the load.
 
 </Step>

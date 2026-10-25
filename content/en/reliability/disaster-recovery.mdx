@@ -43,12 +43,16 @@ estimatedMinutes: 30
 
 <Step id="objectives" title="Two numbers: how much data, how long">
 
-Every recovery plan answers two questions.
-
-- **RPO, recovery point objective**: how much recently committed data you may lose, measured as time before the incident. An RPO of 5 minutes means the restored system may be missing up to the last 5 minutes of writes.
-- **RTO, recovery time objective**: how long until the service works again, measured from the start of the incident.
-
-They are independent. A nightly backup restored in 20 minutes has a short RTO and a 24-hour RPO. A synchronous replica in another region has an RPO near zero but may still take an hour to promote if the runbook is manual.
+<Timeline
+  title="RPO looks back, RTO looks forward"
+  events={[
+    { at: "RPO window", label: "Committed writes you may lose", tone: "warn" },
+    { at: "Incident", label: "Region lost", tone: "bad" },
+    { at: "RTO window", label: "Time until service works again", tone: "info" },
+    { at: "Recovered", label: "Serving", tone: "ok" }
+  ]}
+  caption="Independent: a nightly backup restored in 20 minutes has a short RTO and a 24-hour RPO."
+/>
 
 <Choice
   id="rpo-or-rto"
@@ -66,9 +70,17 @@ They are independent. A nightly backup restored in 20 minutes has a short RTO an
 
 <Step id="rpo" title="What sets the RPO">
 
-You restore from the most recent **consistent** copy you still have. A nightly snapshot alone gives an RPO up to 24 hours. Continuous archiving of the write-ahead log, as PostgreSQL does, lets you restore the snapshot and then **replay** shipped log segments on top, so the RPO becomes the gap since the last segment shipped.
-
-Asynchronous replication to another region gives an RPO equal to the replication lag at the moment of failure, which grows exactly when the system is under stress. Only synchronous replication to a separate failure domain gives an RPO of zero, and it costs a cross-region round trip on every commit.
+<Bars
+  title="Typical RPO by mechanism"
+  log
+  items={[
+    { label: "Nightly snapshot", value: 86400, unit: "s", tone: "bad" },
+    { label: "Snapshot + shipped WAL", value: 300, unit: "s", tone: "warn" },
+    { label: "Async replica (lag)", value: 5, unit: "s", tone: "info" },
+    { label: "Synchronous replica", value: 0.1, unit: "s", tone: "ok" }
+  ]}
+  caption="Async lag grows when the system is stressed. Synchronous is zero loss but adds a round trip per commit. Illustrative."
+/>
 
 <VariantQuestion template="dr.rpo-writes" />
 
@@ -76,11 +88,15 @@ Asynchronous replication to another region gives an RPO equal to the replication
 
 <Step id="logical-loss" title="Replicas are not backups">
 
-Replication copies every change, including the bad ones. A `DROP TABLE`, a buggy migration, a ransomware encryption or an `rm -rf` on the wrong host reaches every replica within seconds.
-
-In January 2017, a GitLab engineer removed the database directory on the primary instead of a broken secondary. Of the several backup and replication mechanisms in place, none could be restored quickly; the team recovered from a staging snapshot about six hours old and lost roughly six hours of production data.
-
-A backup protects you only if it is **isolated** (another account or set of credentials, so the same mistake or attacker cannot delete it), **immutable** for its retention period, **point-in-time** (so you can restore to just before the mistake), and **restored regularly**. The SRE book's line: nobody wants backups, they want restores.
+<Compare
+  title="Replicas copy mistakes too"
+  sides={[
+    { title: "Replica", tone: "bad", points: ["DROP TABLE reaches all in seconds", "Ransomware too"] },
+    { title: "Backup that works", tone: "ok", points: ["Isolated credentials", "Immutable", "Point-in-time", "Restored regularly"] },
+    { title: "GitLab, 2017", tone: "warn", points: ["Wrong directory deleted", "No quick restore", "About 6 h of data lost"] }
+  ]}
+  caption="Nobody wants backups, they want restores."
+/>
 
 <Choice
   id="logical-protection"
@@ -98,9 +114,17 @@ A backup protects you only if it is **isolated** (another account or set of cred
 
 <Step id="restore-time" title="Restores take time you can calculate">
 
-The data copy is often the longest part of a restore, and it is arithmetic: size ÷ sustained throughput. Note the units: storage is in bytes, links in bits.
-
-But RTO covers the whole sequence: **detect** the incident, **decide** to fail over (often the slowest human step), **provision** capacity, **copy** data, **replay** logs, **verify** integrity, and **shift traffic**, including DNS TTLs and client connection pools.
+<Timeline
+  title="RTO is the whole sequence"
+  events={[
+    { at: "Detect", label: "Alert fires", tone: "info" },
+    { at: "Decide", label: "Often the slowest human step", tone: "warn" },
+    { at: "Provision", label: "Capacity", tone: "info" },
+    { at: "Copy + replay", label: "Size / throughput (bytes vs bits)", tone: "bad" },
+    { at: "Verify", label: "Integrity checks", tone: "info" },
+    { at: "Shift", label: "DNS TTLs, connection pools", tone: "warn" }
+  ]}
+/>
 
 <VariantQuestion template="dr.restore-hours" />
 
@@ -108,7 +132,18 @@ But RTO covers the whole sequence: **detect** the incident, **decide** to fail o
 
 <Step id="drill" title="Rehearse the recovery">
 
-A restore that has never been run is a hypothesis. The order of a point-in-time recovery after a bad deploy matters: if you restore before stopping the damage, you restore into the same bug.
+<Timeline
+  title="Point-in-time recovery after a bad deploy"
+  events={[
+    { at: "1", label: "Stop the damage", tone: "bad" },
+    { at: "2", label: "Pick last good time", tone: "info" },
+    { at: "3", label: "Restore snapshot, separate instance", tone: "info" },
+    { at: "4", label: "Replay logs to just before", tone: "info" },
+    { at: "5", label: "Verify", tone: "warn" },
+    { at: "6", label: "Reconcile, cut over", tone: "ok" }
+  ]}
+  caption="A restore never run is a hypothesis."
+/>
 
 <Ordering
   id="pitr-runbook"
@@ -129,12 +164,15 @@ A restore that has never been run is a hypothesis. The order of a point-in-time 
 
 <Step id="strategy" title="Pick a DR strategy by RPO, RTO and cost">
 
-AWS's DR whitepaper describes four common strategies, in order of rising cost and falling RPO and RTO:
-
-- **Backup and restore**: copy backups to another region and rebuild everything on demand. RPO in hours, RTO in hours. Cheapest.
-- **Pilot light**: data is replicated continuously; the core is provisioned but switched off. RPO in minutes, RTO in tens of minutes.
-- **Warm standby**: a scaled-down but running copy takes traffic after scaling up. RPO in seconds to minutes, RTO in minutes.
-- **Multi-site active-active**: every region serves live traffic. RPO near zero (or zero with synchronous writes), RTO near zero, at roughly double the cost.
+<Compare
+  title="AWS DR strategies, cheapest to dearest"
+  sides={[
+    { title: "Backup and restore", tone: "ok", points: ["RPO hours, RTO hours", "Cheapest"] },
+    { title: "Pilot light", tone: "info", points: ["RPO minutes", "RTO tens of minutes"] },
+    { title: "Warm standby", tone: "warn", points: ["RPO seconds-minutes", "RTO minutes"] },
+    { title: "Active-active", tone: "bad", points: ["RPO and RTO near zero", "About double the cost"] }
+  ]}
+/>
 
 <Choice
   id="dr-choice"
@@ -152,10 +190,15 @@ AWS's DR whitepaper describes four common strategies, in order of rising cost an
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh data-loss and restore-time variants. Score 80% or more to master the lesson.
+<Stats
+  title="What the variants test"
+  items={[
+    { label: "Data loss", value: "RPO", sub: "writes since last copy", tone: "warn" },
+    { label: "Restore", value: "size / throughput", sub: "bytes vs bits", tone: "info" }
+  ]}
+/>
+Score 80% or more. Next: [multi-region](/learn/reliability/multi-region).
 
 <MasteryCheck templates={["dr.rpo-writes", "dr.restore-hours"]} count={4} />
-
-Continue to [multi-region architectures](/learn/reliability/multi-region), where the RPO and RTO choices become topology.
 
 </Step>

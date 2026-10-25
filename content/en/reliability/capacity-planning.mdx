@@ -41,9 +41,15 @@ estimatedMinutes: 30
 
 <Step id="demand" title="Plan for the peak you will have">
 
-Capacity planning answers one question ahead of time: **when does demand exceed what we can serve, and what do we buy or build before then?** Plan against **peak**, not average: the daily peak, the weekly peak, and the event peak (a launch, a sale, a holiday). Then add the capacity that failures and maintenance take away.
-
-Demand has two parts: **organic growth**, which you forecast from history, and **inorganic** steps such as launches, migrations and new customers, which you get from the product calendar.
+<Stats
+  title="Size against the peak, not the average"
+  items={[
+    { label: "Average", value: "40k/s", tone: "muted" },
+    { label: "Daily peak", value: "120k/s", tone: "warn" },
+    { label: "Launch (+20% at peak)", value: "144k/s", tone: "bad" }
+  ]}
+  caption="Organic growth from history, plus inorganic steps from the product calendar. Then add what failures and maintenance take away."
+/>
 
 <Choice
   id="plan-basis"
@@ -61,7 +67,16 @@ Demand has two parts: **organic growth**, which you forecast from history, and *
 
 <Step id="growth" title="Compounding growth arrives sooner">
 
-Growth compounds. A service growing 8% per month is about 2.5× bigger after a year. Linear extrapolation underestimates how soon you hit the wall, and provisioning has lead time: hardware orders, region build-outs and re-sharding take months. Work backwards from the saturation date.
+<Bars
+  title="8% monthly growth, relative load"
+  items={[
+    { label: "Today", value: 1, unit: "x", tone: "ok" },
+    { label: "Month 6", value: 1.6, unit: "x", tone: "info" },
+    { label: "Month 12", value: 2.5, unit: "x", tone: "warn" },
+    { label: "Month 24", value: 6.3, unit: "x", tone: "bad" }
+  ]}
+  caption="Work backwards from the saturation date. Hardware, regions and re-sharding take months."
+/>
 
 <VariantQuestion template="capacity.months" />
 
@@ -69,11 +84,15 @@ Growth compounds. A service growing 8% per month is about 2.5× bigger after a y
 
 <Step id="headroom" title="Why you never plan for 100%">
 
-Two forces eat into capacity.
-
-**Queueing.** As utilisation ρ approaches 1, waiting time explodes. For a simple single-server queue, mean response time is the service time ÷ (1 − ρ): twice the service time at 50%, five times at 80%, ten times at 90%. Your latency SLO breaks long before CPU reads 100%.
-
-**Loss of capacity.** A zone or region fails, a rolling deploy has a batch out, a node is draining. With N + 1 or N + 2 planning, the surviving capacity must still meet peak at an acceptable utilisation.
+<Bars
+  title="Response time vs utilisation (service time / (1 - rho))"
+  items={[
+    { label: "50% busy", value: 2, unit: "x service time", tone: "ok" },
+    { label: "80% busy", value: 5, unit: "x service time", tone: "warn" },
+    { label: "90% busy", value: 10, unit: "x service time", tone: "bad" }
+  ]}
+  caption="Plus lost capacity: lose a zone and the survivors must still meet peak below the target."
+/>
 
 <Choice
   id="target-util"
@@ -91,7 +110,18 @@ Two forces eat into capacity.
 
 <Step id="breaking-point" title="The first thing to break">
 
-As traffic grows, components saturate one at a time. The one with the highest utilisation per unit of traffic goes first, and its failure often changes the load on everything else: a saturated database slows responses, timeouts trigger retries, and retries raise load on the service tier too. Find the first rung before you find out in production.
+<Flow
+  title="The first rung breaks, then load shifts"
+  height={230}
+  nodes={[
+    { id: "cl", label: "Clients", kind: "client", x: 0, y: 50 },
+    { id: "sv", label: "Service tier", kind: "service", x: 50, y: 50, note: "retries add load" },
+    { id: "db", label: "Database", kind: "database", x: 100, y: 50, note: "saturates first" }
+  ]}
+  edges={[ { from: "cl", to: "sv" }, { from: "sv", to: "db" }, { from: "db", to: "sv", label: "slow, timeouts", dashed: true } ]}
+  hot={["db"]}
+  caption="The highest utilisation per unit of traffic fails first."
+/>
 
 <VariantQuestion template="capacity.first-saturation" />
 
@@ -99,14 +129,14 @@ As traffic grows, components saturate one at a time. The one with the highest ut
 
 <Step id="sweep" title="Sweep the load in Scale mode">
 
-Arithmetic gives the first rung. A **breaking-point sweep** gives the whole ladder. In the sandbox's **Scale** tab, a sweep runs the same design at up to twelve load levels, log-spaced from 1× to 1000× the selected load, in a fluid model fast enough for planet-scale traffic. It then shows the **failure ladder**: the predicted order in which components saturate, overflow queues or lose timely success, with the load multiple of each rung.
-
-It has two kinds, and they answer different questions:
-
-- **Independent levels**: each level starts fresh after a warm-up, so caches, autoscaling and queues are reset. This answers "what can a warmed-up system sustain at this load?"
-- **Continuous ramp**: state carries over between levels. This exposes what history causes: retry storms, autoscaling lag and cache churn.
-
-Each rung offers a remedy to try. It is only a suggestion until a what-if run with the remedy actually improves the ladder; the panel marks it **verified** only then.
+<Compare
+  title="Breaking-point sweep (Scale tab)"
+  sides={[
+    { title: "Independent levels", tone: "info", points: ["Fresh after warm-up", "What a warmed system sustains"] },
+    { title: "Continuous ramp", tone: "warn", points: ["State carries over", "Shows retry storms, autoscale lag, cache churn"] }
+  ]}
+  caption="Up to 12 levels, 1x to 1000x. A remedy is marked verified only after a what-if run improves the ladder."
+/>
 
 <Choice
   id="sweep-kind"
@@ -124,10 +154,15 @@ Each rung offers a remedy to try. It is only a suggestion until a what-if run wi
 
 <Step id="practice" title="Check your mastery, then find the breaking point">
 
-The mastery check draws fresh growth and saturation variants. Score 80% or more to master the lesson.
+<Stats
+  title="Lab"
+  items={[
+    { label: "Sweep", value: "1B requests/day", sub: "independent levels", tone: "info" },
+    { label: "Then", value: "continuous ramp", sub: "compare ladders", tone: "warn" }
+  ]}
+/>
+Score 80% or more. Open the [no-cache design](/sandbox?template=no-cache), use the **Scale** tab, note the first rung, try its remedy, rerun as a ramp.
 
 <MasteryCheck templates={["capacity.months", "capacity.first-saturation"]} count={4} />
-
-Now find a breaking point for real. Open the [no-cache design in the sandbox](/sandbox?template=no-cache), go to the **Scale** tab, press **1B requests/day**, and run a breaking-point sweep with independent levels. Note the first rung, try its suggested remedy, then rerun the sweep as a continuous ramp and compare the ladders.
 
 </Step>

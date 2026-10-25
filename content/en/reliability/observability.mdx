@@ -46,11 +46,14 @@ estimatedMinutes: 25
 
 <Step id="three-signals" title="Three signals, three different questions">
 
-At 14:05 the checkout p99 doubles. You need to know three things: *is it real and how bad*, *which requests*, and *where did the time go*. Each question has a signal built for it.
-
-- **Metrics** are numbers aggregated over time: counters, gauges and histograms per label set. They are cheap to store and fast to query, so they drive dashboards and alerts. They cannot tell you about one specific request.
-- **Logs** are discrete events with arbitrary detail. A structured log line (JSON with a trace ID, user tier, error code) answers "what happened to *this* request". They cost per event, so high-traffic paths sample or drop them.
-- **Traces** record the causal path of one request across services as a tree of **spans**, each with a start, a duration and a parent. Google's Dapper paper showed that a trace of a sampled fraction of requests is enough to find where latency goes in a deep call graph.
+<Compare
+  title="Checkout p99 doubled at 14:05"
+  sides={[
+    { title: "Metrics", tone: "info", points: ["Is it real, how bad?", "Cheap aggregates", "Drive alerts"] },
+    { title: "Logs", tone: "info", points: ["What happened to this request?", "Structured, with trace ID", "Cost per event"] },
+    { title: "Traces", tone: "info", points: ["Where did the time go?", "Tree of spans", "Sampled (Dapper)"] }
+  ]}
+/>
 
 <Choice
   id="pick-signal"
@@ -68,11 +71,16 @@ At 14:05 the checkout p99 doubles. You need to know three things: *is it real an
 
 <Step id="golden-signals" title="Page on symptoms, investigate causes">
 
-The SRE book's **four golden signals** for a user-facing system are **latency, traffic, errors and saturation**. Two conventions turn them into practice: **RED** (rate, errors, duration) for each request-driven service, and Brendan Gregg's **USE** (utilisation, saturation, errors) for each resource such as a disk, a CPU or a connection pool.
-
-Page a human on **symptoms**, things users feel: error ratio, latency over a threshold. Use **causes** (CPU, disk, queue depth) on dashboards and tickets. A cause-based page fires when nothing is wrong for users, and stays silent for failures nobody predicted.
-
-Two traps: measure the latency of **errors separately**, because a fast 500 drags the average down and hides an outage; and use **histograms**, not averages, because you cannot average percentiles across hosts.
+<Stats
+  title="Golden signals, RED and USE"
+  items={[
+    { label: "Golden", value: "L T E S", sub: "latency, traffic, errors, saturation", tone: "info" },
+    { label: "RED (services)", value: "rate, errors, duration", tone: "info" },
+    { label: "USE (resources)", value: "utilisation, saturation, errors", tone: "info" },
+    { label: "Page on", value: "symptoms", sub: "causes go on dashboards", tone: "bad" }
+  ]}
+  caption="Time errors separately (a fast 500 hides an outage). Use histograms: percentiles do not average."
+/>
 
 <Choice
   id="what-pages"
@@ -90,9 +98,14 @@ Two traps: measure the latency of **errors separately**, because a fast 500 drag
 
 <Step id="cardinality" title="Labels multiply">
 
-A metric's cost is its number of **time series**: one per distinct combination of label values. Labels multiply. A histogram with 20 endpoints, 5 status classes and 100 pods is already 10,000 combinations, and each one stores a series per bucket.
-
-That is why IDs never go in metric labels. A `user_id` label on a service with a million users creates a million combinations per metric and can take down the metrics backend. Per-request detail belongs in logs and traces; link them to metrics with **exemplars** (a trace ID attached to a histogram bucket sample).
+<Stats
+  title="Series = product of label values"
+  items={[
+    { label: "20 endpoints x 5 status x 100 pods", value: "10,000", sub: "per bucket", tone: "warn" },
+    { label: "Add user_id, 1M users", value: "10 billion", sub: "backend falls over", tone: "bad" }
+  ]}
+  caption="Per-request detail goes in logs and traces. Link with exemplars."
+/>
 
 <VariantQuestion template="obs.cardinality" />
 
@@ -100,7 +113,13 @@ That is why IDs never go in metric labels. A `user_id` label on a service with a
 
 <Step id="cardinality-fix" title="Which labels are safe?">
 
-A safe label has a small, **bounded** set of values that does not grow with traffic or users. Normalise unbounded values before they become labels: the route template `/users/:id`, not the raw path; the status class `5xx`, not the error message.
+<Compare
+  title="Bounded labels only"
+  sides={[
+    { title: "Safe", tone: "ok", points: ["Route template /users/:id", "Status class 5xx", "Region, method"] },
+    { title: "Unsafe", tone: "bad", points: ["Raw path", "user_id, request ID", "Error message text"] }
+  ]}
+/>
 
 <Choice
   id="safe-labels"
@@ -120,9 +139,17 @@ A safe label has a small, **bounded** set of values that does not grow with traf
 
 <Step id="context" title="Follow the trace context">
 
-A trace survives service hops because every call carries **trace context**. The W3C `traceparent` header holds a version, a 128-bit trace ID shared by the whole request, the ID of the calling span, and flags whose lowest bit says whether this trace is **sampled**. For example: `00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`.
-
-Each service starts a child span whose parent is the incoming span ID, and passes its own span ID downstream. If one hop drops the header, for example a message queue or a proxy that strips unknown headers, the trace breaks into disconnected fragments.
+<Flow
+  title="traceparent travels with every call"
+  height={210}
+  nodes={[
+    { id: "gw", label: "Gateway", kind: "apiGateway", x: 0, y: 50, note: "root span, sampling" },
+    { id: "or", label: "Orders", kind: "service", x: 50, y: 50, note: "child span" },
+    { id: "db", label: "Database", kind: "database", x: 100, y: 50, note: "child span" }
+  ]}
+  edges={[ { from: "gw", to: "or", label: "traceparent" }, { from: "or", to: "db", label: "traceparent" } ]}
+  caption="00-trace ID-parent span ID-flags. A hop that drops the header breaks the trace into fragments."
+/>
 
 <Ordering
   id="trace-propagation"
@@ -142,12 +169,14 @@ Each service starts a child span whose parent is the incoming span ID, and passe
 
 <Step id="sampling" title="Sample, and budget what you keep">
 
-Traces are the most expensive signal per request: one request can produce dozens of spans. Two families of sampling control the cost.
-
-- **Head-based** sampling decides at the root, for example keeping 1% of traces, and propagates the decision. It is cheap and consistent, but it keeps 1% of your rare errors too.
-- **Tail-based** sampling buffers every span until the trace completes, then keeps the interesting ones: errors, slow requests, rare routes. It catches what matters but needs a collector tier that holds every span for the length of the slowest trace.
-
-Estimate before you turn tracing on. The volume is requests × sampling fraction × spans per trace × bytes per span.
+<Compare
+  title="Sampling families"
+  sides={[
+    { title: "Head-based", tone: "ok", points: ["Decide at the root", "Cheap, consistent", "Keeps 1% of errors too"] },
+    { title: "Tail-based", tone: "warn", points: ["Buffer, then keep errors and slow", "Needs a collector tier"] }
+  ]}
+  caption="Volume = requests x fraction x spans per trace x bytes per span."
+/>
 
 <VariantQuestion template="obs.trace-volume" />
 
@@ -155,10 +184,12 @@ Estimate before you turn tracing on. The volume is requests × sampling fraction
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh variants on cardinality and trace volume. Score 80% or more to master the lesson; a wrong answer links back to the step that teaches it.
+<Stats
+  title="Lab: read a trace"
+  items={[ { label: "Question", value: "which hop holds the time?", tone: "info" } ]}
+/>
+Score 80% or more. Open the [cache-aside design](/sandbox?template=cache-aside) and send one request from the **Trace** tab. Next: [SLIs, SLOs and error budgets](/learn/reliability/slo-error-budgets).
 
 <MasteryCheck templates={["obs.cardinality", "obs.trace-volume"]} count={4} />
-
-Then open the [cache-aside design in the sandbox](/sandbox?template=cache-aside), and send one request from the **Trace** tab. Read the span tree the way you would read a production trace: which hop holds the time? Next, turn these signals into promises in [SLIs, SLOs and error budgets](/learn/reliability/slo-error-budgets).
 
 </Step>

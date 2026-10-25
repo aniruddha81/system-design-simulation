@@ -42,9 +42,14 @@ estimatedMinutes: 35
 
 <Step id="why-consensus" title="Why replicas need consensus">
 
-A replicated state machine runs the same deterministic commands, in the same order, on every replica, so every replica reaches the same state. The hard part is the order: replicas must agree on which command occupies log slot 42, even when servers crash and messages are delayed or lost.
-
-That agreement is **consensus**. Fischer, Lynch and Paterson proved in 1985 that no deterministic algorithm can guarantee it will always terminate in a fully asynchronous system with even one crash. Practical algorithms like Paxos and Raft therefore keep **safety** unconditionally (never two different commands in one committed slot) and get **liveness** only when the network is calm enough for timeouts to work.
+<Compare
+  title="Replicated state machine"
+  sides={[
+    { title: "Same commands, same order", tone: "ok", points: ["Every replica reaches the same state", "The hard part is the order of slot 42"] },
+    { title: "FLP (1985)", tone: "warn", points: ["No always-terminating algorithm", "Asynchronous, even one crash"] },
+    { title: "Paxos and Raft", tone: "info", points: ["Safety always", "Liveness when timeouts work"] }
+  ]}
+/>
 
 <Choice
   id="why-not-timestamps"
@@ -62,9 +67,16 @@ That agreement is **consensus**. Fischer, Lynch and Paterson proved in 1985 that
 
 <Step id="majority" title="Majorities, and why clusters are odd">
 
-Raft makes every decision with a **majority**: floor(N ÷ 2) + 1 servers. Any two majorities share at least one server, and that shared server is what carries a committed entry or a vote from one decision to the next.
-
-A cluster of N tolerates floor((N − 1) ÷ 2) simultaneous failures. Three servers tolerate one, five tolerate two. A fourth server adds cost and one more machine that can fail, without tolerating any more failures than three; that is why production clusters use 3 or 5, and rarely 7 since every write must reach a majority.
+<Bars
+  title="Failures tolerated by cluster size"
+  items={[
+    { label: "3 servers", value: 1, unit: "failure", tone: "ok" },
+    { label: "4 servers", value: 1, unit: "failure", tone: "warn" },
+    { label: "5 servers", value: 2, unit: "failures", tone: "ok" },
+    { label: "7 servers", value: 3, unit: "failures", tone: "info" }
+  ]}
+  caption="Majority = floor(N/2) + 1; tolerates floor((N-1)/2). Any two majorities share a server. A 4th adds cost, not tolerance."
+/>
 
 <VariantQuestion template="raft.fault-tolerance" />
 
@@ -72,9 +84,16 @@ A cluster of N tolerates floor((N − 1) ÷ 2) simultaneous failures. Three serv
 
 <Step id="terms" title="Terms are Raft's logical clock">
 
-Raft divides time into numbered **terms**. Each term begins with an election and has at most one leader. Every message carries the sender's term. If a server sees a higher term than its own, it adopts that term and becomes a follower at once; a message from a lower term is rejected.
-
-A server votes for at most one candidate per term and records that vote durably before replying, so a reboot cannot make it vote twice. Because a leader needs a majority of votes and any two majorities intersect, two leaders in one term would need one server to vote twice.
+<Timeline
+  title="Terms are Raft's logical clock"
+  events={[
+    { at: "Term 4", label: "Leader A", tone: "ok" },
+    { at: "Term 5", label: "Split vote, no leader", tone: "warn" },
+    { at: "Term 6", label: "Leader B elected", tone: "ok" },
+    { at: "Rule", label: "Higher term seen: adopt it, step down", tone: "info" }
+  ]}
+  caption="One vote per term, saved to disk before replying. Lower-term messages are rejected."
+/>
 
 <Choice
   id="higher-term"
@@ -92,11 +111,18 @@ A server votes for at most one candidate per term and records that vote durably 
 
 <Step id="election" title="Elections and randomised timeouts">
 
-Followers expect regular heartbeats (empty AppendEntries). If a follower hears nothing for its **election timeout**, it increments its term, votes for itself and asks the others for votes. If several followers time out at once, they split the vote and nobody wins; everyone waits and tries again in a later term.
-
-Raft makes split votes rare by randomising each timeout, for example uniformly between 150 and 300 ms as in the paper. The first follower to time out usually wins before anyone else wakes. Raft also adds the **election restriction**: a server only votes for a candidate whose log is at least as up to date as its own, comparing the last entry's term and then its index. So a winner always holds every committed entry.
-
-Select **normal election** in Script and step through the vote requests and replies. Watch the term, each vote and the transition from candidate to leader; then compare **split vote**.
+<Sequence
+  title="Election after a missed heartbeat"
+  actors={["Follower A", "Follower B", "Follower C"]}
+  messages={[
+    { from: "Follower A", to: "Follower B", label: "RequestVote(term 5)" },
+    { from: "Follower A", to: "Follower C", label: "RequestVote(term 5)" },
+    { from: "Follower B", to: "Follower A", label: "vote granted", tone: "ok" },
+    { from: "Follower A", to: "Follower C", label: "heartbeat: I lead term 5", tone: "ok" }
+  ]}
+  caption="A times out after 150-300 ms and bumps its term. Random timeouts make split votes rare. Voters only back a candidate whose log is at least as up to date."
+/>
+Select **normal election**, then **split vote** in Script.
 
 <RaftPlayer />
 
@@ -106,7 +132,22 @@ Select **normal election** in Script and step through the vote requests and repl
 
 <Step id="replication" title="Replicating the log">
 
-The leader appends each client command to its log and sends it in AppendEntries. Each request carries the index and term of the entry just before the new ones; a follower whose log does not match at that point rejects it, and the leader backs up and resends. This check enforces the **log matching property**: if two logs have an entry with the same index and term, they are identical up to that entry.
+<Flow
+  title="Log replication"
+  height={220}
+  nodes={[
+    { id: "cl", label: "Client", kind: "client", x: 0, y: 50 },
+    { id: "ld", label: "Leader", kind: "service", x: 40, y: 50, note: "append, commit" },
+    { id: "f1", label: "Follower 1", kind: "database", x: 100, y: 15 },
+    { id: "f2", label: "Follower 2", kind: "database", x: 100, y: 85 }
+  ]}
+  edges={[
+    { from: "cl", to: "ld", label: "command" },
+    { from: "ld", to: "f1", label: "AppendEntries" },
+    { from: "ld", to: "f2", label: "AppendEntries" }
+  ]}
+  caption="Each request names the previous entry's index and term. A mismatch is rejected and the leader backs up: log matching."
+/>
 
 <Ordering
   id="write-path"
@@ -127,17 +168,20 @@ The leader appends each client command to its log and sends it in AppendEntries.
 
 <Step id="commit" title="When is an entry committed?">
 
-The leader tracks a **matchIndex** per follower: the highest index known to be on that follower. The highest index stored on a majority is committable, with one subtle rule: a leader only commits entries from **its own current term** by counting replicas. Earlier-term entries become committed indirectly, when a current-term entry after them commits.
-
-Without that rule, the Raft paper's Figure 8 shows a disaster: an old-term entry reaches a majority, the leader counts it as committed, then a different server with a newer conflicting entry wins an election and overwrites it.
-
-Select **normal election** in Script. Step through the client proposal and compare the log length with the commit index: appending locally is not enough; a majority must replicate the current-term entry.
+<Stats
+  title="Commit rule"
+  items={[
+    { label: "Committed when", value: "majority", sub: "of followers store it", tone: "ok" },
+    { label: "Count replicas for", value: "current term", sub: "only own-term entries", tone: "warn" },
+    { label: "Older entries", value: "indirect", sub: "commit behind a new one", tone: "info" }
+  ]}
+  caption="Counting old-term entries is the Figure 8 disaster: a committed entry gets overwritten."
+/>
+Select **normal election** in Script and compare log length with commit index.
 
 <RaftPlayer />
 
 <VariantQuestion template="raft.commit-index" />
-
-Now predict whether the generated proposal advances the leader's commit index. Replay the supplied schedule and apply the majority rule.
 
 <ModelQuestion id="commit-index-model" objective="commit-rule" model="raft" />
 
@@ -145,11 +189,26 @@ Now predict whether the generated proposal advances the leader's commit index. R
 
 <Step id="partition" title="A leader stranded in a minority">
 
-Partition a five-server cluster into two and three. If the old leader is on the two-server side, it keeps believing it is leader until it hears a higher term. It still accepts client commands and appends them to its log, but it can never reach three servers, so those entries never commit. Meanwhile the three-server side elects a new leader in a higher term and carries on.
-
-When the partition heals, the old leader sees the higher term, steps down, and its uncommitted entries are overwritten. Clients that wrote to it got timeouts, never success. Reads are the trap: if the old leader answers reads from its own state, it serves stale data. Raft prevents this by confirming leadership with a majority round of heartbeats before serving a read (ReadIndex) or by relying on a leader lease, which assumes bounded clock drift.
-
-Select **minority partition** in Script and watch the isolated leader append without advancing its commit index. Then select **partition heal with log repair** to see the uncommitted suffix replaced.
+<Flow
+  title="Old leader stranded in the 2-server side"
+  height={250}
+  nodes={[
+    { id: "old", label: "Old leader", kind: "service", x: 0, y: 25, note: "term 4" },
+    { id: "m1", label: "Server 2", kind: "database", x: 0, y: 80 },
+    { id: "new", label: "New leader", kind: "service", x: 100, y: 25, note: "term 5" },
+    { id: "m2", label: "Server 4", kind: "database", x: 100, y: 65 },
+    { id: "m3", label: "Server 5", kind: "database", x: 100, y: 100 }
+  ]}
+  edges={[
+    { from: "old", to: "new", dashed: true },
+    { from: "new", to: "m2" },
+    { from: "new", to: "m3" },
+    { from: "old", to: "m1" }
+  ]}
+  failed={["old"]}
+  caption="The old leader appends but never reaches 3, so nothing commits. It steps down on healing. Reads need ReadIndex or a lease, or they go stale."
+/>
+Select **minority partition**, then **partition heal with log repair** in Script.
 
 <RaftPlayer />
 
@@ -169,10 +228,15 @@ Select **minority partition** in Script and watch the isolated leader append wit
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. For the commit index, include the leader's own last index among the five, sort, and take the third highest.
+<Stats
+  title="Commit index recipe"
+  items={[
+    { label: "Take", value: "5 match indexes", sub: "include the leader's own", tone: "info" },
+    { label: "Sort, pick", value: "3rd highest", tone: "ok" }
+  ]}
+/>
+Score 80% or more. In the operational [sandbox](/sandbox), kill a database leader and compare the write outage with this lesson's timeouts.
 
 <MasteryCheck templates={["raft.fault-tolerance", "raft.election-time", "raft.commit-index"]} count={5} />
-
-In the operational [sandbox](/sandbox), a database's automatic failover models the outcome of an election (detection time plus election time) rather than the protocol itself. Configure heartbeats and missed-heartbeat detection on a replicated database, kill the leader, and compare the write outage with the timeout ranges from this lesson.
 
 </Step>

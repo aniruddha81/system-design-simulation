@@ -47,9 +47,17 @@ estimatedMinutes: 30
 
 <Step id="contract" title="A consistency model is a contract">
 
-A consistency model is a rule about which **histories** a store may produce: which values each read is allowed to return, given the writes that happened around it. Stronger models allow fewer histories, which makes programs easier to reason about, and cost more coordination.
-
-The strongest common single-object model is **linearizability** (Herlihy and Wing, 1990). Every operation appears to take effect atomically at some point between its invocation and its response, and those points respect real time. Once a write has returned, every read that *starts* later must see it or something newer.
+<Sequence
+  title="A history that breaks linearizability"
+  actors={["Client A", "Store", "Client B"]}
+  messages={[
+    { from: "Client A", to: "Store", label: "write x=1 (t=0)" },
+    { from: "Store", to: "Client A", label: "ok (t=10 ms)", tone: "ok" },
+    { from: "Client B", to: "Store", label: "read x (t=12 ms)" },
+    { from: "Store", to: "Client B", label: "x = 0 (stale)", tone: "bad" }
+  ]}
+  caption="Linearizable: once a write returns, every later read sees it or newer."
+/>
 
 <Choice
   id="real-time"
@@ -67,14 +75,15 @@ The strongest common single-object model is **linearizability** (Herlihy and Win
 
 <Step id="ladder" title="The ladder of models">
 
-From strongest to weakest, for a single object:
-
-- **Linearizable**: one global order that matches real time.
-- **Sequential** (Lamport, 1979): one global order that every client agrees on and that respects each client's own program order, but it may disagree with real time across clients.
-- **Causal**: everyone agrees on the order of causally related operations, meaning a write that depends on something its writer had read; concurrent writes may be seen in different orders by different readers.
-- **Eventual**: if writes stop, replicas eventually converge. Nothing is said about what you see in the meantime.
-
-The session guarantees of the next steps sit beside causal: causal consistency implies all four of them.
+<Compare
+  title="Strongest to weakest, one object"
+  sides={[
+    { title: "Linearizable", tone: "ok", points: ["One order, matches real time"] },
+    { title: "Sequential", tone: "info", points: ["One agreed order", "Keeps each client's order", "Ignores real time"] },
+    { title: "Causal", tone: "warn", points: ["Cause before effect", "Concurrent writes may differ"] },
+    { title: "Eventual", tone: "bad", points: ["Converge if writes stop", "Nothing in between"] }
+  ]}
+/>
 
 <Ordering
   id="model-strength"
@@ -93,7 +102,19 @@ The session guarantees of the next steps sit beside causal: causal consistency i
 
 <Step id="sequential" title="Sequential is not linearizable">
 
-The difference between the top two rungs is real time. Under sequential consistency, a single client sees its own operations in order, and all clients agree on one interleaving, but that interleaving can place a completed write after a later read.
+<Sequence
+  title="Sequential but not linearizable"
+  actors={["Client A", "Store", "Client B"]}
+  messages={[
+    { from: "Client A", to: "Store", label: "write x=1" },
+    { from: "Store", to: "Client A", label: "ok", tone: "ok" },
+    { from: "Client B", to: "Store", label: "read x" },
+    { from: "Store", to: "Client B", label: "0", tone: "warn" },
+    { from: "Client B", to: "Store", label: "read x" },
+    { from: "Store", to: "Client B", label: "1", tone: "ok" }
+  ]}
+  caption="Agreed order exists, but contradicts real time."
+/>
 
 <Choice
   id="seq-vs-lin"
@@ -111,14 +132,16 @@ The difference between the top two rungs is real time. Under sequential consiste
 
 <Step id="session" title="Session guarantees, and how to build one">
 
-Terry et al. (1994) named four guarantees a single client session can get from a weakly consistent store:
-
-- **Read-your-writes**: a session sees its own earlier writes.
-- **Monotonic reads**: once a session has seen a version, it never sees an older one.
-- **Monotonic writes**: a session's writes apply in the order it issued them.
-- **Writes-follow-reads**: a write is ordered after the writes its session had already read.
-
-These guarantees are cheap because they only order one client's view. The standard implementation is a token: after each write, the session remembers the log position or timestamp it committed at, and a replica serves that session only once it has applied at least that far. A follower that is behind waits, or the request is routed elsewhere.
+<Compare
+  title="Terry's four session guarantees"
+  sides={[
+    { title: "Read-your-writes", tone: "info", points: ["See own earlier writes"] },
+    { title: "Monotonic reads", tone: "info", points: ["Never see older than before"] },
+    { title: "Monotonic writes", tone: "info", points: ["Your writes apply in order"] },
+    { title: "Writes-follow-reads", tone: "info", points: ["Write after what you read"] }
+  ]}
+  caption="Token: a replica serves you once it has applied your last write."
+/>
 
 <VariantQuestion template="consistency.session-wait" />
 
@@ -126,7 +149,19 @@ These guarantees are cheap because they only order one client's view. The standa
 
 <Step id="violations" title="Spot the violation">
 
-The most common real-world bug here is a load balancer that sends each read of one session to a different replica, with replicas at different lag. Nothing is "broken"; each replica is merely behind by a different amount. The user sees a comment appear, refreshes, and it is gone.
+<Sequence
+  title="Load balancer flip-flop"
+  actors={["User", "Replica 1 (v7)", "Replica 2 (v5)"]}
+  messages={[
+    { from: "User", to: "Replica 1 (v7)", label: "reload 1" },
+    { from: "Replica 1 (v7)", to: "User", label: "version 7", tone: "ok" },
+    { from: "User", to: "Replica 2 (v5)", label: "reload 2" },
+    { from: "Replica 2 (v5)", to: "User", label: "version 5", tone: "bad" },
+    { from: "User", to: "Replica 1 (v7)", label: "reload 3" },
+    { from: "Replica 1 (v7)", to: "User", label: "version 7", tone: "ok" }
+  ]}
+  caption="Each replica is just behind by a different amount."
+/>
 
 <Choice
   id="flip-flop"
@@ -144,9 +179,18 @@ The most common real-world bug here is a load balancer that sends each read of o
 
 <Step id="causal" title="Causal consistency">
 
-Causal consistency keeps cause before effect for every reader. The classic failure without it: Alice posts "I lost my job", then, after reading the replies, posts "Never mind, it was a joke, I got promoted." Bob's replica receives the second post first and he congratulates her on losing her job.
-
-Causal consistency is attractive because it is close to the strongest model a store can provide while staying available on every side of a partition. Linearizability requires a side to stop answering; causal ordering only requires each replica to delay showing an update until it has shown the updates it depends on.
+<Sequence
+  title="Effect shown before cause"
+  actors={["Alice", "Replica 1", "Replica 2", "Bob"]}
+  messages={[
+    { from: "Alice", to: "Replica 1", label: "I lost my job" },
+    { from: "Alice", to: "Replica 1", label: "Just kidding, promoted" },
+    { from: "Replica 1", to: "Replica 2", label: "post 1", lost: true },
+    { from: "Replica 1", to: "Replica 2", label: "post 2 (arrives first)", tone: "warn" },
+    { from: "Replica 2", to: "Bob", label: "shows post 2 only", tone: "bad" }
+  ]}
+  caption="Causal: delay an update until its dependencies show. Works on both sides of a partition."
+/>
 
 <Choice
   id="reply-before-post"
@@ -164,9 +208,16 @@ Causal consistency is attractive because it is close to the strongest model a st
 
 <Step id="eventual" title="How stale is eventual?">
 
-Eventual consistency gives no bound at all, so you have to measure or model it. In a leaderless store the dial is quorum size: with N replicas, a write acknowledged by W and a read of R, overlap is guaranteed only when R + W > N. Below that, a read can land entirely on replicas the write has not reached yet. Bailis et al. formalised this as "probabilistically bounded staleness"; the simple case is a counting problem.
-
-Select **read repair** in Script and watch an older replica catch up when the read repairs it. Then compare **quorum overlap** with **sloppy quorum and hinted handoff** (keep Sloppy quorum with spare replicas checked): a spare can acknowledge a write that a home-only read misses until handoff.
+<Stats
+  title="Quorum dial, N = 3 replicas"
+  items={[
+    { label: "R + W > N", value: "overlap", sub: "read hits a fresh replica", tone: "ok" },
+    { label: "R + W <= N", value: "can miss", sub: "read lands on unwritten replicas", tone: "bad" },
+    { label: "Read repair", value: "heals", sub: "stale replica catches up", tone: "info" }
+  ]}
+  caption="Eventual has no bound; measure it."
+/>
+Select **read repair**, then compare **quorum overlap** with **sloppy quorum and hinted handoff** in Script.
 
 <QuorumPlayer />
 
@@ -176,7 +227,14 @@ Select **read repair** in Script and watch an older replica catch up when the re
 
 <Step id="choose" title="Choose the weakest safe model">
 
-Strong models are not free: each step up adds round trips, refusals during partitions, or both. A good design picks per feature. Linearizability is for things where two observers acting on different answers causes harm: uniqueness, locks, leader election, account balances. Session guarantees cover "my own changes must show up". Most social and analytical reads tolerate eventual consistency.
+<Compare
+  title="Pick the weakest model that is safe"
+  sides={[
+    { title: "Linearizable", tone: "bad", points: ["Uniqueness, locks", "Leader election", "Account balances"] },
+    { title: "Session / causal", tone: "warn", points: ["My changes must show up", "Replies after posts"] },
+    { title: "Eventual", tone: "ok", points: ["Feeds, counters", "Analytics reads"] }
+  ]}
+/>
 
 <Choice
   id="needs-linear"
@@ -195,10 +253,15 @@ Strong models are not free: each step up adds round trips, refusals during parti
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants. State the token and replica positions for the session wait, and count distinct replica picks for the stale-read probability.
+<Stats
+  title="What to compute"
+  items={[
+    { label: "Session wait", value: "token vs replica", sub: "wait if replica is behind", tone: "info" },
+    { label: "Stale read", value: "distinct picks", sub: "count replica choices", tone: "warn" }
+  ]}
+/>
+Score 80% or more. Next: [clocks](/learn/distributed-systems/clocks).
 
 <MasteryCheck templates={["consistency.session-wait", "consistency.stale-read"]} count={4} />
-
-Next, the [clocks lesson](/learn/distributed-systems/clocks) shows how systems track the causal order this lesson relied on.
 
 </Step>

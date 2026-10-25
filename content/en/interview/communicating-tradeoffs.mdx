@@ -37,9 +37,15 @@ estimatedMinutes: 20
 
 <Step id="shape" title="The shape of a good trade-off">
 
-Every design choice gives something up. Interviewers listen for whether you know what. A complete trade-off statement has four parts, the same ones an architecture decision record captures: the **option** you chose, what it **gains**, what it **costs**, and the **condition** under which you would choose differently.
-
-"I'll use asynchronous replication to the second region. Writes stay fast, about 5 ms instead of 70. The cost is that a regional failure can lose the last few seconds of writes. For likes that is acceptable; for payments I would replicate synchronously."
+<Compare
+  title="A trade-off in four parts"
+  sides={[
+    { title: "Option", tone: "info", points: ["Async replication to region 2"] },
+    { title: "Gains", tone: "ok", points: ["Writes stay about 5 ms, not 70"] },
+    { title: "Costs", tone: "bad", points: ["Regional failure loses last seconds"] },
+    { title: "Condition", tone: "warn", points: ["Fine for likes", "Payments: synchronous"] }
+  ]}
+/>
 
 <Choice
   id="good-tradeoff"
@@ -57,7 +63,14 @@ Every design choice gives something up. Interviewers listen for whether you know
 
 <Step id="quantify" title="Put a number on it">
 
-"Synchronous replication is slower" invites the question *how much slower?* Answer before it is asked. The back-of-envelope skills from the foundations track turn adjectives into numbers: round trips, request rates, bytes, dollars.
+<Bars
+  title="Write latency, sync vs async replication"
+  items={[
+    { label: "Asynchronous", value: 5, unit: "ms", tone: "ok" },
+    { label: "Synchronous, cross-region", value: 70, unit: "ms", tone: "bad" }
+  ]}
+  caption="Answer 'how much slower?' before it is asked."
+/>
 
 <VariantQuestion template="tradeoff.sync-latency" />
 
@@ -65,7 +78,17 @@ Every design choice gives something up. Interviewers listen for whether you know
 
 <Step id="requirements" title="Trace every decision to a requirement">
 
-The requirements you wrote down at the start are your justification for everything after. When you add a component, name the requirement that forced it. When the interviewer asks "why not X?", compare X against the same requirements.
+<Flow
+  title="Decision traced to requirements"
+  height={200}
+  nodes={[
+    { id: "r1", label: "No double-booking", kind: "client", x: 0, y: 20 },
+    { id: "r2", label: "500 bookings/s", kind: "client", x: 0, y: 80 },
+    { id: "db", label: "Database choice", kind: "database", x: 100, y: 50, note: "justified by both" }
+  ]}
+  edges={[ { from: "r1", to: "db", label: "needs transactions" }, { from: "r2", to: "db", label: "one node copes" } ]}
+  caption="Name the requirement that forced each component."
+/>
 
 <Choice
   id="db-choice"
@@ -83,7 +106,15 @@ The requirements you wrote down at the start are your justification for everythi
 
 <Step id="pushback" title="When the interviewer pushes back">
 
-Pushback is often a probe, not a correction: the interviewer wants to see whether you can reason under challenge. Restate the concern, re-check it against the requirements and numbers, and then either defend your choice with reasons or change it, saying what made you change.
+<Timeline
+  title="Handling pushback"
+  events={[
+    { at: "1", label: "Restate the concern", tone: "info" },
+    { at: "2", label: "Re-check against requirements and numbers", tone: "info" },
+    { at: "3", label: "Defend with reasons, or change and say why", tone: "ok" }
+  ]}
+  caption="Often a probe, not a correction."
+/>
 
 <Choice
   id="pushback-response"
@@ -101,10 +132,12 @@ Pushback is often a probe, not a correction: the interviewer wants to see whethe
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh trade-off cost variants. Score 80% or more to master the lesson.
+<Stats
+  title="Per stage in interview mode"
+  items={[ { label: "Rubric", value: "trade-off communication", sub: "compare with reference notes", tone: "info" } ]}
+/>
+Score 80% or more. Try [interview mode](/interview).
 
 <MasteryCheck templates={["tradeoff.sync-latency"]} count={3} />
-
-In [interview mode](/interview), the end-of-session rubric scores trade-off communication at every stage. The reference solutions show worked trade-off notes to compare with yours.
 
 </Step>

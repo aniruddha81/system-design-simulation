@@ -44,9 +44,15 @@ estimatedMinutes: 30
 
 <Step id="convergence" title="Merge rules that cannot disagree">
 
-An available store lets replicas accept writes during a partition, so they diverge. The question is how they converge again without asking a human. Last-writer-wins throws data away. Keeping siblings, as Dynamo did, pushes the merge to application code. **Conflict-free replicated data types** (Shapiro et al., 2011) build the merge into the data type itself, so that any two replicas that have received the same updates are in the same state. That property is called **strong eventual consistency**.
-
-For state-based CRDTs, the merge function must be **commutative** (merge(a, b) = merge(b, a)), **associative** (grouping does not matter) and **idempotent** (merge(a, a) = a). Then replicas can exchange state in any order, any number of times, over any gossip path, and still end up identical.
+<Compare
+  title="Three ways to resolve divergent replicas"
+  sides={[
+    { title: "Last-writer-wins", tone: "bad", points: ["Silently drops data"] },
+    { title: "Keep siblings", tone: "warn", points: ["Dynamo style", "App code must merge"] },
+    { title: "CRDT", tone: "ok", points: ["Merge built into the type", "Commutative, associative, idempotent", "Strong eventual consistency"] }
+  ]}
+  caption="Same updates received means same state, in any order, any number of times."
+/>
 
 <Choice
   id="merge-properties"
@@ -64,11 +70,16 @@ For state-based CRDTs, the merge function must be **commutative** (merge(a, b) =
 
 <Step id="counter" title="Counters: G-Counter and PN-Counter">
 
-A shared counter is the simplest CRDT and shows the core trick. A **G-Counter** (grow-only) keeps one entry per replica. Each replica increments only its own entry. Merge takes the **maximum** of each entry, and the counter's value is the **sum** of the entries. Taking the max is commutative, associative and idempotent, so no increment is ever lost or double-counted.
-
-A **PN-Counter** supports decrements by pairing two G-Counters, one for increments and one for decrements, with value = sum(P) − sum(N).
-
-Keep Replication algorithm set to **CRDT counters, set and RGA** and select **counter messages reorder and duplicate** in Script. Compare the replicas as messages arrive out of order and twice. This player merges uniquely identified operations, so duplicate delivery does not count an increment again.
+<Stats
+  title="G-Counter: one slot per replica"
+  items={[
+    { label: "Replica A", value: "[3, 0, 0]", sub: "increments only slot A", tone: "info" },
+    { label: "Replica B", value: "[1, 4, 0]", sub: "has seen A at 1", tone: "info" },
+    { label: "Merge (max)", value: "[3, 4, 0]", sub: "value = sum = 7", tone: "ok" }
+  ]}
+  caption="PN-Counter pairs two G-Counters: value = sum(P) - sum(N)."
+/>
+Set Replication algorithm to **CRDT counters, set and RGA** and select **counter messages reorder and duplicate** in Script.
 
 <CrdtPlayer />
 
@@ -77,6 +88,18 @@ Keep Replication algorithm set to **CRDT counters, set and RGA** and select **co
 </Step>
 
 <Step id="naive-counter" title="Why not just send increments?">
+
+<Flow
+  title="Summing on sync double counts"
+  height={200}
+  nodes={[
+    { id: "a", label: "Replica A", kind: "kvStore", x: 0, y: 50, note: "value 5" },
+    { id: "b", label: "Replica B", kind: "kvStore", x: 100, y: 50, note: "value 5" }
+  ]}
+  edges={[ { from: "a", to: "b", label: "sync: 5 + 5 = 10" }, { from: "b", to: "a", label: "sync: 5 + 5 = 10" } ]}
+  hot={["a", "b"]}
+  caption="Both held the same shared 5. Operation-based CRDTs send increments, so delivery must dedupe by unique operation ID."
+/>
 
 <Choice
   id="naive-merge"
@@ -90,20 +113,18 @@ Keep Replication algorithm set to **CRDT counters, set and RGA** and select **co
   ]}
 />
 
-Operation-based CRDTs can send increments instead of states, but then the delivery layer must deliver each operation exactly once, usually by tagging operations with unique IDs and deduplicating.
-
 </Step>
 
 <Step id="sets" title="Sets: add, remove and who wins">
 
-Sets are where merge semantics become a product decision. Alice removes "milk" from a shared list while Bob, offline, adds "milk" again. What should the merged list show?
-
-- **Last-writer-wins set**: compare timestamps; whichever is later wins. Clock skew decides, and one user's intent silently vanishes.
-- **OR-Set** (observed-remove): each add creates a unique tag; a remove deletes only the tags it has *observed*. Bob's concurrent add has a tag Alice never saw, so it survives. This is **add-wins**.
-
-Dynamo's cart, which merged by union, could resurrect deleted items. The OR-Set gets the semantics right because it can tell "removed after I saw it" from "added concurrently".
-
-With Replication algorithm set to **CRDT counters, set and RGA**, select **observed-remove add wins** in Script. Watch the remove discard the observed add while the concurrent fresh add survives.
+<Compare
+  title="Alice removes milk while Bob adds it offline"
+  sides={[
+    { title: "Last-writer-wins set", tone: "bad", points: ["Later timestamp wins", "Clock skew decides", "Intent vanishes"] },
+    { title: "OR-Set (add wins)", tone: "ok", points: ["Each add gets a unique tag", "Remove deletes observed tags only", "Concurrent add survives"] }
+  ]}
+/>
+Select **observed-remove add wins** in Script.
 
 <CrdtPlayer />
 
@@ -123,11 +144,18 @@ With Replication algorithm set to **CRDT counters, set and RGA**, select **obser
 
 <Step id="ot" title="Collaborative text: operational transformation">
 
-Text editing is harder because positions shift. If Alice inserts at index 3 and Bob, concurrently, inserts at index 10, applying Bob's operation unchanged after Alice's lands it in the wrong place. **Operational transformation**, introduced by Ellis and Gibbs in 1989, rewrites each incoming operation against the concurrent operations already applied: Bob's index 10 becomes 10 plus the length of Alice's insert.
-
-Correct transformation functions for every pair of operations are notoriously hard to get right without a central order. Production OT systems, including Google Docs and its predecessors, rely on a server that puts all operations into one sequence, which makes transformation tractable.
-
-Set Replication algorithm to **OT with transformation** and select **concurrent insertion** in Script. Compare the server and client text after delivery, then repeat under **OT without transformation** to see why unchanged positions can diverge.
+<Sequence
+  title="Operational transformation"
+  actors={["Alice", "Server", "Bob"]}
+  messages={[
+    { from: "Alice", to: "Server", label: "insert at 3" },
+    { from: "Bob", to: "Server", label: "insert at 10" },
+    { from: "Server", to: "Bob", label: "Alice's insert", tone: "info" },
+    { from: "Server", to: "Alice", label: "Bob's op shifted: 10 + len", tone: "warn" }
+  ]}
+  caption="Each incoming op is rewritten against concurrent ops. A central server gives the single order that makes this tractable."
+/>
+Set Replication algorithm to **OT with transformation**, select **concurrent insertion**, then repeat under **OT without transformation**.
 
 <CrdtPlayer />
 
@@ -137,11 +165,15 @@ Set Replication algorithm to **OT with transformation** and select **concurrent 
 
 <Step id="sequence-crdt" title="Sequence CRDTs: give every character an identity">
 
-Sequence CRDTs such as RGA, Logoot and the structures inside Yjs and Automerge avoid index arithmetic altogether. Every character gets a unique, permanent identifier, and an insert says "after character X" rather than "at index 10". Deletion leaves a **tombstone** so later inserts can still refer to the deleted character. Concurrent inserts at the same spot are ordered by a deterministic tie-break on their identifiers.
-
-This works peer to peer with no central server, which is why the local-first movement favours it. The cost is metadata: identifiers and tombstones can make the document's internal state much larger than its visible text, and garbage collecting tombstones requires knowing that every replica has seen the deletion.
-
-With Replication algorithm set to **CRDT counters, set and RGA**, select **concurrent RGA edits** in Script. Follow the concurrent deletion and insertion, then compare the text and tombstones after all messages arrive.
+<Compare
+  title="Sequence CRDT (RGA, Yjs, Automerge)"
+  sides={[
+    { title: "How", tone: "info", points: ["Permanent ID per character", "Insert 'after char X'", "Deterministic tie-break"] },
+    { title: "Cost", tone: "warn", points: ["IDs and tombstones bloat state", "GC needs every replica's ack"] },
+    { title: "Win", tone: "ok", points: ["Peer to peer", "No central server", "Offline for days"] }
+  ]}
+/>
+Select **concurrent RGA edits** in Script and compare text with tombstones.
 
 <CrdtPlayer />
 
@@ -161,10 +193,16 @@ With Replication algorithm set to **CRDT counters, set and RGA**, select **concu
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh variants.
+<Stats
+  title="Merge laws"
+  items={[
+    { label: "Commutative", value: "a+b = b+a", tone: "ok" },
+    { label: "Associative", value: "grouping free", tone: "ok" },
+    { label: "Idempotent", value: "a+a = a", tone: "ok" }
+  ]}
+/>
+Score 80% or more. See also [gossip](/learn/distributed-systems/gossip), which carries CRDT state between replicas.
 
 <MasteryCheck templates={["crdt.gcounter", "ot.transform"]} count={4} />
-
-The case study on collaborative documents builds on this lesson; [gossip](/learn/distributed-systems/gossip) explains how replicas exchange CRDT state in the first place.
 
 </Step>

@@ -31,7 +31,13 @@ estimatedMinutes: 20
 
 <Step id="which-question" title="Questions that change the design">
 
-Interview prompts are vague on purpose: discovering the real problem is part of the test. But time is short, so ask the questions whose answers would make you build something **different**. "What colour is the button?" changes nothing. "Do links ever expire?" changes the data model, storage growth and the cleanup job.
+<Compare
+  title="URL shortener: does the answer change the design?"
+  sides={[
+    { title: "Changes nothing", tone: "muted", points: ["Button colour?"] },
+    { title: "Changes the design", tone: "ok", points: ["Do links expire?", "Storage, cleanup job"] }
+  ]}
+/>
 
 <Choice
   id="best-question"
@@ -49,7 +55,14 @@ Interview prompts are vague on purpose: discovering the real problem is part of 
 
 <Step id="requirements" title="Functional and non-functional">
 
-**Functional** requirements say what the system does: create a short link, redirect, show click counts. **Non-functional** requirements say how well: redirects in under 50 ms at p99, 99.99% availability for redirects, links never lost once created. Non-functional requirements decide most of the architecture, so get numbers for them, or propose numbers and ask if they are reasonable.
+<Compare
+  title="Requirements"
+  sides={[
+    { title: "Functional: what", tone: "info", points: ["Create a short link", "Redirect", "Click counts"] },
+    { title: "Non-functional: how well", tone: "warn", points: ["p99 redirect under 50 ms", "99.99% available", "Links never lost"] }
+  ]}
+  caption="Non-functional needs drive the architecture: get numbers."
+/>
 
 <Choice
   id="classify-reqs"
@@ -69,7 +82,13 @@ Interview prompts are vague on purpose: discovering the real problem is part of 
 
 <Step id="distribution" title="Ask for the distribution, not just the average">
 
-Averages hide the cases that break systems. In a social feed, the **average** author has a few hundred followers, and fan-out on write (copying each post into every follower's timeline) looks easy. Ask the next question: *how are followers distributed?*
+<Stats
+  title="Followers per author"
+  items={[
+    { label: "Average author", value: "a few hundred", sub: "fan-out on write looks easy", tone: "ok" },
+    { label: "Ask next", value: "how distributed?", sub: "the tail breaks it", tone: "warn" }
+  ]}
+/>
 
 <VariantQuestion template="clarify.fanout" />
 
@@ -77,7 +96,24 @@ Averages hide the cases that break systems. In a social feed, the **average** au
 
 <Step id="celebrity" title="The celebrity problem">
 
-Follower counts are heavy-tailed: a few accounts have tens of millions of followers. One celebrity post under pure fan-out on write means tens of millions of timeline inserts, and followers see the post late. That is why the clarifying question matters: if the answer is "yes, there are celebrities", the standard design becomes a **hybrid**: fan out on write for ordinary authors, and merge celebrity posts into the timeline at read time.
+<Flow
+  title="Hybrid fan-out"
+  height={240}
+  nodes={[
+    { id: "au", label: "Ordinary author", kind: "client", x: 0, y: 15 },
+    { id: "ce", label: "Celebrity", kind: "client", x: 0, y: 85, note: "50M followers" },
+    { id: "fo", label: "Fan-out on write", kind: "worker", x: 50, y: 15 },
+    { id: "tl", label: "Timeline", kind: "cache", x: 100, y: 50, note: "merge at read" },
+    { id: "cp", label: "Celebrity posts", kind: "database", x: 50, y: 85 }
+  ]}
+  edges={[
+    { from: "au", to: "fo", label: "post" },
+    { from: "fo", to: "tl", label: "insert per follower" },
+    { from: "ce", to: "cp", label: "one write" },
+    { from: "cp", to: "tl", label: "pulled on read" }
+  ]}
+  caption="Heavy tail: pure fan-out means millions of inserts."
+/>
 
 <VariantQuestion template="clarify.celebrity" />
 
@@ -85,7 +121,14 @@ Follower counts are heavy-tailed: a few accounts have tens of millions of follow
 
 <Step id="assumptions" title="When the answer is 'you decide'">
 
-Interviewers often hand the decision back. Do not stall. State a reasonable assumption with a number, say why, and note what would change if it were wrong. That shows judgement, and gives the interviewer an easy way to redirect you.
+<Timeline
+  title="When the answer is 'you decide'"
+  events={[
+    { at: "1", label: "State an assumption with a number", tone: "ok" },
+    { at: "2", label: "Say why", tone: "info" },
+    { at: "3", label: "Say what changes if wrong", tone: "info" }
+  ]}
+/>
 
 <Choice
   id="you-decide"
@@ -103,10 +146,12 @@ Interviewers often hand the decision back. Do not stall. State a reasonable assu
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh fan-out variants. Score 80% or more to master the lesson.
+<Stats
+  title="Opening-minutes checklist"
+  items={[ { label: "Before drawing", value: "requirements checklist", tone: "info" } ]}
+/>
+Score 80% or more. Practise in [interview mode](/interview).
 
 <MasteryCheck templates={["clarify.fanout", "clarify.celebrity"]} count={4} />
-
-Practise the opening minutes in [interview mode](/interview): its requirements checklist is the list of questions to work through before you draw anything.
 
 </Step>

@@ -40,9 +40,14 @@ estimatedMinutes: 30
 
 <Step id="fail-fast" title="Failing fast beats failing slowly">
 
-When a dependency is down, each call to it costs a full timeout before failing. Callers pile up waiting, their threads run out, and the caller fails too, even for requests that never needed the dependency. Michael Nygard's *Release It!* names the remedy after the electrical device: a **circuit breaker** watches calls to a dependency, and when too many fail, it stops sending them for a while and fails them immediately instead.
-
-Failing fast does two jobs at once. It frees the caller's resources and gives the dependency time to recover without a flood of doomed requests.
+<Compare
+  title="Dependency down: with and without a breaker"
+  sides={[
+    { title: "No breaker", tone: "bad", points: ["Each call waits a full timeout", "Threads pile up", "Caller dies too"] },
+    { title: "Breaker open", tone: "ok", points: ["Calls fail in microseconds", "Threads stay free", "Dependency gets quiet to recover"] }
+  ]}
+  caption="A circuit breaker (Nygard, Release It!) fails calls fast after evidence of failure."
+/>
 
 <Choice
   id="breaker-purpose"
@@ -60,13 +65,17 @@ Failing fast does two jobs at once. It frees the caller's resources and gives th
 
 <Step id="states" title="Closed, open, half-open">
 
-A breaker has three states:
-
-- **Closed**: calls flow normally, and the breaker records successes and failures.
-- **Open**: the failure rate crossed its threshold. Calls fail immediately for a cool-down period.
-- **Half-open**: the cool-down ended. A few trial calls are allowed through. If they succeed, the breaker closes; if any fail, it opens again for another cool-down.
-
-Without the half-open state, a breaker would either never close or close all at once and let full traffic hit a dependency that may still be fragile.
+<Timeline
+  title="One breaker cycle"
+  events={[
+    { at: "Closed", label: "Calls flow, failures counted", tone: "ok" },
+    { at: "Trip", label: "Failure rate over threshold", tone: "bad" },
+    { at: "Open", label: "All calls rejected during cool-down", tone: "bad" },
+    { at: "Half-open", label: "A few probe calls pass", tone: "warn" },
+    { at: "Closed", label: "Probes succeed", tone: "ok" }
+  ]}
+  caption="A failed probe reopens the breaker for another cool-down."
+/>
 
 <Ordering
   id="breaker-cycle"
@@ -86,7 +95,15 @@ Without the half-open state, a breaker would either never close or close all at 
 
 <Step id="threshold" title="When does it trip?">
 
-Most breakers trip on a **failure rate** over a sliding window, either the last N calls or the last T seconds, rather than on a raw count. Two more settings matter in practice. A **minimum number of calls** stops a breaker from opening because 2 out of 3 calls failed at three in the morning. And slow calls can count as failures: Resilience4j, for example, can open on a rate of calls slower than a threshold, which catches a dependency that is degrading before it fails outright.
+<Stats
+  title="Trip settings"
+  items={[
+    { label: "Window", value: "last N calls", sub: "or last T seconds", tone: "info" },
+    { label: "Failure rate", value: "e.g. 50%", sub: "not a raw count", tone: "bad" },
+    { label: "Min calls", value: "e.g. 20", sub: "no trip on 2 of 3 at 3 a.m.", tone: "warn" },
+    { label: "Slow calls", value: "count as failures", sub: "catches slow decay", tone: "info" }
+  ]}
+/>
 
 <VariantQuestion template="breaker.trip" />
 
@@ -94,7 +111,25 @@ Most breakers trip on a **failure rate** over a sliding window, either the last 
 
 <Step id="scope" title="Scope: one breaker for what?">
 
-A breaker's scope decides what one failure takes down. A single breaker for a whole service with twenty hosts opens when one bad host fails a third of calls, cutting off nineteen healthy hosts. Breakers per host, or per endpoint, isolate the failure better but see fewer calls each, so they need a smaller minimum call count and take longer to gather evidence.
+<Flow
+  title="Scope: one breaker per host isolates the bad one"
+  height={250}
+  nodes={[
+    { id: "svc", label: "Caller", kind: "service", x: 0, y: 50 },
+    { id: "b1", label: "Breaker 1", kind: "circuitBreaker", x: 45, y: 5 },
+    { id: "b2", label: "Breaker 2", kind: "circuitBreaker", x: 45, y: 50 },
+    { id: "b3", label: "Breaker 3", kind: "circuitBreaker", x: 45, y: 95 },
+    { id: "h1", label: "Host 1", kind: "service", x: 100, y: 5 },
+    { id: "h2", label: "Host 2", kind: "service", x: 100, y: 50 },
+    { id: "h3", label: "Host 3", kind: "service", x: 100, y: 95 }
+  ]}
+  edges={[
+    { from: "svc", to: "b1" }, { from: "svc", to: "b2" }, { from: "svc", to: "b3" },
+    { from: "b1", to: "h1" }, { from: "b2", to: "h2" }, { from: "b3", to: "h3" }
+  ]}
+  failed={["h3"]}
+  caption="A shared breaker cuts off healthy hosts. Per-host needs a smaller minimum."
+/>
 
 <Choice
   id="breaker-scope"
@@ -112,9 +147,19 @@ A breaker's scope decides what one failure takes down. A single breaker for a wh
 
 <Step id="bulkhead" title="Bulkheads: compartments for failure">
 
-A ship's hull is divided into watertight compartments so one breach floods one compartment, not the ship. A **bulkhead** in software gives each dependency its own bounded pool of threads, connections or concurrent calls. When the pool is full, further calls are rejected at once rather than waiting.
-
-Size a bulkhead from the dependency's healthy behaviour. By Little's law, concurrency equals call rate times latency, so a dependency called 500 times per second at 40 ms has about 20 calls in flight. Give it headroom for bursts and some slowdown, but not so much that a hang can absorb every thread.
+<Flow
+  title="Bulkhead: a bounded pool per dependency"
+  height={230}
+  nodes={[
+    { id: "svc", label: "Checkout", kind: "service", x: 0, y: 50 },
+    { id: "pay", label: "Payments", kind: "service", x: 100, y: 0, note: "20 slots" },
+    { id: "inv", label: "Inventory", kind: "service", x: 100, y: 50, note: "20 slots" },
+    { id: "rec", label: "Recs", kind: "service", x: 100, y: 100, note: "5 slots" }
+  ]}
+  edges={[ { from: "svc", to: "pay" }, { from: "svc", to: "inv" }, { from: "svc", to: "rec" } ]}
+  hot={["rec"]}
+  caption="Little's law: 500/s x 40 ms = 20 in flight. Add burst headroom, not hang headroom."
+/>
 
 <VariantQuestion template="bulkhead.size" />
 
@@ -122,7 +167,15 @@ Size a bulkhead from the dependency's healthy behaviour. By Little's law, concur
 
 <Step id="contain" title="What the bulkhead buys you when things hang">
 
-Now let that dependency hang until the timeout. Without a bulkhead, its calls absorb threads until the shared pool is gone and the whole service stops. With one, at most the bulkhead's slots are stuck, the excess calls fail fast, and every other endpoint keeps its threads. The trade-off: the bulkhead caps the dependency's throughput at slots divided by latency, so when latency rises, admitted throughput falls.
+<Stats
+  title="A hanging dependency, with a bulkhead of 20 slots"
+  items={[
+    { label: "Stuck calls", value: "20 max", sub: "excess fail fast", tone: "warn" },
+    { label: "Other endpoints", value: "unaffected", tone: "ok" },
+    { label: "Admitted rate", value: "slots / latency", sub: "20 / 2 s = 10 per s", tone: "bad" }
+  ]}
+  caption="The price: when latency rises, admitted throughput falls."
+/>
 
 <VariantQuestion template="bulkhead.throughput" />
 
@@ -130,7 +183,16 @@ Now let that dependency hang until the timeout. Without a bulkhead, its calls ab
 
 <Step id="combine" title="Breakers, bulkheads, timeouts and retries together">
 
-These mechanisms cover different failure shapes. The timeout bounds a single call, the bulkhead bounds concurrent calls, the breaker stops calls after evidence of failure, and retries recover from transient errors. They interact: retries count as calls against the breaker and the bulkhead, and a breaker should see the final outcome as well as each attempt, or retries will hide failures from it.
+<Compare
+  title="Each mechanism bounds a different thing"
+  sides={[
+    { title: "Timeout", tone: "info", points: ["One call's duration"] },
+    { title: "Bulkhead", tone: "info", points: ["Concurrent calls"] },
+    { title: "Breaker", tone: "info", points: ["Calls after evidence of failure"] },
+    { title: "Retry", tone: "warn", points: ["Recovers transient errors", "Counts as extra calls"] }
+  ]}
+  caption="The breaker should see final outcomes, or retries will hide failures from it."
+/>
 
 <Choice
   id="which-mechanism"
@@ -149,10 +211,15 @@ These mechanisms cover different failure shapes. The timeout bounds a single cal
 
 <Step id="practice" title="Check your mastery, then trip a breaker">
 
-Score at least 80% on fresh variants.
+<Stats
+  title="Lab checklist"
+  items={[
+    { label: "Breaker", value: "opens", sub: "downstream load drops", tone: "ok" },
+    { label: "Bulkhead", value: "slots / latency", sub: "compare rejections", tone: "info" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox), build client, service, circuit breaker, downstream. Make it return 503, then slow it with a bulkhead set.
 
 <MasteryCheck templates={["breaker.trip", "bulkhead.size", "bulkhead.throughput"]} count={5} />
-
-In the [sandbox](/sandbox), build client → service → circuit breaker → downstream, and make the downstream return 503. Set the breaker's failure rate, window, minimum requests and cool-down, and watch it open: calls start failing fast and the downstream's load drops. Then give the breaker a **Bulkhead** limit and slow the downstream instead, and compare the rejected calls with the slot ÷ latency estimate from this lesson.
 
 </Step>

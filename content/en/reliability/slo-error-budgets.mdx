@@ -42,9 +42,14 @@ estimatedMinutes: 25
 
 <Step id="sli" title="Measure what users feel">
 
-An **SLI** is a ratio: **good events ÷ valid events**. The art is choosing the events and the boundary. Measure as close to the user as you can: load balancer logs see requests your servers never logged because they crashed; client-side telemetry also sees DNS and network failures, but is noisier.
-
-For latency, do not use an average. Use the **proportion of requests faster than a threshold**: "99% of valid requests are served in under 300 ms". It is a ratio like availability, so it has a budget, and it composes correctly across hosts, which percentiles do not.
+<Stats
+  title="An SLI is a ratio"
+  items={[
+    { label: "SLI", value: "good / valid", tone: "info" },
+    { label: "Latency SLI", value: "99% under 300 ms", sub: "proportion, not an average", tone: "ok" },
+    { label: "Measure", value: "near the user", sub: "load balancer beats server logs", tone: "warn" }
+  ]}
+/>
 
 <Choice
   id="latency-sli"
@@ -62,9 +67,17 @@ For latency, do not use an average. Use the **proportion of requests faster than
 
 <Step id="target" title="100% is the wrong target">
 
-The SRE book's argument: a user on a 99% reliable phone cannot tell 99.99% from 99.999%, because their own device, Wi-Fi and ISP fail far more often. Meanwhile cost rises steeply: each increment of reliability can cost far more than the previous one. A **100% SLO** also leaves no room to ship, since any change risks a failure.
-
-Pick the target from what users need and what the system has achieved, then keep a slightly stricter **internal SLO** than any external **SLA**, so you notice trouble before you owe credits.
+<Bars
+  title="Downtime per 30 days by target"
+  log
+  items={[
+    { label: "99%", value: 432, unit: "min", tone: "ok" },
+    { label: "99.9%", value: 43.2, unit: "min", tone: "info" },
+    { label: "99.99%", value: 4.3, unit: "min", tone: "warn" },
+    { label: "99.999%", value: 0.43, unit: "min", tone: "bad" }
+  ]}
+  caption="Users cannot tell the last nines apart; their phone and ISP fail more. 100% leaves no room to ship. Keep an internal SLO stricter than the SLA."
+/>
 
 <Choice
   id="pick-target"
@@ -82,9 +95,14 @@ Pick the target from what users need and what the system has achieved, then keep
 
 <Step id="budget" title="Turn the SLO into a budget">
 
-The **error budget** is 1 − SLO, applied to the window. For a good-minutes SLO of 99.9% over 30 days, that is 30 × 1,440 × 0.001 = **43.2 bad minutes**. For a request-based SLO, it is a number of failed requests instead, and it burns faster at peak.
-
-A **rolling** window (the last 28 or 30 days) changes smoothly; a **calendar** window resets on the 1st, which can encourage risky launches on the last day.
+<Stats
+  title="99.9% over 30 days"
+  items={[
+    { label: "Window", value: "43,200 min", tone: "muted" },
+    { label: "Budget (0.1%)", value: "43.2 min", sub: "30 x 1,440 x 0.001", tone: "ok" }
+  ]}
+  caption="Rolling windows change smoothly; calendar windows reset and tempt risky launches on the last day."
+/>
 
 <VariantQuestion template="slo.budget-minutes" />
 
@@ -92,7 +110,15 @@ A **rolling** window (the last 28 or 30 days) changes smoothly; a **calendar** w
 
 <Step id="burn-rate" title="Burn rate: how fast is the budget going?">
 
-The **burn rate** is the observed error ratio divided by the budgeted error ratio. At burn rate 1 you spend exactly the whole budget over the window. At burn rate 14.4, a 30-day budget lasts about two days, and one hour consumes 2% of it.
+<Bars
+  title="Days until a 30-day budget is gone"
+  items={[
+    { label: "Burn rate 1", value: 30, unit: "days", tone: "ok" },
+    { label: "Burn rate 6", value: 5, unit: "days", tone: "warn" },
+    { label: "Burn rate 14.4", value: 2.1, unit: "days", tone: "bad" }
+  ]}
+  caption="Burn rate = observed error ratio / budgeted error ratio."
+/>
 
 <VariantQuestion template="slo.burn-rate" />
 
@@ -100,12 +126,15 @@ The **burn rate** is the observed error ratio divided by the budgeted error rati
 
 <Step id="alerting" title="Alert on burn rate, over two windows">
 
-A static threshold such as "error rate above 1%" is either too noisy for a loose SLO or too slow for a strict one. The SRE Workbook instead pages on **fast burn** and tickets on **slow burn**, for a 30-day budget:
-
-- page when **2%** of the budget burns in **1 hour** (burn rate 14.4) or **5%** in **6 hours** (burn rate 6);
-- open a ticket when **10%** burns in **3 days** (burn rate 1).
-
-Each long window is paired with a **short window** (5 minutes for the 1-hour alert, 30 minutes for the 6-hour alert). Both must exceed the threshold, so the alert stops firing soon after the problem is fixed, instead of staying red for an hour while the long window drains.
+<Compare
+  title="Multi-window burn alerts (30-day budget)"
+  sides={[
+    { title: "Page: fast", tone: "bad", points: ["2% in 1 h (burn 14.4)", "Short window 5 min"] },
+    { title: "Page: medium", tone: "warn", points: ["5% in 6 h (burn 6)", "Short window 30 min"] },
+    { title: "Ticket: slow", tone: "info", points: ["10% in 3 days (burn 1)"] }
+  ]}
+  caption="Both windows must exceed, so the alert clears soon after the fix."
+/>
 
 <Choice
   id="multiwindow"
@@ -123,9 +152,16 @@ Each long window is paired with a **short window** (5 minutes for the 1-hour ale
 
 <Step id="policy" title="Let the budget decide">
 
-An error budget turns "move fast" versus "be careful" into arithmetic both sides agreed on in advance. A typical **error budget policy**: while budget remains, teams ship at their own pace; when it is exhausted, feature launches pause except for reliability fixes and security patches until the window recovers; a single incident that burns a large share of the budget gets a postmortem.
-
-The policy must be written and signed by product and engineering before the bad month, not negotiated during it.
+<Timeline
+  title="Error budget policy"
+  events={[
+    { at: "Budget left", label: "Ship at your own pace", tone: "ok" },
+    { at: "Large burn", label: "Postmortem", tone: "warn" },
+    { at: "Exhausted", label: "Pause launches; reliability and security only", tone: "bad" },
+    { at: "Window recovers", label: "Resume", tone: "ok" }
+  ]}
+  caption="Signed by product and engineering before the bad month."
+/>
 
 <Choice
   id="budget-exhausted"
@@ -143,10 +179,15 @@ The policy must be written and signed by product and engineering before the bad 
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh budgets and burn rates. Score 80% or more to master the lesson.
+<Stats
+  title="What the variants ask"
+  items={[
+    { label: "Budget", value: "minutes", sub: "window x (1 - SLO)", tone: "info" },
+    { label: "Burn", value: "error ratio / budget ratio", tone: "warn" }
+  ]}
+/>
+Score 80% or more. See [failure modes](/learn/reliability/failure-modes) and [deployments](/learn/reliability/deployments).
 
 <MasteryCheck templates={["slo.budget-minutes", "slo.burn-rate"]} count={4} />
-
-Next, see what actually spends the budget in [failure modes and metastability](/learn/reliability/failure-modes), and how releases spend it safely in [deployments](/learn/reliability/deployments).
 
 </Step>

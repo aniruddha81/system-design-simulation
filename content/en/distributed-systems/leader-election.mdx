@@ -42,9 +42,18 @@ estimatedMinutes: 30
 
 <Step id="split-brain" title="Split brain: two leaders at once">
 
-Many systems need exactly one actor: one primary database, one scheduler, one writer per shard. The usual design is "if the leader stops sending heartbeats, elect a new one". The flaw is that silence does not prove death. The old leader may be partitioned, overloaded or paused, and still running. When it comes back, two nodes both believe they lead. That is **split brain**, and it ends with conflicting writes that no one can automatically reconcile.
-
-The first defence is arithmetic. If a leader needs q votes and each node votes once per term, two leaders in one term need 2q votes. Requiring 2q > N makes that impossible, because two quorums must then share a voter. Two-node active/passive pairs that each promote themselves on a missed heartbeat have no such quorum, which is why they split-brain so often.
+<Flow
+  title="Split brain: two nodes think they lead"
+  height={220}
+  nodes={[
+    { id: "old", label: "Old leader", kind: "service", x: 0, y: 50, note: "paused, now awake" },
+    { id: "new", label: "New leader", kind: "service", x: 100, y: 50, note: "elected" },
+    { id: "db", label: "Shared data", kind: "database", x: 50, y: 100 }
+  ]}
+  edges={[ { from: "old", to: "db", label: "writes" }, { from: "new", to: "db", label: "writes" } ]}
+  hot={["old", "new"]}
+  caption="Silence does not prove death. Quorum arithmetic: two leaders in one term need 2q votes, so require 2q > N."
+/>
 
 <VariantQuestion template="election.min-quorum" />
 
@@ -52,9 +61,16 @@ The first defence is arithmetic. If a leader needs q votes and each node votes o
 
 <Step id="lease" title="Leases: authority with an expiry date">
 
-A quorum stops two leaders from being *elected* in the same term. It does not stop an old leader from *acting* after a new one is elected, because the old one may not know yet. A **lease** (Gray and Cheriton, 1989) bounds that: authority is granted for a fixed duration, and the holder promises to stop acting before it expires unless it renews. The grantor promises not to grant it to anyone else until it has certainly expired.
-
-A lease is only as safe as its timing assumptions: clocks must drift within a known bound, and the holder must actually check the lease before every action. The holder starts its timer *before* sending the request, so network delay only makes its view more conservative. Drift remains, and must be subtracted.
+<Timeline
+  title="A lease"
+  events={[
+    { at: "Grant", label: "Authority for T seconds", tone: "ok" },
+    { at: "Renew", label: "Holder extends before expiry", tone: "info" },
+    { at: "Holder stops", label: "Before expiry minus drift margin", tone: "warn" },
+    { at: "Expiry", label: "Grantor may now grant it elsewhere", tone: "bad" }
+  ]}
+  caption="Gray and Cheriton, 1989. Safe only if clock drift is bounded and the holder checks before every action."
+/>
 
 <VariantQuestion template="lease.drift-margin" />
 
@@ -62,9 +78,17 @@ A lease is only as safe as its timing assumptions: clocks must drift within a kn
 
 <Step id="pause" title="The pause that breaks every lease">
 
-Kleppmann's 2016 analysis of distributed locks tells the classic story. Client 1 acquires a lease, checks that it is still valid, and starts a write. Then its process stops: a long stop-the-world garbage collection, a virtual machine migration, a page fault on a swapped-out page, a `SIGSTOP`. The lease expires, the lock service grants it to client 2, and client 2 writes. Then client 1 wakes up and finishes its write, with no idea that any time passed.
-
-No amount of checking inside the client fixes this, because the pause can fall between the check and the write. HBase hit exactly this failure mode: a region server paused by GC, lost its ZooKeeper session, and on waking still believed it owned its regions.
+<Sequence
+  title="The pause that breaks every lease"
+  actors={["Client 1", "Lock service", "Client 2", "Storage"]}
+  messages={[
+    { from: "Client 1", to: "Lock service", label: "acquire" },
+    { from: "Lock service", to: "Client 2", label: "lease expired, granted", tone: "info" },
+    { from: "Client 2", to: "Storage", label: "write", tone: "ok" },
+    { from: "Client 1", to: "Storage", label: "late write", tone: "bad" }
+  ]}
+  caption="Client 1 then freezes (GC, VM migration, SIGSTOP). The pause can fall between the check and the write. HBase hit exactly this."
+/>
 
 <VariantQuestion template="lease.pause-overrun" />
 
@@ -72,9 +96,16 @@ No amount of checking inside the client fixes this, because the pause can fall b
 
 <Step id="fencing" title="Fencing tokens: let the resource say no">
 
-The fix moves the check to the place the damage would happen. Every time the lock service grants the lock, it hands out a **fencing token**: a number that increases with every grant. The holder sends the token with every write. The storage service remembers the highest token it has accepted and rejects any write carrying a lower one.
-
-Raft's term number and ZooKeeper's zxid can serve as fencing tokens; Chubby calls them sequencers. In the story above, client 1 holds token 33 and client 2 holds 34. Once storage has accepted 34, client 1's late write with 33 is rejected, however long it slept.
+<Sequence
+  title="Fencing tokens"
+  actors={["Client 1", "Client 2", "Storage"]}
+  messages={[
+    { from: "Client 2", to: "Storage", label: "write, token 34", tone: "ok" },
+    { from: "Client 1", to: "Storage", label: "write, token 33", lost: true },
+    { from: "Client 2", to: "Storage", label: "write, token 34", tone: "ok" }
+  ]}
+  caption="Storage keeps the highest token seen and rejects lower ones. Raft terms and zxids work as tokens."
+/>
 
 <Choice
   id="fence-outcome"
@@ -92,9 +123,14 @@ Raft's term number and ZooKeeper's zxid can serve as fencing tokens; Chubby call
 
 <Step id="where-to-check" title="Where fencing must live">
 
-Fencing only works if the **resource itself** enforces it. A client that checks its own token protects nothing, for the same reason the client's own lease check failed. The resource needs some form of conditional write: a compare-and-set, a version check, a row with a token column and a `WHERE token <= ?` guard.
-
-Some resources cannot check anything, such as a third-party API or a plain file share. There, use operations that are safe to repeat (see [idempotency](/learn/distributed-systems/idempotency)), or a physical form of fencing such as revoking the old node's credentials or cutting its power, which high-availability clusters call STONITH: shoot the other node in the head.
+<Compare
+  title="Who enforces the fence"
+  sides={[
+    { title: "Resource checks", tone: "ok", points: ["Compare-and-set", "Version check", "WHERE token <= ?"] },
+    { title: "Client checks itself", tone: "bad", points: ["Protects nothing", "Pause hits after the check"] },
+    { title: "No conditional write", tone: "warn", points: ["Idempotent operations", "STONITH: revoke credentials or power"] }
+  ]}
+/>
 
 <Choice
   id="fence-placement"
@@ -113,9 +149,14 @@ Some resources cannot check anything, such as a third-party API or a plain file 
 
 <Step id="leader-reads" title="Leases for reads, and what they assume">
 
-Leases also speed up reads. A Raft leader must normally confirm it is still leader with a round of heartbeats before serving a read, or it might be a stale leader in a minority partition. With a **leader lease**, followers promise not to elect anyone else until the lease expires, so the leader can answer reads locally during the lease. This trades a network round trip for a dependence on bounded clock drift.
-
-Select **minority partition** in Script. Compare the isolated old leader with the leader elected by the majority. The player shows their terms and logs; it does not simulate leases or ReadIndex. Use that stale-leader state to explain why a local read needs an authority check.
+<Compare
+  title="Serving a read from the leader"
+  sides={[
+    { title: "Heartbeat round (ReadIndex)", tone: "ok", points: ["Confirm with a majority", "One network round trip"] },
+    { title: "Leader lease", tone: "warn", points: ["Followers hold off elections", "Local read, no round trip", "Needs bounded clock drift"] }
+  ]}
+/>
+Select **minority partition** in Script. The player shows stale-leader state, not leases.
 
 <RaftPlayer />
 
@@ -135,10 +176,15 @@ Select **minority partition** in Script. Compare the isolated old leader with th
 
 <Step id="practice" title="Check your mastery, then fence a failover">
 
-Score at least 80% on fresh variants: quorum size, lease drift margin and pause overrun.
+<Stats
+  title="Lab: fence a failover"
+  items={[
+    { label: "Fencing off", value: "split-brain write", tone: "bad" },
+    { label: "Fencing on, same seed", value: "no violation", tone: "ok" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox), add a database with replicas and **Automatic failover**, **Fence the old leader** off. Kill the leader, let it recover, then switch fencing on and rerun.
 
 <MasteryCheck templates={["election.min-quorum", "lease.drift-margin", "lease.pause-overrun"]} count={5} />
-
-Now break it in the [sandbox](/sandbox). Add a database with replicas and turn on **Automatic failover** with **Fence the old leader** switched off. Drive writes and kill the leader node, then let it recover: the run reports a split-brain write when the old leader accepts writes in an overlapping term. Switch fencing on and run the same seed again; the violation disappears.
 
 </Step>

@@ -61,9 +61,21 @@ estimatedMinutes: 35
 
 <Step id="cascade" title="A cascade: the survivors inherit the load">
 
-Four replicas each run at 80% of capacity. One crashes. The load balancer spreads its traffic over the other three, which now need 80% × 4 ÷ 3 ≈ **107%**. They cannot keep up, queues grow, and latency climbs past client timeouts. Health checks start timing out too, so the balancer removes a second replica, and the last two face even more load.
-
-That is a **cascading failure**: the failure of one part raises load on the rest until they fail as well. The SRE book's chapter on cascading failures calls overload the most common cause. The fix is to make each replica **protect itself**: cap concurrent work, reject excess requests cheaply (load shedding), and keep the health check independent of request load so an overloaded replica is not mistaken for a dead one.
+<Flow
+  title="One of four replicas crashes at 80% load each"
+  height={260}
+  nodes={[
+    { id: "lb", label: "Load balancer", kind: "loadBalancer", x: 0, y: 50 },
+    { id: "r1", label: "Replica 1", kind: "service", x: 100, y: 0, note: "107%" },
+    { id: "r2", label: "Replica 2", kind: "service", x: 100, y: 33, note: "107%" },
+    { id: "r3", label: "Replica 3", kind: "service", x: 100, y: 66, note: "107%" },
+    { id: "r4", label: "Replica 4", kind: "service", x: 100, y: 100, note: "crashed" }
+  ]}
+  edges={[ { from: "lb", to: "r1" }, { from: "lb", to: "r2" }, { from: "lb", to: "r3" }, { from: "lb", to: "r4" } ]}
+  failed={["r4"]}
+  hot={["r1", "r2", "r3"]}
+  caption="80% x 4 / 3 = 107%. Each replica must protect itself: cap work, shed cheaply, keep health checks independent of load."
+/>
 
 <Choice
   id="stop-cascade"
@@ -81,7 +93,17 @@ That is a **cascading failure**: the failure of one part raises load on the rest
 
 <Step id="cascade-order" title="Put the cascade in order">
 
-Cascades follow a recognisable sequence. If you can say which rung you are on, you know which lever still works.
+<Timeline
+  title="Stages of a cascade"
+  events={[
+    { at: "1", label: "Replica crashes", tone: "bad" },
+    { at: "2", label: "Survivors pass saturation", tone: "warn" },
+    { at: "3", label: "Queues grow, timeouts", tone: "warn" },
+    { at: "4", label: "Health checks fail, another ejected", tone: "bad" },
+    { at: "5", label: "Last replicas collapse", tone: "bad" }
+  ]}
+  caption="Spare capacity stops 2, shedding stops 3, load-independent health checks stop 4."
+/>
 
 <Ordering
   id="cascade-sequence"
@@ -101,11 +123,18 @@ Cascades follow a recognisable sequence. If you can say which rung you are on, y
 
 <Step id="retry-storm" title="Retry storms multiply">
 
-A retry is a bet that the failure was transient. When the dependency is overloaded, every retry is extra load on exactly the thing that is failing. Worse, retries **multiply across layers**: if the web tier, the API tier and the data-access layer each make three attempts, one user request becomes 3 × 3 × 3 = **27** attempts at the database.
-
-The December 2021 AWS us-east-1 event is a public example of this shape: a surge of connection attempts overwhelmed network devices between two internal networks, and the resulting latency and errors drove further connection attempts and retries, prolonging the congestion.
-
-The defences: retry at **one layer** only (usually closest to the user or the failing call, not both), use **capped exponential backoff with jitter**, and add a **retry budget** that allows retries only up to a fraction of normal traffic, such as 10%.
+<Flow
+  title="3 x 3 x 3 = 27 attempts at the database"
+  height={200}
+  nodes={[
+    { id: "w", label: "Web tier", kind: "service", x: 0, y: 50, note: "x3" },
+    { id: "a", label: "API tier", kind: "service", x: 50, y: 50, note: "x3" },
+    { id: "d", label: "Data layer", kind: "database", x: 100, y: 50, note: "x3 = 27" }
+  ]}
+  edges={[ { from: "w", to: "a" }, { from: "a", to: "d" } ]}
+  hot={["d"]}
+  caption="Defences: retry at one layer, capped backoff with jitter, a retry budget near 10%. AWS us-east-1, Dec 2021, had this shape."
+/>
 
 <VariantQuestion template="failure.retry-amplification" />
 
@@ -113,9 +142,16 @@ The defences: retry at **one layer** only (usually closest to the user or the fa
 
 <Step id="metastable" title="Metastable failure: the trigger is gone, the outage is not">
 
-Bronson et al. describe a **metastable failure**: a system running efficiently but in a *vulnerable* state is pushed by a **trigger** (a load spike, a slow database, a cache flush) into a bad state that a **sustaining effect** keeps alive after the trigger is removed. The system does not recover on its own.
-
-Retries are the classic sustaining effect. Once requests time out, clients retry, load exceeds capacity, more requests time out, and the loop holds. A cold look-aside cache is another: misses overload the database, slow fills keep the cache cold, and the misses continue. Huang et al. later found this pattern across many public incident reports from large providers.
+<Timeline
+  title="Metastable failure (Bronson et al.)"
+  events={[
+    { at: "Vulnerable", label: "Efficient but fragile", tone: "ok" },
+    { at: "Trigger", label: "Spike, slow DB, cache flush", tone: "warn" },
+    { at: "Sustaining loop", label: "Timeouts, retries, more load", tone: "bad" },
+    { at: "Trigger gone", label: "Outage continues", tone: "bad" }
+  ]}
+  caption="A cold cache is another loop: misses overload the database, slow fills keep it cold."
+/>
 
 <VariantQuestion template="failure.metastable-load" />
 
@@ -123,7 +159,15 @@ Retries are the classic sustaining effect. Once requests time out, clients retry
 
 <Step id="recover" title="Getting out of a metastable state">
 
-Because the loop holds the system in the bad state, fixing the trigger is not enough. You must break the loop: push effective load **below** capacity long enough for queues to drain and caches to warm.
+<Bars
+  title="Break the loop: effective load vs capacity"
+  items={[
+    { label: "Capacity", value: 100, unit: "%", tone: "ok" },
+    { label: "Stuck: offered plus retries", value: 140, unit: "%", tone: "bad" },
+    { label: "After shedding and no retries", value: 70, unit: "%", tone: "ok" }
+  ]}
+  caption="Fixing the trigger is not enough: get load below capacity until queues drain and caches warm. Illustrative."
+/>
 
 <Choice
   id="metastable-recovery"
@@ -143,9 +187,13 @@ Because the loop holds the system in the bad state, fixing the trigger is not en
 
 <Step id="herd" title="Thundering herds">
 
-A **thundering herd** is many clients doing the same thing at the same moment: reconnecting after a server restart, retrying after a shared timeout, running a cron job on the hour, or refreshing cache keys that were written together and expire together. The work might be easy on average and still overload the server in the first second.
-
-The fix is to break the synchronisation. Add **random jitter** to reconnect delays, back-off, TTLs and schedules; let a single request refill a shared key (request coalescing, as in the caching lesson); and ramp traffic back gradually after a restart.
+<Compare
+  title="Thundering herd"
+  sides={[
+    { title: "Causes", tone: "bad", points: ["Reconnect after restart", "Cron on the hour", "Keys expiring together"] },
+    { title: "Fixes", tone: "ok", points: ["Jitter on delays, TTLs, schedules", "Coalesce refills", "Ramp traffic gradually"] }
+  ]}
+/>
 
 <VariantQuestion template="failure.herd-jitter" />
 
@@ -153,11 +201,17 @@ The fix is to break the synchronisation. Add **random jitter** to reconnect dela
 
 <Step id="split-brain" title="Split brain: two leaders">
 
-A network partition separates a primary from its monitor. The monitor promotes a new primary on the other side, but the old one is still alive and still accepting writes. Now two nodes both believe they lead: **split brain**. Each side's writes conflict with the other's, and a later merge may be impossible.
-
-In October 2018, GitHub lost connectivity between its US East Coast hub and primary data center for 43 seconds. Automated failover promoted database primaries on the West Coast while some East Coast writes had not yet replicated; reconciling the two sets of writes took about a day of degraded service.
-
-Containment needs two parts: a **quorum** or lease so that at most one side can be elected, and **fencing tokens**, a number that increases with every leadership change and that storage checks on each write, so a deposed leader's late writes are rejected. [Leader election, leases and fencing tokens](/learn/distributed-systems/leader-election) covers both in depth.
+<Timeline
+  title="GitHub, October 2018"
+  events={[
+    { at: "0 s", label: "Link between East hub and primary DC lost", tone: "bad" },
+    { at: "43 s", label: "Failover promoted West primaries", tone: "warn" },
+    { at: "Then", label: "Unreplicated East writes diverged", tone: "bad" },
+    { at: "About a day", label: "Reconciliation, degraded service", tone: "warn" }
+  ]}
+  caption="Contain with a quorum or lease plus fencing tokens."
+/>
+See [leader election](/learn/distributed-systems/leader-election).
 
 <Choice
   id="fencing"
@@ -175,9 +229,14 @@ Containment needs two parts: a **quorum** or lease so that at most one side can 
 
 <Step id="gray" title="Gray failure: healthy to the monitor, broken for users">
 
-Not every failure is a crash. A node with a failing disk controller, a NIC dropping 2% of packets, or one bad dependency path may still answer its health check perfectly. Huang et al. call this **gray failure** and define it by **differential observability**: the failure detector and the application see different health.
-
-Gray failures are found by measuring what clients see: per-backend success rate and latency as observed by callers, outlier detection that ejects a backend whose errors stand out from its peers, and health checks that exercise real dependencies.
+<Compare
+  title="Differential observability"
+  sides={[
+    { title: "Monitor sees", tone: "ok", points: ["Health check answers in 1 ms"] },
+    { title: "Users see", tone: "bad", points: ["5% of requests time out"] },
+    { title: "Catches it", tone: "info", points: ["Caller-observed success and latency", "Outlier ejection vs peers", "Real dependency checks"] }
+  ]}
+/>
 
 <Choice
   id="gray-detect"
@@ -195,10 +254,15 @@ Gray failures are found by measuring what clients see: per-backend success rate 
 
 <Step id="practice" title="Check your mastery, then break something">
 
-The mastery check draws fresh retry, metastability and herd variants. Score 80% or more to master the lesson.
+<Stats
+  title="Lab"
+  items={[
+    { label: "Sweep type", value: "continuous ramp", sub: "state carries over", tone: "warn" },
+    { label: "Shows", value: "retry amplification, cache churn", tone: "bad" }
+  ]}
+/>
+Score 80% or more. Open the [cache-aside design](/sandbox?template=cache-aside), **Scale** tab, run a continuous ramp. Then try the [cache restart challenge](/challenges/cache-aside-recovery).
 
 <MasteryCheck templates={["failure.retry-amplification", "failure.metastable-load", "failure.herd-jitter"]} count={6} />
-
-Now run it. Open the [cache-aside design in the sandbox](/sandbox?template=cache-aside), switch to the **Scale** tab, and run a **continuous ramp** sweep: state carries over between load levels, so retry amplification and cache churn show up on the failure ladder. Then try the [cache restart challenge](/challenges/cache-aside-recovery), a small metastable trigger you must survive.
 
 </Step>

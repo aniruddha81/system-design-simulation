@@ -42,9 +42,14 @@ estimatedMinutes: 35
 
 <Step id="the-problem" title="One business action, several databases">
 
-Booking a trip reserves a flight, a hotel room and a car, each owned by a different service with its own database. The business wants all three or none. Inside one database, a transaction gives you that. Across services, there is no shared transaction, and naive sequencing leaves you with a flight and no hotel when the second call fails.
-
-There are two broad answers. **Atomic commit** protocols such as two-phase commit make all participants commit or abort together. **Sagas** give up atomicity and isolation, commit each step locally, and undo with compensations when a later step fails.
+<Compare
+  title="All three or none, across services"
+  sides={[
+    { title: "Atomic commit (2PC)", tone: "info", points: ["Commit or abort together", "Locks held throughout"] },
+    { title: "Saga", tone: "info", points: ["Commit each step locally", "Undo with compensations", "No isolation"] },
+    { title: "Naive sequence", tone: "bad", points: ["Flight booked, hotel call fails", "Left half done"] }
+  ]}
+/>
 
 <Choice
   id="pick-pattern"
@@ -62,9 +67,19 @@ There are two broad answers. **Atomic commit** protocols such as two-phase commi
 
 <Step id="two-pc" title="Two-phase commit">
 
-In 2PC a **coordinator** asks every participant to **prepare**. A participant that votes yes durably records that it can commit, holding its locks, and promises to obey the coordinator's decision. If every vote is yes, the coordinator durably records **commit** and tells everyone; any no vote, or a missing vote, means **abort**. Participants then acknowledge so the coordinator can forget the transaction.
-
-The cost is at least two round trips and several forced log writes on the commit path, with locks held throughout. Databases use 2PC internally for distributed transactions, and the XA standard exposes it across vendors.
+<Sequence
+  title="Two-phase commit"
+  actors={["Coordinator", "Participant 1", "Participant 2"]}
+  messages={[
+    { from: "Coordinator", to: "Participant 1", label: "prepare" },
+    { from: "Coordinator", to: "Participant 2", label: "prepare" },
+    { from: "Participant 1", to: "Coordinator", label: "yes (locks held)", tone: "ok" },
+    { from: "Participant 2", to: "Coordinator", label: "yes (locks held)", tone: "ok" },
+    { from: "Coordinator", to: "Participant 1", label: "commit (logged first)", tone: "info" },
+    { from: "Coordinator", to: "Participant 2", label: "commit", tone: "info" }
+  ]}
+  caption="Two round trips and forced log writes on the commit path. XA exposes it across vendors."
+/>
 
 <VariantQuestion template="twopc.messages" />
 
@@ -72,11 +87,17 @@ The cost is at least two round trips and several forced log writes on the commit
 
 <Step id="blocking" title="Why 2PC blocks">
 
-The weak point is the window after a participant votes yes. It has promised to commit if told to, so it cannot abort on its own; it also cannot commit, because another participant may have voted no. If the coordinator crashes now, the participant must hold its locks and wait until the coordinator recovers. Its rows are unavailable to everyone else in the meantime.
-
-That is why 2PC is called a **blocking** protocol. Gray and Lamport (2006) showed that replicating the coordinator's decision with Paxos removes the single point of blocking; systems like Spanner run 2PC over Paxos-replicated groups for exactly this reason.
-
-Keep Transaction protocol set to **Two-phase commit** and select **coordinator crash after prepare** in Script. Watch prepared participants retain their state when the coordinator goes offline.
+<Sequence
+  title="Why 2PC blocks"
+  actors={["Coordinator", "Participant"]}
+  messages={[
+    { from: "Coordinator", to: "Participant", label: "prepare" },
+    { from: "Participant", to: "Coordinator", label: "yes: promised, locks held", tone: "ok" },
+    { from: "Coordinator", to: "Participant", label: "coordinator crashes", lost: true, tone: "bad" }
+  ]}
+  caption="The participant can neither commit nor abort and waits. Paxos-replicate the coordinator (Gray and Lamport, 2006; Spanner)."
+/>
+Set Transaction protocol to **Two-phase commit** and select **coordinator crash after prepare** in Script.
 
 <TwoPhasePlayer />
 
@@ -86,7 +107,14 @@ Keep Transaction protocol set to **Two-phase commit** and select **coordinator c
 
 <Step id="in-doubt" title="The in-doubt participant">
 
-With Transaction protocol set to **Two-phase commit**, select **coordinator crash after prepare** in Script. Step through the participant timeout and check whether it releases the prepared participant; then answer below.
+<Compare
+  title="What may a participant do alone?"
+  sides={[
+    { title: "Already voted yes", tone: "bad", points: ["Keep locks and wait", "Cannot unilaterally abort or commit"] },
+    { title: "Not voted yet", tone: "ok", points: ["May abort", "No commit was possible without its vote"] }
+  ]}
+/>
+Set Transaction protocol to **Two-phase commit**, select **coordinator crash after prepare** in Script.
 
 <TwoPhasePlayer />
 
@@ -102,15 +130,21 @@ With Transaction protocol set to **Two-phase commit**, select **coordinator cras
   ]}
 />
 
-A participant that has *not* voted yet is in a different position: it may unilaterally abort, because the coordinator cannot have decided commit without its vote.
-
 </Step>
 
 <Step id="saga" title="Sagas: local commits and compensations">
 
-Garcia-Molina and Salem introduced **sagas** in 1987 for long-lived transactions that would hold locks far too long under 2PC. A saga is a sequence of local transactions T1, T2 … Tn, each with a **compensating transaction** C1, C2 … that semantically undoes it. If Tk fails, the saga runs C(k−1) down to C1.
-
-Compensation is semantic, not a rollback: you cannot un-send an email, but you can send a correction; you cannot erase a charge, but you can refund it. That gives sagas their two famous weaknesses: other transactions can see intermediate states (no isolation), and some steps cannot be compensated at all.
+<Timeline
+  title="A saga: T1..Tn with compensations"
+  events={[
+    { at: "T1", label: "Reserve flight", tone: "ok" },
+    { at: "T2", label: "Reserve hotel", tone: "ok" },
+    { at: "T3", label: "Reserve car", tone: "ok" },
+    { at: "T4", label: "Charge card fails", tone: "bad" },
+    { at: "C3, C2, C1", label: "Undo in reverse", tone: "warn" }
+  ]}
+  caption="Garcia-Molina and Salem, 1987. Compensation is semantic: refund, not erase. Others can see in-between states."
+/>
 
 <VariantQuestion template="saga.compensations" />
 
@@ -118,9 +152,16 @@ Compensation is semantic, not a rollback: you cannot un-send an email, but you c
 
 <Step id="compensate" title="Order the compensations, place the irreversible step last">
 
-Compensations run in reverse order, so each undo sees the state its forward step left. Steps that cannot be undone, such as shipping a parcel or sending a wire transfer that cannot be recalled, should be the **pivot**: placed after every step that might still fail, so that once the pivot commits, the remaining steps are ones that can be retried until they succeed.
-
-Set Transaction protocol to **Saga** and select **saga failure and reverse compensation** in Script. Follow the completed steps and the reverse compensation path after the next step fails.
+<Compare
+  title="Pivot: the irreversible step goes last"
+  sides={[
+    { title: "Before the pivot", tone: "warn", points: ["Can fail", "Needs compensation"] },
+    { title: "Pivot", tone: "bad", points: ["Cannot be undone", "Ship parcel, send wire"] },
+    { title: "After the pivot", tone: "ok", points: ["Retry until success", "Cannot fail for good"] }
+  ]}
+  caption="Compensations run in reverse and must be idempotent."
+/>
+Set Transaction protocol to **Saga** and select **saga failure and reverse compensation** in Script.
 
 <TwoPhasePlayer />
 
@@ -142,11 +183,23 @@ Set Transaction protocol to **Saga** and select **saga failure and reverse compe
 
 <Step id="outbox" title="The dual-write problem and the outbox">
 
-Every saga step must do two things: commit its local change and tell the next step, usually by publishing a message. Writing to a database and to a broker are two separate systems. Commit then publish, and a crash in between loses the message; publish then commit, and a failed commit leaves a message about something that never happened.
-
-The **transactional outbox** writes the message into an outbox table in the *same* local transaction as the business change. A separate relay reads the outbox and publishes to the broker, marking rows as sent. A crash after publishing but before marking means the relay publishes again, so delivery is at least once and consumers must deduplicate, as in the [idempotency lesson](/learn/distributed-systems/idempotency).
-
-Set Transaction protocol to **Transactional outbox** and select **transactional outbox** in Script. Watch the atomic local write, the relay retry after a crash and the consumer deduplicate the repeated delivery.
+<Flow
+  title="Transactional outbox"
+  height={220}
+  nodes={[
+    { id: "svc", label: "Order service", kind: "service", x: 0, y: 50 },
+    { id: "db", label: "Orders + outbox", kind: "database", x: 40, y: 50, note: "one local transaction" },
+    { id: "rel", label: "Relay", kind: "worker", x: 70, y: 50, note: "publish, mark sent" },
+    { id: "q", label: "Broker", kind: "queue", x: 100, y: 50 }
+  ]}
+  edges={[
+    { from: "svc", to: "db", label: "commit both" },
+    { from: "db", to: "rel", label: "poll" },
+    { from: "rel", to: "q", label: "at least once" }
+  ]}
+  caption="Commit-then-publish loses the message on a crash. The relay may republish, so consumers must dedupe."
+/>
+Set Transaction protocol to **Transactional outbox** and select **transactional outbox** in Script.
 
 <TwoPhasePlayer />
 
@@ -166,10 +219,15 @@ Set Transaction protocol to **Transactional outbox** and select **transactional 
 
 <Step id="practice" title="Check your mastery, then redeliver">
 
-Score at least 80% on fresh variants.
+<Stats
+  title="Lab: redeliver"
+  items={[
+    { label: "Kill consumer", value: "redelivery", tone: "warn" },
+    { label: "Dedup store, same seed", value: "no duplicates", tone: "ok" }
+  ]}
+/>
+Score 80% or more. In the [sandbox](/sandbox), publish from a service to a queue into a database, kill the consumer, then add dedup and rerun.
 
 <MasteryCheck templates={["twopc.messages", "twopc.decision-latency", "saga.compensations"]} count={5} />
-
-In the [sandbox](/sandbox), publish from a service to a queue and consume into a database. Kill the consumer mid-run so the queue redelivers, and look for duplicate effects; then make the consumer deduplicate with a dedup store and run the same seed again.
 
 </Step>
