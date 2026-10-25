@@ -7,15 +7,14 @@ import { env } from "@/server/env";
 import { rateLimit } from "@/server/rate-limit";
 import { log } from "@/server/log";
 import { errorPath, scrub } from "@/lib/report-error";
+import { rejectUnlessSameOriginJson } from "../guard";
 import { readBody } from "../body";
 
 const schema = z.object({ message: z.string().max(2000), stack: z.string().max(8000).optional(), url: z.string().max(2000) });
 const headers = { "Cache-Control": "no-store" };
 export async function POST(req: Request) {
-  if (req.headers.get("origin") !== new URL(env().BETTER_AUTH_URL).origin)
-    return Response.json({ error: "bad origin" }, { status: 403, headers });
-  if (!req.headers.get("content-type")?.startsWith("application/json"))
-    return Response.json({ error: "json only" }, { status: 415, headers });
+  const rejected = rejectUnlessSameOriginJson(req);
+  if (rejected) return rejected;
   // Vercel and Caddy (deploy/Caddyfile) both overwrite x-real-ip with the peer address. Never read client-settable headers like x-forwarded-for or x-vercel-forwarded-for.
   const ip = req.headers.get("x-real-ip")?.trim() || "unknown";
   const hash = (value: string) => createHmac("sha256", env().BETTER_AUTH_SECRET).update(value).digest("hex");

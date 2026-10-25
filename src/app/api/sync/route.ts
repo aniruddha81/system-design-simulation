@@ -1,10 +1,10 @@
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { auth } from "@/server/auth";
-import { env } from "@/server/env";
 import { MAX_PAGE, pullRecords, pushRecords, pushSchema } from "@/server/sync";
 
 import { rateLimit } from "@/server/rate-limit";
+import { rejectUnlessSameOriginJson } from "../guard";
 import { readBody } from "../body";
 
 const MAX_BODY = 4 * 1024 * 1024;
@@ -45,17 +45,8 @@ export async function POST(req: Request) {
       { error: "unauthorized" },
       { status: 401, headers: noStore },
     );
-  const origin = req.headers.get("origin");
-  if (!origin || origin !== new URL(env().BETTER_AUTH_URL).origin)
-    return NextResponse.json(
-      { error: "bad origin" },
-      { status: 403, headers: noStore },
-    );
-  if (!req.headers.get("content-type")?.startsWith("application/json"))
-    return NextResponse.json(
-      { error: "json only" },
-      { status: 415, headers: noStore },
-    );
+  const rejected = rejectUnlessSameOriginJson(req);
+  if (rejected) return rejected;
   if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY)
     return NextResponse.json(
       { error: "too large" },
