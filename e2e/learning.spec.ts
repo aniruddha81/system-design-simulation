@@ -63,6 +63,7 @@ test("complete every caching lesson step and retain completion after reload", as
   await expect(page.getByRole("group", { name: "Mastery check result" })).toContainText("Lesson mastered");
   await expect(page.getByText("Lesson complete. Progress saved on this device.", { exact: false })).toBeVisible();
   await page.getByRole("link", { name: "Progress", exact: true }).click();
+  await page.waitForURL("**/progress");
   await page.reload();
   const lesson = page.getByRole("listitem").filter({ has: page.getByRole("link", { name: "Caching: cache-aside, eviction, stampede", exact: true }) });
   await expect(lesson).toContainText("9 of 9 steps");
@@ -111,6 +112,7 @@ test("insert caches on both service–DB edges, pass the challenge, and reload t
   expect(stars).toBeGreaterThan(0);
   await expect(verdict).toContainText("Progress saved.");
   await page.getByRole("link", { name: "Progress", exact: true }).click();
+  await page.waitForURL("**/progress");
   await page.reload();
   const challenge = page.getByRole("listitem").filter({ has: page.getByRole("link", { name: "Keep reads fast through a cache restart", exact: true }) });
   await expect(challenge).toContainText(`${"★".repeat(stars)} Passed`);

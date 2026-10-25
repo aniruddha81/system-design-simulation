@@ -23,7 +23,9 @@ export function check(rec: PushRecord): Checked | string {
   if (!parsed.success) return `${rec.store}/${rec.key}: invalid record`;
   if (String((parsed.data as Record<string, unknown>)[keyPaths[rec.store]]) !== rec.key) return `${rec.store}/${rec.key}: key does not match record`;
   // Per-device counters stay out of the cloud copy, so identical content is byte-identical and never ping-pongs between devices.
-  const { revision: _r, restoreGeneration: _g, ...data } = parsed.data as Record<string, unknown>;
+  const data = { ...(parsed.data as Record<string, unknown>) };
+  delete data.revision;
+  delete data.restoreGeneration;
   const bytes = Buffer.byteLength(JSON.stringify(data));
   if (bytes > MAX_BYTES[rec.store]) return `${rec.store}/${rec.key}: record too large`;
   return { store: rec.store, key: rec.key, updatedAt: rec.updatedAt, deleted: false, data, bytes };

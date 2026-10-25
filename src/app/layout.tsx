@@ -6,6 +6,7 @@ import { MobileNavMenu, NavLinks, Providers, ThemeToggle } from "@/components/ui
 import { CloudSync } from "@/components/auth/CloudSync";
 import { UserMenu } from "@/components/auth/UserMenu";
 import { CommandPalette } from "@/components/search";
+import { StorageBanner } from "@/components/ui/storage-banner";
 import { SITE_NAME, SITE_URL } from "@/lib/content/schema";
 import "./globals.css";
 
@@ -62,10 +63,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             >
               <Link
                 href="/"
+                aria-label="System Design Simulator, home"
                 className="group flex min-w-0 shrink-0 items-center gap-2 py-1 sm:gap-2.5 lg:justify-self-start"
               >
                 <Logo />
-                <span className="truncate font-display text-[1rem] leading-none tracking-tight sm:text-[1.125rem]">
+                <span className="hidden truncate font-display text-[1rem] sm:inline leading-none tracking-tight sm:text-[1.125rem]">
                   System Design <em className="text-accent">Simulator</em>
                 </span>
               </Link>
@@ -80,6 +82,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               </div>
             </nav>
           </header>
+          <StorageBanner />
           <main id="main" tabIndex={-1} className="flex-1 overflow-x-clip outline-none">
             <ViewTransition>{children}</ViewTransition>
           </main>

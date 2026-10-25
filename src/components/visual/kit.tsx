@@ -26,8 +26,8 @@ export type FlowNode = { id: string; label: string; kind: Kind; /** 0-100, left 
 export type FlowEdge = { from: string; to: string; label?: string; dashed?: boolean };
 
 const W = 640;
-const NW = 112;
-const NH = 44;
+const NW = 136;
+const NH = 52;
 
 /** Architecture diagram: typed nodes, labelled arrows, packets flowing along edges, failed nodes marked. */
 export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240, caption }: { title: string; nodes: FlowNode[]; edges: FlowEdge[]; failed?: string[]; hot?: string[]; height?: number; caption?: string }) {
@@ -35,7 +35,8 @@ export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240,
   const uid = title.replace(/\W+/g, "");
   return (
     <Figure title={title} caption={caption}>
-      <svg viewBox={`0 0 ${W} ${height}`} className="h-auto w-full" role="img" aria-label={`${title}: ${nodes.map((n) => n.label).join(", ")}`}>
+      <div className="overflow-x-auto max-[520px]:[mask-image:linear-gradient(to_right,#000_88%,transparent)]" tabIndex={0} aria-label={`${title} (scrollable)`}>
+      <svg viewBox={`0 0 ${W} ${height}`} className="h-auto w-full min-w-[30rem]" role="img" aria-label={`${title}: ${nodes.map((n) => n.label).join(", ")}`}>
         <defs>
           <marker id={`ar-${uid}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0 1 L9 5 L0 9 z" fill="var(--ink-2)" />
@@ -63,7 +64,7 @@ export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240,
                 </circle>
               )}
               {e.label ? (
-                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} textAnchor="middle" fontSize="11" fill="var(--text-muted)" stroke="var(--surface)" strokeWidth="3" paintOrder="stroke">
+                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} textAnchor="middle" fontSize="12.5" fill="var(--text-muted)" stroke="var(--surface)" strokeWidth="3" paintOrder="stroke">
                   {e.label}
                 </text>
               ) : null}
@@ -78,15 +79,15 @@ export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240,
           return (
             <g key={n.id} transform={`translate(${p.x - NW / 2} ${p.y - NH / 2})`}>
               <rect width={NW} height={NH} rx="7" fill="var(--bg)" stroke={color} strokeWidth={bad || warm ? 2.6 : 1.8} strokeDasharray={bad ? "5 3" : undefined} />
-              <rect width="30" height={NH} rx="7" fill={color} />
-              <text x="15" y={NH / 2 + 5} textAnchor="middle" fontSize="15" fill="var(--bg)" aria-hidden>
+              <rect width="32" height={NH} rx="7" fill={color} />
+              <text x="16" y={NH / 2 + 6} textAnchor="middle" fontSize="17" fill="var(--bg)" aria-hidden>
                 {bad ? "✕" : GLYPH[n.kind]}
               </text>
-              <text x="36" y={n.note ? 19 : NH / 2 + 4} fontSize="12" fontWeight="600" fill="var(--text)">
+              <text x="38" y={n.note ? 22 : NH / 2 + 5} fontSize="14" fontWeight="600" fill="var(--text)">
                 {n.label}
               </text>
               {n.note ? (
-                <text x="36" y="34" fontSize="10.5" fill="var(--text-muted)">
+                <text x="38" y="40" fontSize="11.5" fill="var(--text-muted)">
                   {n.note}
                 </text>
               ) : null}
@@ -94,6 +95,7 @@ export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240,
           );
         })}
       </svg>
+      </div>
     </Figure>
   );
 }
@@ -137,7 +139,7 @@ export function Stats({ title, items, caption }: { title: string; items: StatIte
         {items.map((i) => (
           <li key={i.label} className="rounded-md bg-surface-2 p-3" style={{ borderLeft: `4px solid ${TONE_VAR[i.tone ?? "info"]}` }}>
             <p className="text-xs uppercase tracking-wide text-muted">{i.label}</p>
-            <p className="num text-2xl font-semibold tracking-tight">
+            <p className={`num font-semibold tracking-tight ${i.value.length > 22 ? "text-sm" : i.value.length > 10 ? "text-lg" : "text-2xl"}`}>
               <span aria-hidden className="mr-1 text-base" style={{ color: TONE_VAR[i.tone ?? "info"] }}>
                 {TONE_GLYPH[i.tone ?? "info"]}
               </span>
@@ -162,7 +164,8 @@ export function Sequence({ title, actors, messages, caption }: { title: string; 
   const h = top + messages.length * row + 16;
   return (
     <Figure title={title} caption={caption}>
-      <svg viewBox={`0 0 ${W} ${h}`} className="h-auto w-full" role="img" aria-label={`${title}: ${messages.map((m) => `${m.from} to ${m.to}: ${m.label}`).join("; ")}`}>
+      <div className="overflow-x-auto max-[520px]:[mask-image:linear-gradient(to_right,#000_88%,transparent)]" tabIndex={0} aria-label={`${title} (scrollable)`}>
+      <svg viewBox={`0 0 ${W} ${h}`} className="h-auto w-full min-w-[30rem]" role="img" aria-label={`${title}: ${messages.map((m) => `${m.from} to ${m.to}: ${m.label}`).join("; ")}`}>
         <defs>
           <marker id={`sq-${title.replace(/\W+/g, "")}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
             <path d="M0 1 L9 5 L0 9 z" fill="var(--ink-2)" />
@@ -170,7 +173,7 @@ export function Sequence({ title, actors, messages, caption }: { title: string; 
         </defs>
         {actors.map((a) => (
           <g key={a}>
-            <text x={ax(a)} y="16" textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--text)">
+            <text x={ax(a)} y="16" textAnchor="middle" fontSize="14" fontWeight="600" fill="var(--text)">
               {a}
             </text>
             <line x1={ax(a)} x2={ax(a)} y1="24" y2={h - 6} stroke="var(--rule)" strokeDasharray="3 4" />
@@ -189,13 +192,14 @@ export function Sequence({ title, actors, messages, caption }: { title: string; 
                   ✕
                 </text>
               ) : null}
-              <text x={(x1 + x2) / 2} y={y - 5} textAnchor="middle" fontSize="11" fill={m.tone ? c : "var(--text)"} stroke="var(--surface)" strokeWidth="3" paintOrder="stroke">
+              <text x={(x1 + x2) / 2} y={y - 5} textAnchor="middle" fontSize="12.5" fill={m.tone ? c : "var(--text)"} stroke="var(--surface)" strokeWidth="3" paintOrder="stroke">
                 {m.label}
               </text>
             </g>
           );
         })}
       </svg>
+      </div>
     </Figure>
   );
 }

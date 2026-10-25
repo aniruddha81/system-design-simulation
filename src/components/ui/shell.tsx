@@ -211,7 +211,8 @@ function MobileMenuInner({ pathname = "" }: { pathname?: string }) {
         aria-label="Open navigation menu"
         className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-[var(--radius)] border border-rule bg-surface px-2.5 text-xs font-medium text-fg transition-colors hover:border-fg [&::-webkit-details-marker]:hidden"
       >
-        <span>{current ? current.label : "Menu"}</span>
+        <span className="min-[400px]:hidden">Menu</span>
+        <span className="hidden min-[400px]:inline">{current ? current.label : "Menu"}</span>
         <svg
           aria-hidden
           viewBox="0 0 12 12"
@@ -296,7 +297,7 @@ export function ThemeToggle() {
       type="button"
       className="group relative grid h-8 shrink-0 grid-cols-2 items-center rounded-[var(--radius)] border border-rule bg-surface p-0.5 text-xs font-medium sm:text-[0.8125rem]"
       onClick={() => setPref("theme", next)}
-      aria-label={`Switch to ${nextName} theme`}
+      aria-label={`Paper Slate. Switch to ${nextName} theme`}
       title={theme === "system" ? `Following your system theme. Switch to ${nextName}` : `Switch to ${nextName} theme`}
     >
       <span
@@ -305,7 +306,7 @@ export function ThemeToggle() {
       />
       <span aria-hidden className={`relative px-2 transition-colors sm:px-2.5 ${resolvedLight ? "text-bg" : "text-muted group-hover:text-fg"}`}>
         Paper
-      </span>
+      </span>{" "}
       <span aria-hidden className={`relative px-2 transition-colors sm:px-2.5 ${resolvedLight ? "text-muted group-hover:text-fg" : "text-bg"}`}>
         Slate
       </span>

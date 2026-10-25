@@ -42,7 +42,7 @@ for (const hostile of [
     await page.getByLabel("Import a design file (.sds.json)", { exact: true }).setInputFiles({
       name: "hostile.sds.json", mimeType: "application/json", buffer: Buffer.from(hostile.body),
     });
-    await expect(page.getByRole("alert")).toContainText(hostile.error);
+    await expect(page.locator('p[role="alert"]')).toContainText(hostile.error);
     await expect(page).toHaveURL("/sandbox");
     await page.reload();
     await expect(page.getByText("No drafts yet.", { exact: true })).toBeVisible();

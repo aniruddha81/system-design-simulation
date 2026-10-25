@@ -21,7 +21,7 @@ for (const route of routes) {
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       }
       if (route === "/progress") await expect(page.getByRole("status").filter({ hasText: "Loading progress" })).toHaveCount(0);
-      const toggle = page.getByRole("button", { name: /^Switch to .* theme$/ });
+      const toggle = page.getByRole("button", { name: /Switch to .* theme$/ });
       await expect(toggle).toBeVisible();
       if (await page.locator("html").getAttribute("data-theme") !== theme) await toggle.click();
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
