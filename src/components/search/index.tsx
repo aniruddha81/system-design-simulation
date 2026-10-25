@@ -72,7 +72,7 @@ export function CommandPalette() {
         type="button"
         onClick={open}
         aria-haspopup="dialog"
-        aria-label="Search (Command+K or Control+K)"
+        aria-label="Search ⌘K" aria-keyshortcuts="Meta+K Control+K"
         className="group flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--radius)] border border-rule bg-surface px-2 text-xs font-medium text-ink-2 transition-colors hover:border-fg hover:text-fg sm:gap-2 sm:px-2.5 sm:text-[0.8125rem]"
       >
         <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 text-muted transition-colors group-hover:text-fg" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
