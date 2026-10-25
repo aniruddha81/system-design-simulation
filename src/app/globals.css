@@ -633,7 +633,7 @@
 /* Classroom & lecture projector mode: larger base font and stronger rules for lecture halls. */
 :root[data-projector="true"] {
   font-size: 112.5%;
-  --rule: var(--text-2);
+  --rule: var(--ink-2);
 }
 
 @media (prefers-reduced-motion: reduce) {

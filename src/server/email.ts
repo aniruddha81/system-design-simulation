@@ -10,7 +10,8 @@ export function emailConfigured() {
 }
 
 /** When mail can be delivered, sign-up requires a verified email. Without a provider nobody is locked out. */
-export const emailEnforced = emailConfigured;
+// Fail closed in production: a missing Brevo setting must not silently turn verification off.
+export const emailEnforced = () => process.env.NODE_ENV === "production" || emailConfigured();
 
 /** "Name <a@b.c>" or "a@b.c" -> {name?, email}. */
 export function parseSender(from: string) {
@@ -43,7 +44,7 @@ function escape(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 }
 
-export function accountEmail(action: "Verify your email" | "Reset your password", url: string) {
+export function accountEmail(action: "Verify your email" | "Reset your password" | "Confirm account deletion", url: string) {
   const link = new URL(url);
   if (link.protocol !== "https:" && link.protocol !== "http:") throw new Error("Invalid email link");
   return {

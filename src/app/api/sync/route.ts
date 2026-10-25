@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       { status: 401, headers: noStore },
     );
   const origin = req.headers.get("origin");
-  if (origin && origin !== new URL(env().BETTER_AUTH_URL).origin)
+  if (!origin || origin !== new URL(env().BETTER_AUTH_URL).origin)
     return NextResponse.json(
       { error: "bad origin" },
       { status: 403, headers: noStore },

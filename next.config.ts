@@ -54,6 +54,8 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },
+      { source: "/icons/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
+      { source: "/search-index.json", headers: [{ key: "Cache-Control", value: "public, max-age=3600, stale-while-revalidate=86400" }] },
       // The sandbox and dev tools are never indexed (PLAN §16).
       { source: "/sandbox/:path*", headers: [{ key: "X-Robots-Tag", value: "noindex" }] },
       { source: "/dev/:path*", headers: [{ key: "X-Robots-Tag", value: "noindex" }] },

@@ -79,7 +79,8 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$EC2_SSH_KEY" > "$SDS_SSH_KEY"
           chmod 600 "$SDS_SSH_KEY"
-          ssh-keyscan -T 10 "${HOST#*@}" >> ~/.ssh/known_hosts
+          # Host key pinned in the repo variable EC2_HOST_KEY (ssh-keyscan -t ed25519 <ip>), not discovered over the network at deploy time.
+          echo "${HOST#*@} ${{ vars.EC2_HOST_KEY }}" >> ~/.ssh/known_hosts
       - run: deploy/deploy.sh "$HOST"
       - name: Health check
         run: |

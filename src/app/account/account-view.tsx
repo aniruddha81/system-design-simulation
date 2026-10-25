@@ -75,13 +75,15 @@ function Form({ providers, emailEnabled }: { providers: ("github" | "google")[];
 function Signed({ name, email, verify }: { name: string; email: string; verify: boolean }) {
   const sync = useSyncState();
   const [confirm, setConfirm] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const tone = { off: "muted", idle: "ok", syncing: "warn", error: "bad" } as const;
   const word = { off: "Off", idle: "Synced", syncing: "Syncing", error: "Failed" } as const;
 
   async function erase() {
-    const { error } = await authClient.deleteUser();
-    if (error) setError(error.message ?? "Sign in again, then retry.");
+    const { error } = await authClient.deleteUser(password ? { password } : {});
+    if (error) setError(error.message ?? "Could not delete the account.");
+    else if (!password) setError("Check your email for a link that confirms the deletion.");
   }
 
   return (
@@ -113,6 +115,7 @@ function Signed({ name, email, verify }: { name: string; email: string; verify: 
         <summary className="cursor-pointer font-medium text-danger">Delete account</summary>
         <p className="mt-2 text-sm text-muted">Erases your account and every synced record. Local data stays on this device.</p>
         <label className="mt-3 grid gap-1 text-sm">Type DELETE<input value={confirm} onChange={(e) => setConfirm(e.target.value)} className={field} /></label>
+        <label className="mt-3 grid gap-1 text-sm">Password (or leave empty to confirm by email)<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={field} /></label>
         {error && <p role="alert" className="mt-2 text-danger"><span aria-hidden>! </span>{error}</p>}
         <button className="btn mt-3" disabled={confirm !== "DELETE"} onClick={erase}>Delete my account</button>
       </details>

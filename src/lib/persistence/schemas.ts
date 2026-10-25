@@ -8,6 +8,11 @@ const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const positive = z.number().positive();
 const fraction = z.number().min(0).max(1);
 const id = z.string().min(1).max(512);
+// Mirrors Annotation in components/sandbox/design-store.ts. Shared links and sync payloads are untrusted, and the board and SVG export assume this shape.
+const annotation = z.discriminatedUnion("type", [
+  z.object({ id, type: z.literal("stroke"), color: z.string().max(64), points: z.array(z.tuple([z.number(), z.number(), z.number()])).max(5000) }),
+  z.object({ id, type: z.enum(["text", "note"]), x: z.number(), y: z.number(), text: z.string().max(2000) }),
+]);
 const dist = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("constant"), us: positive }),
   z.object({ kind: z.literal("exponential"), meanUs: positive }),
@@ -82,7 +87,7 @@ export const designSchema: z.ZodType<Design> = z.object({
   entities: z.array(z.object({ name: id, store: id, fields: z.array(z.object({ name: id, type: z.enum(["string", "int", "float", "bool", "timestamp"]), bytes: z.object({ meanBytes: z.number().nonnegative(), sdBytes: z.number().nonnegative() }) })), primaryKey: id, indexes: z.array(z.object({ name: id, fields: z.array(id), unique: z.boolean() })), shardKey: id.optional(), dataset: z.object({ count: count.max(1_000_000), keys: keyDist, initial: z.record(id, z.number()).optional() }) })).optional(),
   regions: z.object({ names: z.array(id), latencyUs: z.array(z.array(count)), egressCostPerGB: z.array(z.array(z.number().nonnegative())) }).optional(),
   groups: z.array(z.object({ id, kind: z.enum(["region", "zone"]), name: z.string(), position: z.object({ x: z.number(), y: z.number() }), size: z.object({ w: positive, h: positive }) })).optional(),
-  annotations: z.array(z.json()).optional(),
+  annotations: z.array(annotation).max(500).optional(),
 });
 
 const base = { schemaVersion: z.literal(1), revision: count };

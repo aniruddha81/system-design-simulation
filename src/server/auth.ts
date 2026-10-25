@@ -31,7 +31,15 @@ export const auth = betterAuth({
     },
   },
   socialProviders: social,
-  user: { deleteUser: { enabled: true } }, // privacy: learners can erase their account and every synced record (cascade)
+  user: {
+    deleteUser: {
+      enabled: true,
+      // Without the password, deletion needs a confirmation link sent to the account email, so a stolen session cannot erase the account.
+      sendDeleteAccountVerification: async ({ user, url }) => {
+        await sendEmail({ to: user.email, ...accountEmail("Confirm account deletion", url) });
+      },
+    },
+  }, // privacy: learners can erase their account and every synced record (cascade)
   session: { expiresIn: 60 * 60 * 24 * 30, updateAge: 60 * 60 * 24, cookieCache: { enabled: true, maxAge: 5 * 60 } },
   // Counters live in Postgres so limits hold across serverless instances.
   rateLimit: { enabled: true, window: 60, max: 60, storage: "database", customRules: { "/sign-in/email": { window: 60, max: 8 }, "/sign-up/email": { window: 3600, max: 10 } } },

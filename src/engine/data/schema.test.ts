@@ -40,7 +40,7 @@ it('round-trips every P2 design field, stripping unknown fields and enforcing gr
     entities: [{ name: 'users', store: 'node', fields: ['string', 'int', 'float', 'bool', 'timestamp'].map(type => ({ name: type, type: type as 'string' | 'int' | 'float' | 'bool' | 'timestamp', bytes: { meanBytes: 10, sdBytes: 2 } })), primaryKey: 'string', indexes: [{ name: 'id', fields: ['int'], unique: true }], shardKey: 'int', dataset: { count: 10, keys: { kind: 'hotspot', n: 10, hotFraction: .5 }, initial: { int: 3 } } }],
     regions: { names: ['east'], latencyUs: [[0]], egressCostPerGB: [[0]] },
     groups: [{ id: 'region', kind: 'region', name: 'east', position: { x: 0, y: 0 }, size: { w: 100, h: 100 } }, { id: 'zone', kind: 'zone', name: 'a', position: { x: 1, y: 1 }, size: { w: 50, h: 50 } }],
-    annotations: [{ type: 'ink', points: [1, 2] }, { text: 'hello' }],
+    annotations: [{ id: 's1', type: 'stroke', color: '#000', points: [[1, 2, 0.5]] }, { id: 'n1', type: 'note', x: 0, y: 0, text: 'hello' }],
   };
   expect(designSchema.parse({ ...design, unknown: true, nodes: nodes.map(n => ({ ...n, unknown: true, params: { ...n.params, unknown: true } })) })).toEqual(design);
   expect(designSchema.safeParse({ ...design, nodes: Array(201).fill(nodes[0]) }).success).toBe(false);

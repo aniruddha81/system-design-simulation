@@ -31,12 +31,12 @@ No registry is involved: the 100 MB image is streamed with `docker save | ssh`. 
 
 ## Environment on the host (`/opt/sds/.env.production`)
 
-`DATABASE_URL` (pooled Neon), `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` (public origin: **must match how users reach the site**), `NEXT_PUBLIC_APP_URL`, `BREVO_CLIENT_ID`, `BREVO_CLIENT_SECRET`, `EMAIL_FROM`, `CRON_SECRET`. After editing: `cd /opt/sds && docker compose up -d`.
+`DATABASE_URL` (pooled Neon), `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` (public origin: **must match how users reach the site**), `NEXT_PUBLIC_SITE_URL`, `BREVO_CLIENT_ID`, `BREVO_CLIENT_SECRET`, `EMAIL_FROM`, `CRON_SECRET`. After editing: `cd /opt/sds && docker compose up -d`.
 
 ## Turning on a domain (HTTPS)
 
 1. Point an `A` record for the hostname at the Elastic IP.
-2. On the host set `SITE_ADDRESS=your.host.name` in `/opt/sds/.env` (compose reads it) and set `BETTER_AUTH_URL` / `NEXT_PUBLIC_APP_URL` to `https://your.host.name` in `.env.production`.
+2. On the host set `SITE_ADDRESS=your.host.name` in `/opt/sds/.env` (compose reads it) and set `BETTER_AUTH_URL` / `NEXT_PUBLIC_SITE_URL` to `https://your.host.name` in `.env.production`.
 3. `docker compose up -d`. Caddy obtains and renews the certificate itself.
 4. Email is configured through Brevo (see `DEPLOY.md`).
 

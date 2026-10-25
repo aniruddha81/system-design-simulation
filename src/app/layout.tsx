@@ -27,6 +27,7 @@ export const metadata: Metadata = {
   description,
   alternates: { canonical: "./" }, // self-canonical on every route that does not set its own
   openGraph: { siteName: SITE_NAME, type: "website", description },
+  twitter: { card: "summary_large_image" },
 };
 
 export const viewport: Viewport = {
