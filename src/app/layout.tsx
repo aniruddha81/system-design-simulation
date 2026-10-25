@@ -8,6 +8,7 @@ import { UserMenu } from "@/components/auth/UserMenu";
 import { CommandPalette } from "@/components/search";
 import { StorageBanner } from "@/components/ui/storage-banner";
 import { SITE_NAME, SITE_URL } from "@/lib/content/schema";
+import { PwaRegister } from "@/components/ui/pwa-register";
 import "./globals.css";
 
 // Display: Fraunces (soft, wonky italic for flourishes). Text: Schibsted Grotesk. Data: IBM Plex Mono.
@@ -19,6 +20,8 @@ const description =
   "Learn system design by running it: step-by-step lessons, a simulator you can break, and graded challenges with explained verdicts.";
 
 export const metadata: Metadata = {
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Design Notebook", statusBarStyle: "default" },
   metadataBase: new URL(SITE_URL),
   title: { default: SITE_NAME, template: `%s | ${SITE_NAME}` },
   description,
@@ -96,6 +99,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
 function Colophon() {
   return (
     <footer className="mt-auto bg-surface-2">
+      <PwaRegister />
       <div className="mx-auto max-w-6xl px-4 pb-10 pt-3">
         <div className="rule-manual" aria-hidden />
         <div className="mt-8 grid gap-8 md:grid-cols-[1.2fr_1fr] md:items-end">
@@ -110,6 +114,7 @@ function Colophon() {
               </Link>
               .
             </p>
+            <nav aria-label="Legal" className="flex gap-4"><Link href="/privacy" className="inline-flex min-h-6 items-center underline">Privacy</Link><Link href="/terms" className="inline-flex min-h-6 items-center underline">Terms</Link></nav>
             <p>English only. Simulations are models, not packet-level networks.</p>
           </div>
         </div>

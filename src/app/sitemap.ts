@@ -7,6 +7,8 @@ import { SITE_URL } from "@/lib/content/schema";
 export default function sitemap(): MetadataRoute.Sitemap {
   return [
     { url: SITE_URL, priority: 1 },
+    { url: `${SITE_URL}/privacy`, priority: 0.3 },
+    { url: `${SITE_URL}/terms`, priority: 0.3 },
     { url: `${SITE_URL}/learn`, priority: 0.9 },
     { url: `${SITE_URL}/reference`, priority: 0.7 },
     { url: `${SITE_URL}/challenges`, priority: 0.7 },
