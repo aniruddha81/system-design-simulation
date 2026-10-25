@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 # Self-hosted image: Next.js standalone output behind Caddy (see docker-compose.prod.yml, docs/DEPLOY-AWS.md).
-FROM node:24-slim AS deps
+FROM node:26-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:24-slim AS build
+FROM node:26-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -17,7 +17,7 @@ RUN DATABASE_URL=postgresql://build:build@localhost/build \
     BETTER_AUTH_URL=http://localhost:3000 \
     npm run build
 
-FROM node:24-slim AS run
+FROM node:26-slim AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 RUN groupadd --system --gid 1001 app && useradd --system --uid 1001 --gid app app
