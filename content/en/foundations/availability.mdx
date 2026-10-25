@@ -33,9 +33,12 @@ estimatedMinutes: 22
 
 <Step id="success" title="Available for whom, doing what?">
 
-A process can answer health checks while users cannot place orders. Start with a user-visible **service-level indicator**, or SLI: for example, eligible checkout requests that return a correct result within two seconds, divided by all eligible checkout requests.
+Healthy processes are not happy users. Measure the **SLI**: eligible requests that succeed within the deadline, divided by all eligible requests.
 
-Define eligibility before looking at the graph. Specify how invalid input, intentional rate limiting, timeouts and dependency failures count. A service-level objective, or SLO, gives that indicator a target and window. An SLA is a contractual commitment and may have different exclusions or consequences.
+<Compare title="Two ways to measure checkout" sides={[
+  { title: "Process liveness", tone: "bad", points: ["Health check passes", "Orders still time out", "Users cannot buy"] },
+  { title: "User-visible SLI", tone: "ok", points: ["Correct result within 2 s", "Divided by eligible requests", "Define eligibility first"] }
+]} caption="An SLO is a target for the SLI over a window. An SLA is a contract and may exclude more." />
 
 <Choice id="availability-boundary" objective="define-availability-sli" prompt="Every health check succeeds, but valid checkout requests time out. Which SLI best reflects checkout availability?" options={[
   { id: "user", text: "The share of eligible checkout requests returning correct results within the deadline", correct: true, feedback: "Right. The boundary matches the user's operation rather than just process liveness." },
@@ -47,9 +50,14 @@ Define eligibility before looking at the graph. Specify how invalid input, inten
 
 <Step id="downtime" title="Convert nines to a time budget">
 
-Three nines means **99.9% available**, so the unavailable fraction is **0.001**. Over exactly 30 days, the time budget is **30 × 24 × 60 × 0.001 = 43.2 minutes**. Four nines permits one tenth as much downtime over the same window.
+Unavailable fraction × window. State the window.
 
-Always state the window. Calendar months differ in length; a 365-day year has 525,600 minutes. An uptime percentage without its measurement interval and definition cannot tell you how much interruption was allowed.
+<Bars title="Downtime allowed in 30 days" log items={[
+  { label: "99% (two nines)", value: 432, unit: "min", tone: "bad" },
+  { label: "99.9% (three nines)", value: 43.2, unit: "min", tone: "warn" },
+  { label: "99.99% (four nines)", value: 4.32, unit: "min", tone: "info" },
+  { label: "99.999% (five nines)", value: 0.432, unit: "min", tone: "ok" }
+]} caption="Each extra nine allows one tenth of the downtime. 30 days = 43,200 minutes." />
 
 <VariantQuestion template="availability.downtime" />
 
@@ -57,9 +65,13 @@ Always state the window. Calendar months differ in length; a 365-day year has 52
 
 <Step id="requests" title="A request budget is a different denominator">
 
-At a request-based 99.9% SLO, ten million eligible requests allow **10,000 unsuccessful requests**. A five-minute outage at peak can burn more budget than a longer outage overnight. That is why request success and elapsed uptime need separate labels.
+A request budget uses a different denominator than elapsed time.
 
-Measure what matters to the operation. If a fast HTTP 200 contains a corrupt result, counting it as a success can hide a correctness incident. If a deadline is part of the promise, a late response is unsuccessful for that SLI even when the server eventually finishes.
+<Stats title="99.9% request SLO" items={[
+  { label: "Eligible requests", value: "10,000,000" },
+  { label: "Error budget", value: "0.1%", tone: "warn" },
+  { label: "Allowed failures", value: "10,000", tone: "bad", sub: "a peak-hour outage burns more" }
+]} caption="A late response, or a fast 200 with a corrupt result, still counts as a failure." />
 
 <VariantQuestion template="availability.requests" />
 
@@ -67,9 +79,14 @@ Measure what matters to the operation. If a fast HTTP 200 contains a corrupt res
 
 <Step id="budget" title="Use the error budget to make a decision">
 
-The error budget is the permitted unsuccessful share: **1 − SLO**. It is a planning tool, not a target for how many requests to break. A release that consumes budget rapidly should trigger investigation and the team's agreed response.
+Error budget = **1 − SLO**. Compare burn with elapsed time.
 
-Compare budget use with elapsed time. If half of a monthly budget disappears in one hour, the burn rate is far above a sustainable pace. A healthy monthly aggregate can also hide a severe regional outage; segment important user groups and operations.
+<Timeline title="A release burns the budget" events={[
+  { at: "00:00", label: "Release ships", tone: "info" },
+  { at: "01:00", label: "Half the monthly budget gone", tone: "bad" },
+  { at: "01:05", label: "Investigate and roll back", tone: "warn" },
+  { at: "Month end", label: "Budget left to spend", tone: "ok" }
+]} caption="Half a month's budget in one hour is far above a sustainable burn rate." />
 
 <Choice id="budget-response" objective="define-availability-sli" prompt="A new release consumes half the monthly error budget in its first hour. What is a sensible response?" options={[
   { id: "act", text: "Investigate immediately and use the agreed rollback or mitigation policy", correct: true, feedback: "Right. Rapid budget consumption is an early warning even before the monthly target is missed." },
@@ -81,9 +98,15 @@ Compare budget use with elapsed time. If half of a monthly budget disappears in 
 
 <Step id="dependencies" title="Every required dependency can fail the request">
 
-If a request needs two independent services, each available 99.9% at the same measurement boundary, their joint availability is **0.999 × 0.999 = 0.998001**, or 99.8001%. A chain of individually good dependencies can miss a stronger end-to-end promise.
+A request that needs both services fails if either fails: multiply, do not average. This needs independence.
 
-This multiplication requires independence and matching definitions. Shared power, DNS, identity or deployment failures break that assumption. Optional features can sometimes degrade gracefully: an unavailable recommendation service need not prevent checkout if the product contract allows recommendations to be omitted.
+<Flow title="Two required dependencies" height={150} nodes={[
+  { id: "c", label: "Checkout", kind: "client", x: 0, y: 50 },
+  { id: "a", label: "Service A", kind: "service", x: 50, y: 50, note: "99.9%" },
+  { id: "b", label: "Service B", kind: "service", x: 100, y: 50, note: "99.9%" }
+]} edges={[
+  { from: "c", to: "a" }, { from: "a", to: "b", label: "0.999 × 0.999 = 99.8001%" }
+]} caption="Make optional features (recommendations) skippable under a deadline." />
 
 <Choice id="dependency-contract" objective="reason-about-redundancy" prompt="Checkout currently fails when optional recommendations fail. Which change can improve checkout availability directly?" options={[
   { id: "degrade", text: "Allow checkout to proceed with recommendations omitted under a bounded deadline", correct: true, feedback: "Right. Removing a nonessential dependency from the required success path reduces the failures that block checkout." },
@@ -95,9 +118,16 @@ This multiplication requires independence and matching definitions. Shared power
 
 <Step id="redundancy" title="Two copies need separate failure domains">
 
-With two independent replicas and perfect switching, either surviving copy can serve, so simultaneous unavailability is the product of their unavailability fractions. Real failover takes detection time, routing changes and recovery, and the surviving copy needs enough capacity for the full load.
+Two copies only help if they fail separately and the survivor can carry the full load.
 
-Two replicas on the same host share its power, disk controller and operating system. Two regions can still share a bad configuration rollout or global authentication dependency. Draw the shared components and practice failover instead of claiming extra nines from replica count alone.
+<Flow title="Shared failure domain" height={200} failed={["host"]} nodes={[
+  { id: "lb", label: "Router", kind: "loadBalancer", x: 0, y: 50 },
+  { id: "host", label: "One machine", kind: "service", x: 60, y: 50, note: "power, disk, OS" },
+  { id: "r1", label: "Replica 1", kind: "service", x: 100, y: 15 },
+  { id: "r2", label: "Replica 2", kind: "service", x: 100, y: 85 }
+]} edges={[
+  { from: "lb", to: "host" }, { from: "host", to: "r1" }, { from: "host", to: "r2" }
+]} caption="One host failure takes both replicas down. Regions can share a bad config rollout too." />
 
 <Choice id="same-host" objective="reason-about-redundancy" prompt="Two replicas run on one physical machine. Why can you not square the machine's failure probability to predict their joint outage?" options={[
   { id: "shared", text: "The machine failure takes down both replicas, so their outages are correlated", correct: true, feedback: "Right. Multiplying independent probabilities is unjustified for a shared host failure." },
@@ -109,9 +139,13 @@ Two replicas on the same host share its power, disk controller and operating sys
 
 <Step id="durability" title="Available data is not necessarily durable data">
 
-**Availability** asks whether an operation succeeds now. **Durability** asks whether acknowledged data survives failures. A system can respond quickly after failover while silently losing the last seconds of async-replicated writes. It may look available while violating a durability promise.
+**Availability**: does it work now? **Durability**: does acknowledged data survive? Set an RPO (data loss allowed) and an RTO (restore time). Test restores.
 
-Backups address another part of the problem: a replica can faithfully copy an accidental delete. Specify recovery point objective, the acceptable data-loss interval, and recovery time objective, the acceptable restoration delay. Test restores; a successful backup job alone does not prove recovery works.
+<Timeline title="Failover that loses writes" events={[
+  { at: "t0 − 60 s", label: "Last 60 s of async writes (lost)", tone: "bad" },
+  { at: "t0", label: "Primary dies", tone: "bad" },
+  { at: "t0 + 10 s", label: "Replica serves again (RTO)", tone: "ok" }
+]} caption="Replicas also copy an accidental delete. Backups are a separate strategy." />
 
 <Choice id="durability-loss" objective="reason-about-redundancy" prompt="Failover restores responses in ten seconds but loses a minute of acknowledged orders. What must the design review record?" options={[
   { id: "both", text: "Both the availability interruption and the acknowledged-data loss", correct: true, feedback: "Right. Recovery time and recovery point describe different consequences and both affect the user contract." },
@@ -123,7 +157,7 @@ Backups address another part of the problem: a replica can faithfully copy an ac
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh time and request budgets. Say the denominator and the window before giving a percentage. A numerical budget is useful only when the success definition matches the user-visible operation.
+Score 80% or more on fresh time and request budgets. Say the denominator and window first.
 
 <MasteryCheck templates={["availability.downtime", "availability.requests"]} count={5} />
 

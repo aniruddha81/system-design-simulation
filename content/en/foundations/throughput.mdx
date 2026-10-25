@@ -33,9 +33,14 @@ estimatedMinutes: 24
 
 <Step id="rates" title="Rate is different from time">
 
-Latency asks how long one request takes. **Throughput** asks how many requests finish per unit time. Concurrency counts requests present at once. A service can have high throughput and high latency if many requests run or wait concurrently.
+Latency is how long one request takes. **Throughput** is completions per second. Label offered, completed, rejected and queued separately.
 
-Distinguish offered load from completions. A load generator may send 2,000 requests/s while the service successfully completes 1,200/s, rejects 300/s and accumulates the rest. Label success, error and drop rates separately. Reporting only the send rate makes an overloaded service look faster than it is.
+<Bars title="Offered versus completed (requests/s)" items={[
+  { label: "Offered", value: 2000, unit: "/s", tone: "info" },
+  { label: "Completed", value: 1200, unit: "/s", tone: "ok" },
+  { label: "Rejected", value: 300, unit: "/s", tone: "bad" },
+  { label: "Backlog growth", value: 500, unit: "/s", tone: "warn" }
+]} caption="Reporting only the send rate hides overload." />
 
 <Choice id="offered-load" objective="identify-unstable-queue" prompt="The client sends 2,000 requests/s and successful completions remain at 1,200/s. Which claim is supported?" options={[
   { id: "measure", text: "Offered load is 2,000/s; successful throughput is 1,200/s", correct: true, feedback: "Right. You still need error, rejection and queue measurements to account for the remaining arrivals." },
@@ -47,9 +52,13 @@ Distinguish offered load from completions. A load generator may send 2,000 reque
 
 <Step id="inflight" title="Use Little's law with matching units">
 
-For a stable system, **L = λW**: average requests in the system equal average throughput times average time in the system. Include both queued and active requests if W includes both waiting and processing.
+**L = λW** for a stable system. Include queue wait in W if you include queued requests in L. It is accounting, not CPU sizing.
 
-At 2,000 requests/s and 50 ms mean response time, average concurrency is **2,000 × 0.050 = 100 requests**. That does not mean 100 CPU cores. Requests can be waiting for I/O or a connection. Little's law is accounting, not a CPU sizing formula.
+<Stats title="Little's law" items={[
+  { label: "Throughput λ", value: "2,000/s" },
+  { label: "Time W", value: "50 ms" },
+  { label: "In flight L", value: "100", tone: "warn", sub: "2000 × 0.050" }
+]} />
 
 <VariantQuestion template="throughput.inflight" />
 
@@ -57,9 +66,12 @@ At 2,000 requests/s and 50 ms mean response time, average concurrency is **2,000
 
 <Step id="boundary" title="Draw the system boundary first">
 
-You can apply the law to a whole service, a database pool or just one queue, but the terms must describe the same boundary. If you count only active database queries, use query service time. If you count requests waiting for a pool slot too, include that wait in W.
+L and W must describe the same boundary. Use a long enough window; one snapshot is not the average.
 
-Use an appropriate observation interval. A snapshot of 100 requests at one instant is not automatically the long-run average L. A sudden backlog spike also makes a short measurement window misleading: work arriving in one window may complete in another.
+<Flow title="Pool boundary" height={150} nodes={[
+  { id: "q", label: "Pool queue", kind: "queue", x: 0, y: 50, note: "60 waiting" },
+  { id: "a", label: "Active queries", kind: "database", x: 100, y: 50, note: "40 active" }
+]} edges={[{ from: "q", to: "a" }]} caption="W = 100 ms from queue entry to completion, so L = 40 + 60 = 100." />
 
 <Choice id="law-boundary" objective="apply-littles-law" prompt="A pool reports 40 active queries plus 60 waiting requests on average. Mean time from entering the pool queue to completion is 100 ms. Which L matches that W?" options={[
   { id: "whole", text: "100 requests, counting waiting and active work", correct: true, feedback: "Right. The response-time boundary starts before pool waiting, so both groups belong in L." },
@@ -71,9 +83,12 @@ Use an appropriate observation interval. A snapshot of 100 requests at one insta
 
 <Step id="capacity" title="Estimate worker capacity, then leave room">
 
-One worker taking a constant 25 ms per job can finish at most 40 jobs/s. Eight independent workers can theoretically finish **320 jobs/s**. This ceiling assumes there is no shared database, CPU, lock or link bottleneck.
+One worker at 25 ms/job: 40 jobs/s. Eight workers: at most 320 jobs/s, if nothing shared saturates. Leave headroom; there is no universal target.
 
-Sizing at the ceiling leaves no room for burstiness or slow jobs. A pool that is adequate at the mean may queue badly when service times vary. Benchmark the actual request mix and choose headroom for your latency goal; there is no universal utilization target that works for every workload.
+<Flow title="Eight workers" height={150} nodes={[
+  { id: "q", label: "Jobs", kind: "queue", x: 0, y: 50 },
+  { id: "w", label: "8 workers", kind: "worker", x: 100, y: 50, note: "8 × 40 = 320/s" }
+]} edges={[{ from: "q", to: "w" }]} />
 
 <VariantQuestion template="throughput.capacity" />
 
@@ -81,9 +96,13 @@ Sizing at the ceiling leaves no room for burstiness or slow jobs. A pool that is
 
 <Step id="unstable" title="A queue cannot manufacture capacity">
 
-An arrival rate of 500 jobs/s and completion capacity of 400/s adds 100 jobs to the backlog every second while those rates persist. A bigger queue delays rejection but does not make the system stable. Memory eventually fills or requests wait past their useful deadlines.
+Arrivals 500/s, capacity 400/s: backlog grows by 100 jobs every second. A bigger queue only delays the failure. Track queue age, not just length.
 
-Use a bounded queue to absorb a finite burst, then drain it with spare capacity. For sustained overload, reduce work, increase the constrained resource, or reject excess arrivals. Track queue age as well as length: 1,000 jobs may be milliseconds or hours of waiting depending on throughput.
+<Bars title="Backlog after t seconds" items={[
+  { label: "10 s", value: 1000, unit: "jobs", tone: "warn" },
+  { label: "60 s", value: 6000, unit: "jobs", tone: "bad" },
+  { label: "600 s", value: 60000, unit: "jobs", tone: "bad" }
+]} caption="Admit only the sustainable rate, add capacity, or shed load." />
 
 <Choice id="unbounded-queue" objective="identify-unstable-queue" prompt="Arrivals stay at 500/s and capacity stays at 400/s. Which change can stop unbounded backlog growth immediately?" options={[
   { id: "admit", text: "Admit no more than the sustainable rate and reject or defer excess work", correct: true, feedback: "Right. Bounded admission prevents accepted work from growing forever; increasing real capacity is another remedy." },
@@ -95,9 +114,12 @@ Use a bounded queue to absorb a finite burst, then drain it with spare capacity.
 
 <Step id="closed-loop" title="Do not let the load test hide the queue">
 
-A fixed-concurrency client sends a replacement only after an earlier request finishes. When the service slows, this client sends fewer requests per second. That can be useful for modeling users, but it can also hide overload from an external arrival stream that would keep sending.
+A fixed-concurrency client sends less when the service slows. An open, rate-driven test keeps offering load. Use both.
 
-A constant-rate arrival test asks a different question: what happens when demand does not politely pause? Use both models deliberately. Record offered load, completions and timeouts alongside latency so a lower send rate is not mistaken for recovery.
+<Compare title="Two load models" sides={[
+  { title: "Closed loop", tone: "warn", points: ["Waits for replies", "Hides overload"] },
+  { title: "Open arrival", tone: "ok", points: ["Constant rate", "Shows backlog and rejects"] }
+]} />
 
 <Choice id="load-generator" objective="identify-unstable-queue" prompt="Your ten-client test sends less traffic whenever latency rises. Production receives independently arriving webhooks. What additional test matters?" options={[
   { id: "open", text: "A bounded, rate-driven arrival test that continues offering the production rate", correct: true, feedback: "Right. It reveals whether backlog, rejection and latency remain controlled when arrivals do not wait for completions." },
@@ -109,9 +131,12 @@ A constant-rate arrival test asks a different question: what happens when demand
 
 <Step id="scale" title="Scaling one tier can expose the next bottleneck">
 
-Adding stateless workers helps only until a shared resource saturates. If every request holds a database connection for 20 ms and the pool has ten usable slots, the pool bounds that path near 500 requests/s under the simplified constant-time model.
+Stateless workers help only until a shared resource saturates.
 
-Watch where time is spent before scaling. More web workers cannot increase a fixed link's bandwidth or remove a hot-row lock. After any intervention, repeat the same workload and compare completions, queue age and error rate as well as latency.
+<Flow title="Ten pool slots, 20 ms each" height={150} hot={["db"]} nodes={[
+  { id: "w", label: "Web workers", kind: "service", x: 0, y: 50, note: "scale freely" },
+  { id: "db", label: "DB pool", kind: "database", x: 100, y: 50, note: "10 / 0.020 = 500/s" }
+]} edges={[{ from: "w", to: "db" }]} caption="Repeat the same workload after each change." />
 
 <Choice id="shared-bottleneck" objective="estimate-service-capacity" prompt="Doubling web workers leaves throughput unchanged while database-pool wait grows. What does that suggest?" options={[
   { id: "db", text: "The database path or pool is constraining throughput", correct: true, feedback: "Right. Measure query time, occupancy and downstream limits before adding more callers." },
@@ -123,10 +148,10 @@ Watch where time is spent before scaling. More web workers cannot increase a fix
 
 <Step id="practice" title="Check your mastery, then observe a queue">
 
-Score at least 80% on fresh concurrency and capacity calculations. Always say whether the time includes waiting and whether the capacity assumes independent workers.
+Score 80% or more. Say whether time includes waiting and whether workers are independent.
 
 <MasteryCheck templates={["throughput.inflight", "throughput.capacity"]} count={5} />
 
-Open the [sandbox](/sandbox), run a service under increasing arrival rates, and watch completions flatten while waiting rises. Predict the capacity from workers and service time first. Then read [queues and delivery guarantees](/learn/building-blocks/queues) for what happens when accepted work must survive failures.
+In the [sandbox](/sandbox), raise the arrival rate and watch completions flatten while waiting rises. Then read [queues](/learn/building-blocks/queues).
 
 </Step>

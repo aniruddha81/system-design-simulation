@@ -47,9 +47,13 @@ estimatedMinutes: 25
 
 <Step id="in-transit" title="What TLS promises">
 
-TLS 1.3 (RFC 8446) gives a connection three properties: **confidentiality** (an eavesdropper sees ciphertext), **integrity** (tampering is detected), and **server authentication** (the certificate proves the server holds a key for that name). Every TLS 1.3 key exchange is ephemeral, so recorded traffic stays safe even if the server's certificate key leaks later: **forward secrecy**.
+TLS 1.3 gives **confidentiality, integrity, server authentication** and, via ephemeral keys, **forward secrecy**. It ends at your server (logs, database see plaintext). **HSTS** stops `http://` downgrade.
 
-TLS does not protect data once it arrives: the server, its logs and its database see plaintext. Nor does it stop a user from visiting `http://` first, where an attacker can strip the upgrade; **HSTS** (RFC 6797) tells the browser to use HTTPS only for that site.
+<Sequence title="TLS 1.3 handshake" actors={["Client", "Server"]} messages={[
+  { from: "Client", to: "Server", label: "ClientHello + key share" },
+  { from: "Server", to: "Client", label: "ServerHello + certificate + signature", tone: "info" },
+  { from: "Client", to: "Server", label: "Finished: encrypted from here", tone: "ok" }
+]} caption="Protects the wire, not either endpoint." />
 
 <Choice
   id="tls-limits"
@@ -67,7 +71,12 @@ TLS does not protect data once it arrives: the server, its logs and its database
 
 <Step id="internal" title="Inside the network too">
 
-"It is behind the firewall" assumes nobody is inside the network. Attackers who get one foothold, a misconfigured load balancer, or a cloud provider's shared fabric all break that assumption. Encrypt service-to-service traffic as well, and prefer **mutual TLS**, where both sides present certificates, so a service can authenticate its caller rather than trusting its IP address.
+"Behind the firewall" assumes no insider. Encrypt service traffic and use **mutual TLS**: both sides present certificates, so identity replaces IP trust.
+
+<Flow title="Mutual TLS" height={150} nodes={[
+  { id: "a", label: "Orders", kind: "service", x: 0, y: 50, note: "client cert" },
+  { id: "b", label: "Payments", kind: "service", x: 100, y: 50, note: "client cert" }
+]} edges={[{ from: "a", to: "b", label: "both verify" }]} caption="mTLS says which service called. User authorisation still runs." />
 
 <Choice
   id="internal-traffic"
@@ -85,7 +94,13 @@ TLS does not protect data once it arrives: the server, its logs and its database
 
 <Step id="handshakes" title="What handshakes cost">
 
-A full TLS handshake costs the server a signature with its certificate's private key, and the client a round trip. **Session resumption** with a pre-shared key from an earlier connection skips the certificate signature, and connection reuse (HTTP keep-alive, HTTP/2 multiplexing) avoids handshakes entirely. On a busy edge, the resumption rate decides how much CPU goes to signatures.
+A full handshake costs the server a certificate signature and the client a round trip. **Resumption** skips the signature; connection reuse skips the handshake.
+
+<Compare title="Cost per connection" sides={[
+  { title: "Full handshake", tone: "bad", points: ["Server signs with its key", "One round trip"] },
+  { title: "Resumption (PSK)", tone: "warn", points: ["No certificate signature"] },
+  { title: "Reused connection", tone: "ok", points: ["No handshake at all", "Keep-alive, HTTP/2"] }
+]} caption="The resumption rate decides CPU spent on signatures." />
 
 <VariantQuestion template="tls.full-handshakes" />
 
@@ -93,13 +108,13 @@ A full TLS handshake costs the server a signature with its certificate's private
 
 <Step id="at-rest" title="Encryption at rest: which attacker?">
 
-Encryption at rest comes in layers, and each one stops a different attacker:
+Each layer stops a different attacker. More selective means more protective and more costly (encrypted fields are hard to search).
 
-- **Disk or volume encryption**: protects against a stolen or discarded disk. Anyone who can query the running database still sees plaintext.
-- **Database-level encryption** (often called transparent data encryption): protects data files and backups if copied off the server. The database decrypts transparently for any authorised connection.
-- **Application or field-level encryption**: the application encrypts specific fields (a national ID, a card number) with keys the database never sees. A SQL injection or a stolen database credential returns ciphertext.
-
-The more selective the layer, the more it protects, and the more it costs: encrypted fields cannot be indexed or searched normally.
+<Compare title="Encryption at rest" sides={[
+  { title: "Disk / volume", tone: "warn", points: ["Stops stolen disk", "Running DB shows plaintext"] },
+  { title: "Database (TDE)", tone: "info", points: ["Stops copied files, backups", "Authorised connections see plaintext"] },
+  { title: "Field-level", tone: "ok", points: ["Keys outside the DB", "SQL injection returns ciphertext", "No normal indexing"] }
+]} />
 
 <Choice
   id="at-rest-layer"
@@ -117,9 +132,12 @@ The more selective the layer, the more it protects, and the more it costs: encry
 
 <Step id="nonce-limit" title="Keys wear out: the AES-GCM limit">
 
-AES-GCM is an **authenticated** encryption mode: it encrypts and detects tampering in one step, and it needs a unique **nonce** (IV) for every message under a key. Reusing one nonce is catastrophic: it reveals the XOR of the two plaintexts and lets an attacker recover the authentication key and forge messages.
+AES-GCM needs a **unique nonce** per message. Reuse leaks plaintext XOR and the auth key. With random 96-bit IVs, NIST SP 800-38D caps a key at **2^32 encryptions**. Rotate by usage, not just by calendar.
 
-With random 96-bit IVs, collisions become likely long before 2^96 messages, so NIST SP 800-38D limits a key to **2^32 encryptions** with random IVs. A busy service reaches that faster than intuition suggests. Rotate keys by **usage**, not just by calendar, which envelope encryption makes cheap.
+<Stats title="Random-IV limit" items={[
+  { label: "Max per key", value: "2^32", tone: "warn", sub: "≈ 4.3 billion" },
+  { label: "At 10,000 msg/s", value: "≈ 5 days", tone: "bad", sub: "4.29e9 / 1e4 s" }
+]} caption="Envelope encryption makes rotation cheap." />
 
 <VariantQuestion template="crypto.gcm-days" />
 
@@ -127,10 +145,10 @@ With random 96-bit IVs, collisions become likely long before 2^96 messages, so N
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh handshake and key-usage variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["tls.full-handshakes", "crypto.gcm-days"]} count={4} />
 
-Next: every one of these layers is only as safe as its keys. Continue to [key management and secrets](/learn/security/key-management).
+Next: [key management and secrets](/learn/security/key-management).
 
 </Step>

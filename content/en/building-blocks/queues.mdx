@@ -39,9 +39,13 @@ estimatedMinutes: 25
 
 <Step id="boundary" title="Accepted is not processed">
 
-A checkout service publishes a receipt job and responds before an email worker runs. The queue decouples their timing, but the publish acknowledgement means only what the broker's configured durability policy promises. It does not prove the email was sent or the consumer's database transaction committed.
+A publish confirm means only what the broker's durability policy promises. It is not processing, and not atomic with your database commit. Use an outbox plus idempotent consumers.
 
-Use a durable queue and the appropriate publisher confirmation when the job must survive a broker failure. If an order commit and publish must occur together, two separate successful calls are not atomic. A transactional outbox records the job with the order, then a relay publishes it; consumers still need to handle duplicates.
+<Flow title="Transactional outbox" height={170} nodes={[
+  { id: "s", label: "Checkout", kind: "service", x: 0, y: 50, note: "order + job, one commit" },
+  { id: "r", label: "Relay", kind: "worker", x: 50, y: 50 },
+  { id: "q", label: "Durable queue", kind: "queue", x: 100, y: 50 }
+]} edges={[{ from: "s", to: "r", label: "outbox row" }, { from: "r", to: "q", label: "publish + confirm" }]} caption="Consumers still see duplicates." />
 
 <Choice id="publish-boundary" objective="distinguish-delivery-guarantees" prompt="The broker confirms a durable publish. What has that confirmed?" options={[
   { id: "broker", text: "Acceptance according to the broker's configured persistence and replication policy", correct: true, feedback: "Right. Consumer processing and external side effects have their own acknowledgement and commit boundaries." },
@@ -53,9 +57,12 @@ Use a durable queue and the appropriate publisher confirmation when the job must
 
 <Step id="backlog" title="A burst spends queue space">
 
-An empty queue receives 600 jobs/s while workers finish 400/s for 30 seconds. It accumulates **(600 − 400) × 30 = 6,000 jobs**. The queue buys time during a finite burst; it does not make sustained demand disappear.
+Backlog = (arrivals − completions) × time. A queue buys time in a finite burst. Track bytes and age, not just count.
 
-Estimate bytes and age as well as message count. A queue of large exports may exhaust memory sooner than a much longer queue of small notifications. Reject or defer work before accepted jobs wait beyond their useful deadline, and make the acceptance contract clear to the producer.
+<Stats title="600/s in, 400/s out, 30 s" items={[
+  { label: "Net growth", value: "200/s", tone: "warn" },
+  { label: "Backlog", value: "6,000 jobs", tone: "bad", sub: "(600 − 400) × 30" }
+]} />
 
 <VariantQuestion template="queues.backlog" />
 
@@ -63,9 +70,13 @@ Estimate bytes and age as well as message count. A queue of large exports may ex
 
 <Step id="drain" title="Spare capacity pays back the backlog">
 
-After the burst, suppose arrivals fall to 300/s and workers still finish 400/s. Only **100/s** remains to drain old work, so 6,000 jobs take **60 seconds** to clear. Dividing by 400/s incorrectly assumes new arrivals stop.
+Drain at the **spare** capacity, with arrivals still coming. Dividing by the full 400/s is wrong.
 
-Recovery capacity matters in failure planning. If normal traffic consumes every worker, a ten-minute outage can create a backlog that never drains. Increasing consumer count helps only while the downstream database and external APIs have spare capacity.
+<Timeline title="After the burst" events={[
+  { at: "Burst ends", label: "6,000 queued; arrivals drop to 300/s", tone: "warn" },
+  { at: "+30 s", label: "3,000 left (100/s spare)", tone: "info" },
+  { at: "+60 s", label: "Queue empty", tone: "ok" }
+]} caption="If normal traffic uses every worker, a backlog may never drain." />
 
 <VariantQuestion template="queues.drain" />
 
@@ -73,9 +84,12 @@ Recovery capacity matters in failure planning. If normal traffic consumes every 
 
 <Step id="redelivery" title="The acknowledgement position chooses a failure window">
 
-Acknowledging before processing risks losing work if the worker then crashes. Acknowledging after processing allows redelivery if the effect commits but the acknowledgement is lost. The latter is the familiar **at-least-once** pattern: a logical message may be delivered more than once.
+Where you acknowledge picks the failure window. Ack-after-processing is **at-least-once**: duplicates are possible. Never assume a worker owns a message forever.
 
-Some brokers use visibility timeouts; others redeliver when the consumer's channel closes. In either case, do not assume the worker owns a message forever. Long-running work needs a suitable lease or timeout policy, and the effect must remain safe if another worker receives the message.
+<Compare title="Acknowledge when?" sides={[
+  { title: "Ack before work", tone: "bad", points: ["Crash loses the job"] },
+  { title: "Ack after work", tone: "ok", points: ["Crash means redelivery", "Effect must be idempotent"] }
+]} />
 
 <Ordering id="durable-consume" objective="distinguish-delivery-guarantees" prompt="Order a consumer path that makes a database effect safe on redelivery." items={[
   { id: "receive", text: "Receive the message and its stable business operation ID" },
@@ -88,9 +102,16 @@ Some brokers use visibility timeouts; others redeliver when the consumer's chann
 
 <Step id="once" title="Exactly once needs an explicit boundary">
 
-An idempotent consumer can provide an **effectively-once business effect** on top of at-least-once delivery. A unique operation ID prevents a duplicate database mutation when checked and committed atomically with that mutation. An in-memory set lost on restart cannot provide that guarantee.
+Idempotent consumer + at-least-once delivery gives an effectively-once effect, if the ID check and the mutation commit atomically. External APIs need their own idempotency key.
 
-A streaming system's transactional consume-transform-produce guarantee has a defined scope. It does not automatically include an unrelated payment API or email service. For external effects, use their idempotency support or a reconciliation workflow, and choose dedup retention long enough for the possible replay horizon.
+<Sequence title="Charge with a crash before ack" actors={["Worker", "Payment API", "Broker"]} messages={[
+  { from: "Worker", to: "Payment API", label: "charge, key K" },
+  { from: "Payment API", to: "Worker", label: "ok (recorded under K)" },
+  { from: "Worker", to: "Broker", label: "ack", lost: true },
+  { from: "Broker", to: "Worker", label: "redeliver", tone: "warn" },
+  { from: "Worker", to: "Payment API", label: "charge, key K" },
+  { from: "Payment API", to: "Worker", label: "same result, no 2nd charge", tone: "ok" }
+]} />
 
 <Choice id="effect-boundary" objective="distinguish-delivery-guarantees" prompt="A worker charges a card, crashes before acknowledging, then receives the job again. Which protects against a second charge?" options={[
   { id: "provider", text: "Reuse a stable payment operation key that the payment service enforces durably", correct: true, feedback: "Right. The deduplication boundary must include the external charge, not just local message receipt." },
@@ -102,9 +123,14 @@ A streaming system's transactional consume-transform-produce guarantee has a def
 
 <Step id="ordering" title="Ordering is usually per partition">
 
-A log can preserve append order within one partition. If all events for account 42 use the same partition key, its debit and credit events can be read in that order. There is no global order across unrelated partitions unless you add coordination.
+Order holds per partition, not globally. Key by account; keep per-key sequential processing through retries. A hot key caps parallelism.
 
-Delivery order also differs from effect order: concurrent handlers may finish in reverse order, and a failed event may be retried after a later event. Use per-key sequential processing, version checks or a reorder buffer when the business invariant requires it. One hot key can limit parallelism even with many idle workers.
+<Flow title="Partition by account" height={190} nodes={[
+  { id: "p", label: "Producer", kind: "service", x: 0, y: 50 },
+  { id: "p1", label: "Partition 1", kind: "queue", x: 55, y: 20, note: "account 42, in order" },
+  { id: "p2", label: "Partition 2", kind: "queue", x: 55, y: 80, note: "account 7, in order" },
+  { id: "c", label: "Consumers", kind: "worker", x: 100, y: 50 }
+]} edges={[{ from: "p", to: "p1" }, { from: "p", to: "p2" }, { from: "p1", to: "c" }, { from: "p2", to: "c" }]} />
 
 <Choice id="account-order" objective="preserve-queue-ordering" prompt="Balance updates for one account must apply in sequence, while different accounts can run concurrently. What is a suitable starting design?" options={[
   { id: "key", text: "Partition by account ID and preserve per-account effect order in the consumer", correct: true, feedback: "Right. Stable key routing gives a local ordering scope, and consumer scheduling must preserve it through retries." },
@@ -116,9 +142,13 @@ Delivery order also differs from effect order: concurrent handlers may finish in
 
 <Step id="poison" title="A dead-letter queue is a workflow, not a bin">
 
-A malformed message may fail every attempt. Retry transient failures with a bounded delay policy; send persistent failures to a dead-letter queue after a defined attempt limit. Alert, retain the cause, fix the input or handler, and replay with the same operation ID.
+Retry transient errors with bounded delay. After N attempts, park the message in a **DLQ**: alert, keep the cause, fix, replay with the same ID. Watch oldest-message age and DLQ growth.
 
-Back-pressure limits admission when consumers or dependencies fall behind. Watch oldest-message age, redelivery rate, DLQ growth and processing errors. A rising retry rate increases effective arrivals; a consumer that immediately requeues poison messages can consume its entire capacity doing no useful work.
+<Flow title="Retry, then dead-letter" height={170} nodes={[
+  { id: "q", label: "Queue", kind: "queue", x: 0, y: 50 },
+  { id: "w", label: "Consumer", kind: "worker", x: 50, y: 50 },
+  { id: "d", label: "DLQ", kind: "queue", x: 100, y: 50, note: "inspect, replay" }
+]} edges={[{ from: "q", to: "w" }, { from: "w", to: "q", label: "retry, bounded", dashed: true }, { from: "w", to: "d", label: "after limit" }]} />
 
 <Choice id="poison-policy" objective="handle-poison-messages" prompt="One invalid job fails on every attempt and is immediately redelivered. What should change?" options={[
   { id: "dlq", text: "Bound retries, preserve diagnostics in a DLQ, and provide an inspected replay path", correct: true, feedback: "Right. This stops the hot loop while keeping failed work visible and recoverable." },
@@ -130,10 +160,10 @@ Back-pressure limits admission when consumers or dependencies fall behind. Watch
 
 <Step id="practice" title="Check your mastery, then crash a consumer">
 
-Score at least 80% on fresh growth and drain calculations. Explain which rate includes retries and whether new arrivals continue during recovery.
+Score 80% or more. Say which rate includes retries and whether arrivals continue.
 
 <MasteryCheck templates={["queues.backlog", "queues.drain"]} count={5} />
 
-In the [sandbox](/sandbox), connect a producer, queue and consumer, then stop the consumer while arrivals continue. Predict backlog growth, restore capacity and measure recovery. Inspect redelivery after an unacknowledged delivery. The numerical model assumes constant rates; real retries and service-time variation change recovery.
+In the [sandbox](/sandbox), stop the consumer while arrivals continue, then restore it and measure recovery. The model assumes constant rates.
 
 </Step>

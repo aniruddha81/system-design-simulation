@@ -39,11 +39,13 @@ estimatedMinutes: 25
 
 <Step id="models" title="Silo, pool or bridge">
 
-A **tenant** is a customer organisation sharing your SaaS system with others. AWS's tenant isolation whitepaper names three models:
+A **tenant** is a customer organisation sharing your system.
 
-- **Silo**: each tenant gets its own stack or at least its own database. Strong isolation, simple per-tenant backup and deletion, easy to explain to auditors. Expensive per tenant, and thousands of silos are thousands of things to upgrade.
-- **Pool**: all tenants share the same services and tables, separated by a `tenant_id`. Cheapest and simplest to operate. Isolation depends entirely on your code being right every time.
-- **Bridge**: a mix, for example a pooled application tier with siloed databases, or pooled for the long tail and siloed for the largest or most regulated tenants.
+<Compare title="Tenancy models" sides={[
+  { title: "Silo", tone: "ok", points: ["Own stack or database", "Easy delete and audit", "Costly at thousands"] },
+  { title: "Pool", tone: "warn", points: ["Shared tables, tenant_id", "Cheapest", "Isolation is all in your code"] },
+  { title: "Bridge", tone: "info", points: ["Mix of both", "Silo big or regulated tenants"] }
+]} />
 
 <Choice
   id="tenancy-model"
@@ -61,7 +63,13 @@ A **tenant** is a customer organisation sharing your SaaS system with others. AW
 
 <Step id="scoping" title="Scope every query to the tenant">
 
-In a pooled model, one missing `WHERE tenant_id = ?` leaks another customer's data: the multi-tenant version of broken object level authorisation. Two rules keep this from happening. First, take the tenant from the **authenticated context** (the token or session), never from a request parameter the caller controls. Second, add **defence in depth** so a single bug is not enough: PostgreSQL's row-level security, for example, applies a policy to every query on a table, so a query that forgets the filter returns only the current tenant's rows.
+One missing `WHERE tenant_id = ?` leaks another customer's data. Take the tenant from the **authenticated context**, never a caller parameter, and add **defence in depth**: PostgreSQL row-level security filters every query.
+
+<Flow title="Two layers of tenant scope" height={150} nodes={[
+  { id: "t", label: "Token", kind: "apiGateway", x: 0, y: 50, note: "tenant = acme" },
+  { id: "s", label: "Service", kind: "service", x: 50, y: 50, note: "WHERE tenant_id" },
+  { id: "db", label: "RLS policy", kind: "database", x: 100, y: 50, note: "forces tenant filter" }
+]} edges={[{ from: "t", to: "s" }, { from: "s", to: "db" }]} />
 
 <Choice
   id="tenant-source"
@@ -79,7 +87,12 @@ In a pooled model, one missing `WHERE tenant_id = ?` leaks another customer's da
 
 <Step id="noisy" title="Noisy neighbours">
 
-Shared capacity means one tenant's spike, runaway script or huge export can slow everyone. Isolation of **performance** matters as much as isolation of data. The tools are familiar from rate limiting, applied per tenant: quotas on requests and storage, per-tenant concurrency limits in workers, fair queueing so one tenant's backlog cannot starve others, and separate pools for tenants that are consistently large.
+One tenant's spike or bulk import can slow everyone. Apply rate-limiting tools per tenant: quotas, per-tenant concurrency, fair queueing, separate pools for the consistently large.
+
+<Compare title="Shared job queue" sides={[
+  { title: "One FIFO", tone: "bad", points: ["Bulk import first", "Others wait hours"] },
+  { title: "Fair per-tenant queues", tone: "ok", points: ["Bounded share each", "Import still runs"] }
+]} />
 
 <Choice
   id="noisy-fix"
@@ -97,9 +110,15 @@ Shared capacity means one tenant's spike, runaway script or huge export can slow
 
 <Step id="shuffle" title="Shuffle sharding shrinks the blast radius">
 
-Some failures are caused *by* a tenant: a poison request that crashes workers, or an attack aimed at one customer. With classic sharding, n workers split into fixed groups of k, and a bad tenant takes down its whole group, along with every other tenant in that group.
+Classic sharding: a bad tenant takes down its whole fixed group. **Shuffle sharding** (AWS Builders' Library) gives each tenant its own random set of k of n workers. A random other tenant shares your exact set with probability 1 ÷ (n choose k).
 
-**Shuffle sharding**, described in AWS's Builders' Library, gives each tenant its own random set of k workers out of n. Two tenants rarely get the same set, so when one tenant's set fails, most other tenants still have at least one healthy worker. The number of distinct sets is n choose k, and a random other tenant shares your exact set with probability 1 ÷ (n choose k).
+<Flow title="Shuffle shards (3 of 6 workers shown)" height={200} failed={["w1", "w2"]} nodes={[
+  { id: "a", label: "Poison tenant", kind: "client", x: 0, y: 15 },
+  { id: "b", label: "Tenant B", kind: "client", x: 0, y: 85 },
+  { id: "w1", label: "Worker 1", kind: "worker", x: 100, y: 10 },
+  { id: "w2", label: "Worker 2", kind: "worker", x: 100, y: 40 },
+  { id: "w3", label: "Worker 3", kind: "worker", x: 100, y: 70 }
+]} edges={[{ from: "a", to: "w1" }, { from: "a", to: "w2" }, { from: "b", to: "w2" }, { from: "b", to: "w3" }]} caption="B shares one worker with the poison tenant but keeps a healthy one." />
 
 <VariantQuestion template="tenancy.shuffle-shards" />
 
@@ -107,7 +126,14 @@ Some failures are caused *by* a tenant: a poison request that crashes workers, o
 
 <Step id="cells" title="Cells: isolation for the whole stack">
 
-Shuffle sharding isolates one tier. **Cell-based architecture** applies the same idea to the whole stack: each cell is a complete, independent copy of the service serving a subset of tenants, with a thin routing layer in front. A bad deploy, a poison tenant or a database failure affects one cell. Deploy cell by cell, and the first cell is your canary.
+**Cell-based architecture** isolates the whole stack: independent copies, each serving some tenants, behind a thin router. Deploy cell by cell; the first cell is your canary.
+
+<Flow title="Cells" height={200} nodes={[
+  { id: "r", label: "Router", kind: "apiGateway", x: 0, y: 50, note: "tenant to cell" },
+  { id: "c1", label: "Cell 1", kind: "service", x: 100, y: 15, note: "tenants A-F" },
+  { id: "c2", label: "Cell 2", kind: "service", x: 100, y: 50, note: "tenants G-M" },
+  { id: "c3", label: "Cell 3", kind: "service", x: 100, y: 85, note: "tenants N-Z" }
+]} edges={[{ from: "r", to: "c1" }, { from: "r", to: "c2" }, { from: "r", to: "c3" }]} />
 
 <Choice
   id="cell-benefit"
@@ -125,10 +151,10 @@ Shuffle sharding isolates one tier. **Cell-based architecture** applies the same
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh shuffle-shard variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["tenancy.shuffle-shards"]} count={3} />
 
-Next, when a tenant or user leaves, their data must go too: [privacy and data deletion](/learn/security/privacy-deletion).
+Next: [privacy and data deletion](/learn/security/privacy-deletion).
 
 </Step>

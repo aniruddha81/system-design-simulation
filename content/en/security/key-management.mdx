@@ -39,13 +39,14 @@ estimatedMinutes: 25
 
 <Step id="envelope" title="Envelope encryption">
 
-Encrypting terabytes directly with a key held in a **key management service** (KMS) or hardware security module would send every byte through it. KMS encrypt calls also cap the payload size; AWS KMS, for example, accepts at most 4 KB of plaintext per call. Instead, use **envelope encryption**:
+Sending all data through a KMS does not scale (calls cap payload; AWS KMS takes 4 KB). **Envelope encryption**: encrypt data with a local **DEK**, **wrap** the DEK under a **KEK** that never leaves the KMS, store the wrapped DEK beside the ciphertext. Caching a DEK cuts KMS load but widens the blast radius.
 
-1. Generate a **data encryption key** (DEK) locally or from the KMS, and encrypt the data with it.
-2. Ask the KMS to encrypt (**wrap**) the DEK under a **key-encryption key** (KEK) that never leaves the KMS.
-3. Store the wrapped DEK next to the ciphertext; discard the plaintext DEK.
-
-To read, send the wrapped DEK to the KMS, get the DEK back, and decrypt locally. The KMS sees only small keys, enforces access policy on every unwrap, and logs each one. Caching a DEK across many objects trades a smaller KMS bill and load for a larger blast radius if one DEK leaks.
+<Sequence title="Envelope encryption" actors={["App", "KMS"]} messages={[
+  { from: "App", to: "KMS", label: "write: wrap my DEK under the KEK" },
+  { from: "KMS", to: "App", label: "wrapped DEK", tone: "ok" },
+  { from: "App", to: "KMS", label: "read: unwrap this DEK" },
+  { from: "KMS", to: "App", label: "DEK (policy-checked, logged)", tone: "ok" }
+]} caption="Data is encrypted locally with the DEK. Store the ciphertext with the wrapped DEK and drop the plaintext DEK." />
 
 <VariantQuestion template="keys.envelope-rate" />
 
@@ -53,7 +54,13 @@ To read, send the wrapped DEK to the KMS, get the DEK back, and decrypt locally.
 
 <Step id="hierarchy" title="Why the hierarchy helps">
 
-The KEK is the one secret that matters, and it never leaves hardware you trust. Access to data becomes access to *unwrap*, which is an audited, revocable permission.
+The KEK is the one secret that matters. Data access becomes an audited, revocable *unwrap* permission.
+
+<Flow title="Key hierarchy" height={150} nodes={[
+  { id: "k", label: "KEK", kind: "kvStore", x: 0, y: 50, note: "stays in KMS" },
+  { id: "d", label: "Wrapped DEKs", kind: "dedupStore", x: 50, y: 50, note: "small" },
+  { id: "o", label: "Encrypted data", kind: "objectStore", x: 100, y: 50, note: "terabytes" }
+]} edges={[{ from: "k", to: "d", label: "wraps" }, { from: "d", to: "o", label: "unlock" }]} />
 
 <Choice
   id="why-envelope"
@@ -72,7 +79,12 @@ The KEK is the one secret that matters, and it never leaves hardware you trust. 
 
 <Step id="rotation" title="Rotation rewraps keys, not data">
 
-Rotating a KEK creates a new key **version**. New DEKs are wrapped with it; existing wrapped DEKs are decrypted with the old version and rewrapped with the new one. The old version stays available for decryption until nothing references it. The bulk data never moves, so the job scales with the number of DEKs, not with terabytes.
+Rotating a KEK makes a new **version**. Unwrap each DEK with the old version, rewrap with the new. Bulk data never moves: the job scales with the number of DEKs.
+
+<Compare title="What rotation touches" sides={[
+  { title: "Rewrap DEKs", tone: "ok", points: ["Small keys only", "Scales with key count"] },
+  { title: "Re-encrypt data", tone: "bad", points: ["Terabytes move", "Needed only if a DEK leaks"] }
+]} />
 
 <VariantQuestion template="keys.rewrap" />
 
@@ -80,7 +92,14 @@ Rotating a KEK creates a new key **version**. New DEKs are wrapped with it; exis
 
 <Step id="lifecycle" title="The key lifecycle">
 
-NIST SP 800-57 frames every key as having a lifecycle: generated, activated, used for a defined **cryptoperiod**, deactivated (decrypt or verify only), and eventually destroyed. Two rules from it prevent many incidents: use each key for **one purpose** only (never the same key for encryption and signing, or for two different systems), and plan **compromise recovery** before a compromise.
+NIST SP 800-57: every key is generated, activated, used for a **cryptoperiod**, deactivated, destroyed. One purpose per key. Plan compromise recovery in advance.
+
+<Timeline title="Key lifecycle" events={[
+  { at: "1", label: "Generate", tone: "info" },
+  { at: "2", label: "Activate and use (cryptoperiod)", tone: "ok" },
+  { at: "3", label: "Deactivate: decrypt/verify only", tone: "warn" },
+  { at: "4", label: "Destroy", tone: "bad" }
+]} />
 
 <Choice
   id="dek-leak"
@@ -98,7 +117,12 @@ NIST SP 800-57 frames every key as having a lifecycle: generated, activated, use
 
 <Step id="secrets" title="Secrets are keys too">
 
-Database passwords, API keys and signing keys are secrets with the same lifecycle. OWASP's guidance: never commit them to source control or bake them into images; fetch them at runtime from a **secrets manager** with per-workload access and audit logs; prefer **short-lived, automatically issued credentials** (workload identity, dynamic database users) over long-lived static ones; and rotate on a schedule so rotation is routine, not an emergency.
+Passwords, API keys and signing keys follow the same lifecycle. Never commit or bake them in. Fetch from a **secrets manager**, prefer short-lived credentials, rotate routinely.
+
+<Compare title="Static versus short-lived" sides={[
+  { title: "Static secret in repo or image", tone: "bad", points: ["Leaks forever", "Rotation is an emergency"] },
+  { title: "Runtime fetch, short-lived", tone: "ok", points: ["Per-workload access", "Audit log", "Auto-expires"] }
+]} />
 
 <Ordering
   id="secret-leak"
@@ -117,10 +141,10 @@ Database passwords, API keys and signing keys are secrets with the same lifecycl
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh envelope-encryption and rotation variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["keys.envelope-rate", "keys.rewrap"]} count={4} />
 
-Next, deleting data for good: per-user keys make that possible in [privacy and data deletion](/learn/security/privacy-deletion).
+Next: [privacy and data deletion](/learn/security/privacy-deletion), where per-user keys make deletion possible.
 
 </Step>

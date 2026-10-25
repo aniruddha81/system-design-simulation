@@ -48,11 +48,13 @@ estimatedMinutes: 25
 
 <Step id="layers" title="Three kinds of flood">
 
-A distributed denial-of-service attack exhausts some resource from many sources at once. Which resource decides the defence:
+A DDoS exhausts one resource from many sources. The resource picks the defence.
 
-- **Volumetric**: fill the network links with bits, often UDP reflected off open servers. Measured in Gbit/s or Tbit/s. Only a network bigger than the attack can absorb it.
-- **Protocol**: exhaust connection state in servers, load balancers or firewalls, for example a SYN flood filling TCP's half-open connection table. Measured in packets per second.
-- **Application layer**: send valid-looking requests that are expensive to serve, such as search queries, logins or uncached pages. Measured in requests per second; each one may be indistinguishable from a real user.
+<Compare title="Three kinds of flood" sides={[
+  { title: "Volumetric", tone: "bad", points: ["Fills links (Gbit/s)", "Often UDP reflection", "Only a bigger network absorbs it"] },
+  { title: "Protocol", tone: "warn", points: ["Fills connection state (packets/s)", "SYN flood"] },
+  { title: "Application", tone: "info", points: ["Valid but costly requests (req/s)", "Looks like users"] }
+]} />
 
 <Choice
   id="classify"
@@ -70,9 +72,13 @@ A distributed denial-of-service attack exhausts some resource from many sources 
 
 <Step id="amplification" title="Reflection multiplies the attack">
 
-In a **reflection** attack, bots send small UDP queries with the victim's address forged as the source. Open servers reply, to the victim, with responses many times larger. CISA's 2014 alert lists amplification factors of roughly 28 to 54 for DNS and over 500 for NTP's `monlist` command. In 2018, exposed memcached servers produced amplification in the tens of thousands, and GitHub absorbed a 1.35 Tbit/s attack built this way.
+**Reflection**: bots send small UDP queries with the victim's address forged. Open servers reply to the victim with far larger responses. The root fix is upstream: BCP 38 ingress filtering, and servers that do not answer large UDP to the internet.
 
-The root fix is upstream: networks that drop packets with forged source addresses, as BCP 38 asks, and servers that do not answer large UDP responses to the internet.
+<Bars title="Amplification factor (illustrative)" log items={[
+  { label: "DNS (28 to 54×)", value: 54, unit: "×", tone: "warn" },
+  { label: "NTP monlist (500×+)", value: 500, unit: "×", tone: "bad" },
+  { label: "memcached 2018 (10,000s ×)", value: 10000, unit: "×", tone: "bad" }
+]} caption="GitHub absorbed a 1.35 Tbit/s attack built this way (2018)." />
 
 <VariantQuestion template="ddos.amplification" />
 
@@ -80,9 +86,15 @@ The root fix is upstream: networks that drop packets with forged source addresse
 
 <Step id="anycast" title="Absorb it at the edge">
 
-No single data center can absorb a terabit flood. **Anycast** announces the same IP address from many edge locations, so routing sends each packet to the nearest one. A globally distributed botnet's traffic is therefore split across the edge. Each location drops attack traffic (by protocol, port, signature or rate) and forwards only clean traffic to the origin.
+**Anycast** announces one IP from many edge sites, so a global botnet's traffic splits across them. Each site drops attack traffic and forwards only clean traffic. Plan for the worst site: botnets cluster.
 
-Plan for the worst location, not the average: botnets cluster where compromised devices are dense.
+<Flow title="Anycast edge" height={200} nodes={[
+  { id: "bots", label: "Botnet", kind: "client", x: 0, y: 50 },
+  { id: "e1", label: "Edge A", kind: "cdn", x: 50, y: 15, note: "drops attack" },
+  { id: "e2", label: "Edge B", kind: "cdn", x: 50, y: 50, note: "drops attack" },
+  { id: "e3", label: "Edge C", kind: "cdn", x: 50, y: 85, note: "drops attack" },
+  { id: "o", label: "Origin", kind: "service", x: 100, y: 50, note: "clean only" }
+]} edges={[{ from: "bots", to: "e1" }, { from: "bots", to: "e2" }, { from: "bots", to: "e3" }, { from: "e1", to: "o" }, { from: "e2", to: "o" }, { from: "e3", to: "o" }]} />
 
 <VariantQuestion template="ddos.anycast" />
 
@@ -90,7 +102,13 @@ Plan for the worst location, not the average: botnets cluster where compromised 
 
 <Step id="protocol" title="SYN floods and connection state">
 
-A TCP server normally stores state for every half-open connection after sending SYN-ACK. A SYN flood sends SYNs from spoofed addresses that never complete, filling that table so real clients cannot connect. RFC 4987 surveys the mitigations; the best known is **SYN cookies**: the server encodes the connection state into its initial sequence number and stores nothing until the client's final ACK proves it is real.
+A SYN flood fills the half-open table with spoofed SYNs. **SYN cookies** (RFC 4987) encode state in the sequence number and store nothing until the real ACK returns.
+
+<Sequence title="SYN cookie handshake" actors={["Client", "Server"]} messages={[
+  { from: "Client", to: "Server", label: "SYN" },
+  { from: "Server", to: "Client", label: "SYN-ACK (cookie), no state kept", tone: "info" },
+  { from: "Client", to: "Server", label: "ACK + cookie: connection created", tone: "ok" }
+]} caption="Spoofed sources never answer, so they cost no table space." />
 
 <Choice
   id="syn-cookies"
@@ -108,7 +126,13 @@ A TCP server normally stores state for every half-open connection after sending 
 
 <Step id="application" title="Application-layer floods">
 
-Application floods look like users, so defences combine several weak signals. In 2023 the HTTP/2 **Rapid Reset** technique (CVE-2023-44487) let attackers open and immediately cancel streams, producing floods of hundreds of millions of requests per second against large providers: proof that even protocol features become attack surface.
+Application floods look like users, so combine weak signals. HTTP/2 **Rapid Reset** (CVE-2023-44487, 2023) shows protocol features become attack surface.
+
+<Flow title="Defend the origin" height={170} nodes={[
+  { id: "u", label: "Traffic", kind: "client", x: 0, y: 50 },
+  { id: "cdn", label: "CDN cache + rate limit", kind: "cdn", x: 50, y: 50, note: "challenge expensive paths" },
+  { id: "o", label: "Origin", kind: "service", x: 100, y: 50, note: "accepts CDN only" }
+]} edges={[{ from: "u", to: "cdn" }, { from: "cdn", to: "o", label: "misses only" }]} caption="Autoscaling is a buffer, not a defence." />
 
 <Choice
   id="app-defences"
@@ -127,10 +151,10 @@ Application floods look like users, so defences combine several weak signals. In
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh amplification and anycast variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["ddos.amplification", "ddos.anycast"]} count={4} />
 
-In the [sandbox](/sandbox?template=cache-aside), open the **Scale** tab and run a breaking-point sweep: the load multiple of the first rung is how much extra request load your design absorbs before it fails, which is your application-layer margin. Then continue to [abuse prevention](/learn/security/abuse-prevention), for attackers who want your service to work, just for them.
+In the [sandbox](/sandbox?template=cache-aside), open **Scale** and run a breaking-point sweep: the first rung's load multiple is your application-layer margin. Next: [abuse prevention](/learn/security/abuse-prevention).
 
 </Step>

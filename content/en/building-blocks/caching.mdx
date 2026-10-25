@@ -46,11 +46,14 @@ estimatedMinutes: 25
 
 <Step id="why-cache" title="A database that cannot keep up">
 
-Your database answers a read in about 5 ms and saturates at a few thousand reads per second. Traffic is growing past that. A cache in front of it answers in under a millisecond, but only for keys it already holds.
+A database answers in about 5 ms and saturates at a few thousand reads/s. A cache answers in under 1 ms, for keys it holds. **Hit rate** = share of reads the cache answers.
 
-The number that matters is the **hit rate**: the share of reads the cache answers. Every miss still goes to the database.
+<Bars title="Read latency" log items={[
+  { label: "Cache hit", value: 0.5, unit: "ms", tone: "ok" },
+  { label: "Database read", value: 5, unit: "ms", tone: "warn" }
+]} />
 
-Move the sliders. Watch what happens to database load between a 90% and a 99% hit rate.
+Move the sliders: compare a 90% and a 99% hit rate.
 
 <HitRateCalculator />
 
@@ -58,11 +61,13 @@ Move the sliders. Watch what happens to database load between a 90% and a 99% hi
 
 <Step id="db-load" title="Predict the database load">
 
-With cache-aside, only misses reach the database:
+**database reads/s = request rate × (1 − hit rate)**
 
-**database reads per second = request rate × (1 − hit rate)**
-
-That is why hit rate improvements near the top matter so much: going from 98% to 99% halves the database load.
+<Bars title="DB load at 10,000 requests/s" items={[
+  { label: "90% hit rate", value: 1000, unit: "reads/s", tone: "bad" },
+  { label: "98% hit rate", value: 200, unit: "reads/s", tone: "warn" },
+  { label: "99% hit rate", value: 100, unit: "reads/s", tone: "ok" }
+]} caption="98% to 99% halves the database load." />
 
 <VariantQuestion template="cache.db-load" />
 
@@ -70,7 +75,14 @@ That is why hit rate improvements near the top matter so much: going from 98% to
 
 <Step id="read-path" title="Follow a miss through cache-aside">
 
-In **cache-aside** (also called lazy loading) the application owns the cache. The cache never talks to the database. On a hit, the service returns the cached value. On a miss, the service does the work and fills the cache itself.
+**Cache-aside**: the application owns the cache. On a miss, the service reads the database and fills the cache itself.
+
+<Sequence title="Cache-aside miss" actors={["Service", "Cache", "Database"]} messages={[
+  { from: "Service", to: "Cache", label: "GET user:42" },
+  { from: "Cache", to: "Service", label: "miss", tone: "warn" },
+  { from: "Service", to: "Database", label: "read user:42" },
+  { from: "Service", to: "Cache", label: "SET user:42 + TTL", tone: "ok" }
+]} />
 
 <Ordering
   id="cache-aside-miss"
@@ -90,11 +102,13 @@ In **cache-aside** (also called lazy loading) the application owns the cache. Th
 
 <Step id="skew" title="Where the hit rate comes from">
 
-A cache does not create hits. **Key popularity does.** Web and application traffic is highly skewed: a few keys get most of the reads. Breslau et al. measured that request frequency roughly follows a Zipf law, where the key of rank *i* gets a share proportional to 1 / *i*.
+**Key popularity makes hits.** Reads are roughly Zipf: the top *k* of *N* keys get about **H(k) / H(N)** of requests. A cache of 1% of keys can serve over half the reads, and LRU nearly holds them.
 
-Under Zipf with exponent 1, the top *k* of *N* keys receive about **H(k) ÷ H(N)** of all requests, where H(n) ≈ ln n + 0.577. So a cache holding 1% of the keys can serve well over half the reads.
-
-Eviction decides which keys stay. LRU keeps recently used keys; the Che approximation predicts LRU's hit rate from a single "characteristic time" for which keys survive. For skewed, stable popularity, LRU comes close to the ideal of holding the top *k*.
+<Flow title="Skewed reads" height={170} hot={["hot"]} nodes={[
+  { id: "c", label: "All reads", kind: "client", x: 0, y: 50 },
+  { id: "hot", label: "Cache: top 1% of keys", kind: "cache", x: 55, y: 25, note: "over half of reads" },
+  { id: "db", label: "Database: the rest", kind: "database", x: 100, y: 80 }
+]} edges={[{ from: "c", to: "hot" }, { from: "c", to: "db", label: "misses", dashed: true }]} />
 
 <VariantQuestion template="cache.zipf-coverage" />
 
@@ -102,7 +116,12 @@ Eviction decides which keys stay. LRU keeps recently used keys; the Che approxim
 
 <Step id="hit-rate-needed" title="Size the hit rate to the database">
 
-Turn the formula around. If you know the peak request rate and the database's saturation point, you know the minimum hit rate you must sustain, including after a deploy, a cache node loss, or a key change that invalidates everything.
+Turn the formula around: peak request rate and the database's limit give the **minimum hit rate**, including after a deploy or node loss.
+
+<Stats title="Example: peak 10,000/s, DB limit 500/s" items={[
+  { label: "Min hit rate", value: "95%", tone: "warn", sub: "1 − 500 / 10,000" },
+  { label: "After a cold restart", value: "≈ 0%", tone: "bad" }
+]} />
 
 <VariantQuestion template="cache.hit-rate-needed" />
 
@@ -110,7 +129,13 @@ Turn the formula around. If you know the peak request rate and the database's sa
 
 <Step id="freshness" title="Keep cached data fresh">
 
-A cached value is a copy, so it can go stale. You have two levers: a **TTL**, which bounds staleness by time, and **invalidation**, where the writer deletes the key after changing the database. Deleting rather than updating the key avoids races in which two writers leave an older value behind.
+A cached value is a copy and can go stale. **TTL** bounds staleness by time. **Invalidation**: the writer deletes the key after the database write.
+
+<Compare title="Freshness levers" sides={[
+  { title: "Long TTL", tone: "bad", points: ["Cheap", "Old data for hours"] },
+  { title: "Delete on write + TTL", tone: "ok", points: ["Fresh within delete latency", "TTL is the safety net"] },
+  { title: "Very short TTL", tone: "warn", points: ["Always misses", "More DB load"] }
+]} />
 
 <Choice
   id="price-freshness"
@@ -128,7 +153,13 @@ A cached value is a copy, so it can go stale. You have two levers: a **TTL**, wh
 
 <Step id="stampede" title="The stampede after a restart">
 
-A cache node restarts empty. Every hot key misses at once, and every request that misses goes to the database while the first fill is still in flight. The database, sized for a 95% hit rate, suddenly sees close to 100% of the traffic. This is a **stampede**, also called a thundering herd or dogpile.
+A node restarts empty. Every hot key misses at once; a database sized for 95% hits sees nearly all traffic: a **stampede**.
+
+<Timeline title="Cold restart" events={[
+  { at: "t0", label: "Cache node restarts empty", tone: "bad" },
+  { at: "t0 + 1 s", label: "Every request misses; DB saturates", tone: "bad" },
+  { at: "Later", label: "Cache refills, hit rate recovers", tone: "ok" }
+]} />
 
 <VariantQuestion template="cache.stampede" />
 
@@ -136,7 +167,13 @@ A cache node restarts empty. Every hot key misses at once, and every request tha
 
 <Step id="stampede-fix" title="Prevent the stampede">
 
-Facebook's memcache paper handles this with **leases**: the first miss for a key gets a token to fill it, and other clients wait briefly and retry the cache instead of hitting the database. In-process, the same idea is called **request coalescing** or single-flight.
+**Leases** (Facebook memcache) or **request coalescing**: the first miss fills the key, others wait and retry the cache.
+
+<Flow title="Coalesced misses" height={170} nodes={[
+  { id: "r", label: "1,000 requests, same key", kind: "client", x: 0, y: 50 },
+  { id: "s", label: "Single-flight", kind: "service", x: 50, y: 50, note: "one fill" },
+  { id: "db", label: "Database", kind: "database", x: 100, y: 50, note: "1 query" }
+]} edges={[{ from: "r", to: "s" }, { from: "s", to: "db", label: "one read" }]} />
 
 <Choice
   id="stampede-mitigations"
@@ -156,10 +193,10 @@ Facebook's memcache paper handles this with **leases**: the first miss for a key
 
 <Step id="practice" title="Check your mastery, then build it">
 
-The mastery check draws fresh variants you have not seen. Score 80% or more to master the lesson. A wrong answer links back to the step that teaches it.
+Score 80% or more. A wrong answer links back to its step.
 
 <MasteryCheck templates={["cache.db-load", "cache.hit-rate-needed", "cache.zipf-coverage", "cache.stampede"]} count={5} />
 
-Now run it for real. Open the [cache-aside template in the sandbox](/sandbox?template=cache-aside), drive Zipf traffic through it, and watch the hit rate climb as the cache warms. Then take the challenge: [keep reads fast through a cache restart](/challenges/cache-aside-recovery).
+Run it in the [cache-aside sandbox](/sandbox?template=cache-aside) and watch the hit rate climb. Then take the challenge: [keep reads fast through a cache restart](/challenges/cache-aside-recovery).
 
 </Step>

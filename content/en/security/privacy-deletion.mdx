@@ -42,7 +42,12 @@ estimatedMinutes: 25
 
 <Step id="minimise" title="The safest data is data you never kept">
 
-Every field you store is something to secure, back up, disclose on request and eventually delete. The GDPR writes this into its principles: **data minimisation** (collect only what is necessary for the purpose, Article 5(1)(c)), **storage limitation** (keep it identifiable no longer than needed, Article 5(1)(e)), and **data protection by design and by default** (Article 25). Good engineering arrives at the same place for a simpler reason: a breach can only leak what exists.
+A breach can only leak what exists. GDPR Art. 5 and 25: **minimisation**, **storage limitation**, protection **by design and by default**.
+
+<Compare title="Step totals feature" sides={[
+  { title: "Keep every GPS point forever", tone: "bad", points: ["Years of home and work", "Must secure, disclose, delete"] },
+  { title: "Keep weekly totals", tone: "ok", points: ["Feature still works", "Delete raw points after processing"] }
+]} />
 
 <Choice
   id="minimise-choice"
@@ -60,7 +65,15 @@ Every field you store is something to secure, back up, disclose on request and e
 
 <Step id="copies" title="Find every copy">
 
-A user's row in the primary database is only the start. A deletion request must reach every place their data was copied to, and in most systems nobody has the full list until someone writes it down.
+The primary row is only the start. A deletion must reach every copy, and nobody has the list until it is written down.
+
+<Flow title="Where a user's data lives" height={210} nodes={[
+  { id: "p", label: "Primary DB", kind: "database", x: 0, y: 50 },
+  { id: "c", label: "Cache, search", kind: "searchIndex", x: 55, y: 10 },
+  { id: "w", label: "Warehouse, events", kind: "objectStore", x: 55, y: 50 },
+  { id: "l", label: "Logs", kind: "queue", x: 55, y: 90 },
+  { id: "v", label: "Vendors", kind: "service", x: 100, y: 50, note: "email, support" }
+]} edges={[{ from: "p", to: "c" }, { from: "p", to: "w" }, { from: "p", to: "l" }, { from: "w", to: "v" }]} />
 
 <Choice
   id="data-copies"
@@ -80,7 +93,15 @@ A user's row in the primary database is only the start. A deletion request must 
 
 <Step id="pipeline" title="A deletion pipeline">
 
-Treat deletion as a first-class workflow with an owner, an audit trail and a deadline. Under the GDPR, a controller must act on a request without undue delay and within one month, extendable by two further months for complex cases (Article 12(3)).
+Deletion is a workflow with an owner, an audit trail and a deadline: one month, extendable by two (GDPR Art. 12(3)).
+
+<Timeline title="Deletion pipeline" events={[
+  { at: "1", label: "Verify requester", tone: "info" },
+  { at: "2", label: "Mark deleted", tone: "info" },
+  { at: "3", label: "Delete primary", tone: "warn" },
+  { at: "4", label: "Event to copies, acks", tone: "warn" },
+  { at: "5", label: "Audit log, confirm", tone: "ok" }
+]} />
 
 <Ordering
   id="deletion-pipeline"
@@ -100,7 +121,13 @@ Treat deletion as a first-class workflow with an owner, an audit trail and a dea
 
 <Step id="backups" title="Backups and the last copy">
 
-Backups are usually immutable, by design. Rewriting them to remove one user defeats their purpose. The common approach is to keep backup retention short and documented, make sure a restored backup re-applies outstanding deletions before it serves traffic, and treat erasure as complete when the last copy expires. So the real deletion time is processing time plus the longest retention of any copy you do not purge on request.
+Backups are immutable by design. Keep retention short and documented, re-apply deletions on restore, and treat erasure as done when the last copy expires.
+
+<Timeline title="Real deletion time" events={[
+  { at: "Day 0", label: "Request", tone: "info" },
+  { at: "Processing", label: "Live stores purged", tone: "warn" },
+  { at: "Longest retention", label: "Last backup copy expires: done", tone: "ok" }
+]} caption="Total = processing time + longest retention you do not purge." />
 
 <VariantQuestion template="privacy.erasure-days" />
 
@@ -108,9 +135,12 @@ Backups are usually immutable, by design. Rewriting them to remove one user defe
 
 <Step id="crypto-shred" title="Crypto-shredding">
 
-**Crypto-shredding** encrypts each user's data with a per-user key held in a key store. To erase the user, destroy their key: every copy encrypted under it, including those in immutable backups, becomes unreadable at once. NIST SP 800-88 recognises cryptographic erase as a sanitisation method when the key is reliably destroyed.
+**Crypto-shredding**: encrypt each user's data under a per-user key, and destroy the key to erase every copy, including immutable backups (NIST SP 800-88). Plaintext, derived data, processors and key backups escape it.
 
-It works only for data that was actually encrypted under that key. Derived data, plaintext in logs, data shared with processors and copies of the key itself in key-store backups all escape it.
+<Flow title="Destroy the key" height={150} failed={["k"]} nodes={[
+  { id: "k", label: "User key", kind: "kvStore", x: 0, y: 50, note: "destroyed" },
+  { id: "d", label: "Ciphertext copies", kind: "database", x: 100, y: 50, note: "DB, replicas, backups" }
+]} edges={[{ from: "k", to: "d" }]} caption="Ciphertext stays, unreadable." />
 
 <Choice
   id="crypto-shred-limits"
@@ -128,10 +158,10 @@ It works only for data that was actually encrypted under that key. Derived data,
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh erasure-timing variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["privacy.erasure-days"]} count={3} />
 
-This completes the security track. Put it to work on a whole system in the [interview framework](/learn/interview/interview-framework).
+This ends the security track. Apply it in the [interview framework](/learn/interview/interview-framework).
 
 </Step>

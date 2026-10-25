@@ -42,9 +42,14 @@ estimatedMinutes: 30
 
 <Step id="roles" title="Delegation without the password">
 
-A photo-printing site wants to read your photos from a storage service. Before OAuth, you would have given it your storage password, granting it everything, forever, until you changed the password. **OAuth 2.0** (RFC 6749) replaces that with a scoped, revocable token.
+**OAuth 2.0** (RFC 6749) replaces sharing your password with a scoped, revocable token.
 
-It names four roles: the **resource owner** (you), the **client** (the printing site), the **authorisation server** (which authenticates you and issues tokens), and the **resource server** (the photo API, which accepts tokens). The client never sees your password; it gets an access token limited to the scopes you approved, such as `photos.read`.
+<Flow title="Four OAuth roles" height={190} nodes={[
+  { id: "o", label: "Resource owner", kind: "client", x: 0, y: 50, note: "you" },
+  { id: "c", label: "Client", kind: "service", x: 50, y: 15, note: "printing site" },
+  { id: "a", label: "Authorisation server", kind: "apiGateway", x: 50, y: 85, note: "issues tokens" },
+  { id: "r", label: "Resource server", kind: "objectStore", x: 100, y: 50, note: "photo API" }
+]} edges={[{ from: "o", to: "a", label: "approves scopes" }, { from: "a", to: "c", label: "access token" }, { from: "c", to: "r", label: "photos.read" }]} caption="The client never sees your password." />
 
 <Choice
   id="why-oauth"
@@ -62,9 +67,15 @@ It names four roles: the **resource owner** (you), the **client** (the printing 
 
 <Step id="flow" title="The authorisation code flow with PKCE">
 
-The authorisation code flow sends the browser to the authorisation server, which returns a short-lived **code** through a redirect. The client then exchanges the code for tokens over a direct back-channel call. Tokens never pass through the browser's address bar.
+The browser carries only a short-lived **code**. Tokens come over a direct back-channel. **PKCE** (RFC 7636) sends a hash (`code_challenge`) out and must present the `code_verifier` back. `state` ties the response to the request.
 
-**PKCE** (RFC 7636) adds a per-request secret. Before redirecting, the client generates a random `code_verifier` and sends only its hash, the `code_challenge` (S256 method). At the token endpoint, it must present the verifier itself. The `state` parameter, checked on return, ties the response to the request the client made.
+<Sequence title="Authorisation code flow with PKCE" actors={["Client", "Browser", "Auth server"]} messages={[
+  { from: "Client", to: "Browser", label: "redirect + code_challenge, state" },
+  { from: "Browser", to: "Auth server", label: "user signs in, approves scopes" },
+  { from: "Auth server", to: "Client", label: "redirect back: code + state" },
+  { from: "Client", to: "Auth server", label: "code + code_verifier (back-channel)", tone: "info" },
+  { from: "Auth server", to: "Client", label: "access token", tone: "ok" }
+]} />
 
 <Ordering
   id="pkce-flow"
@@ -86,9 +97,12 @@ The authorisation code flow sends the browser to the authorisation server, which
 
 <Step id="pkce" title="What PKCE protects">
 
-On a phone, another app can register the same custom URL scheme and receive the redirect, including the code. Without PKCE, it could redeem that code. With PKCE, the code is useless without the verifier. RFC 9700 now recommends PKCE for every client, including server-side ones, because it also defeats code injection attacks.
+On a phone another app can claim the same URL scheme and grab the code. With PKCE the code is useless without the verifier. RFC 9700 recommends PKCE for every client. RFC 7636: 32 random bytes, 43 base64url characters.
 
-The protection is only as strong as the verifier's randomness. RFC 7636 recommends 32 random bytes, base64url-encoded into 43 characters.
+<Stats title="Verifier strength" items={[
+  { label: "Random bytes", value: "32", tone: "ok", sub: "256 bits" },
+  { label: "Encoded length", value: "43 chars", sub: "base64url" }
+]} />
 
 <VariantQuestion template="oauth.verifier-entropy" />
 
@@ -96,12 +110,12 @@ The protection is only as strong as the verifier's randomness. RFC 7636 recommen
 
 <Step id="grants" title="Choose the grant for the client">
 
-Which flow fits depends on who the client is and whether it can keep a secret.
-
-- **Browser apps and native apps**: authorisation code with PKCE. They are **public clients**: anything shipped to the user's device can be extracted.
-- **Server-side web apps**: authorisation code with PKCE plus a client secret or private-key authentication.
-- **Service-to-service with no user**: the **client credentials** grant.
-- **Deprecated**: the **implicit** grant returned tokens in the URL fragment, where they leak through history and referrers; RFC 9700 says not to use it. The **resource owner password** grant hands the user's password to the client; RFC 9700 says it must not be used.
+<Compare title="Which grant" sides={[
+  { title: "Browser or native app", tone: "ok", points: ["Code + PKCE", "Public client: no secret"] },
+  { title: "Server-side web app", tone: "ok", points: ["Code + PKCE", "Plus client secret or key"] },
+  { title: "No user (batch job)", tone: "info", points: ["Client credentials"] },
+  { title: "Deprecated", tone: "bad", points: ["Implicit: tokens leak in URL", "Password grant: must not be used"] }
+]} />
 
 <Choice
   id="grant-choice"
@@ -119,9 +133,12 @@ Which flow fits depends on who the client is and whether it can keep a secret.
 
 <Step id="oidc" title="OpenID Connect: who signed in">
 
-OAuth tells a client what it may access. **OpenID Connect** adds who the user is. Request the `openid` scope and the token response also contains an **ID token**: a signed JWT whose `aud` is the client's own ID, with the user's `sub`, the issuer, the time of authentication and the `nonce` the client sent.
+OAuth says what a client may access. **OpenID Connect** adds who: scope `openid` returns a signed **ID token** (aud = the client). The **access token** is for the API. Never send an ID token to an API.
 
-The two tokens have different audiences. The **ID token** is for the client, to establish a sign-in session. The **access token** is for the resource server. Sending an ID token to an API as if it were an access token is a common and dangerous mistake.
+<Compare title="Two tokens, two audiences" sides={[
+  { title: "ID token", tone: "info", points: ["Audience: the client", "Proves who signed in", "Has sub, nonce"] },
+  { title: "Access token", tone: "ok", points: ["Audience: the resource server", "Says what is allowed", "Send this to APIs"] }
+]} />
 
 <Choice
   id="which-token"
@@ -139,10 +156,10 @@ The two tokens have different audiences. The **ID token** is for the client, to 
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh PKCE verifier variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["oauth.verifier-entropy"]} count={3} />
 
-Next: tokens and cookies only stay secret on encrypted connections. Continue to [encryption in transit and at rest](/learn/security/encryption).
+Next: [encryption in transit and at rest](/learn/security/encryption).
 
 </Step>

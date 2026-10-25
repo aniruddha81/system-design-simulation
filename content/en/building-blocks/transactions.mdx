@@ -48,9 +48,14 @@ estimatedMinutes: 28
 
 <Step id="atomic" title="Atomic is not the same as isolated">
 
-A transfer should debit one account and credit another together. Atomicity makes the transaction commit or abort as a unit. Isolation constrains what concurrent transactions can observe and which combined outcomes are allowed. Two individually atomic transactions can still violate a shared invariant under a weaker isolation level.
+**Atomicity**: commit or abort as a unit. **Isolation**: what concurrent transactions can see. **Durability**: survives failure after ack. None sends an email atomically. Write the invariant first.
 
-Durability concerns surviving a failure after acknowledgement. None of these properties implies that a transaction also atomically sends an external email. Write the invariant first: for example, a seat has at most one active reservation, or at least one doctor remains on call.
+<Sequence title="Two atomic transactions, one seat" actors={["Txn 1", "Database", "Txn 2"]} messages={[
+  { from: "Txn 1", to: "Database", label: "seat A12 free?" },
+  { from: "Txn 2", to: "Database", label: "seat A12 free?" },
+  { from: "Txn 1", to: "Database", label: "reserve A12", tone: "bad" },
+  { from: "Txn 2", to: "Database", label: "reserve A12", tone: "bad" }
+]} caption="Each commits atomically; the invariant still breaks." />
 
 <Choice id="atomic-isolation" objective="protect-transaction-invariant" prompt="Two atomic transactions each read that a seat is free, then both create a reservation. What is missing from the claim that atomicity alone makes this safe?" options={[
   { id: "invariant", text: "A concurrency rule or constraint that prevents two reservations for the same seat", correct: true, feedback: "Right. All-or-nothing writes do not by themselves serialize competing decisions." },
@@ -62,9 +67,11 @@ Durability concerns surviving a failure after acknowledgement. None of these pro
 
 <Step id="anomalies" title="Name the read that changed">
 
-A **dirty read** sees data from a transaction that has not committed and may abort. A **non-repeatable read** sees a different committed value when reading the same row again. A **phantom** changes the set matching a predicate, such as all reservations for one event.
-
-Read Committed prevents dirty reads in the focused model and in PostgreSQL, but successive statements can see different committed data. A stable snapshot can prevent many changing-read effects while still allowing write skew. Isolation names are not interchangeable across products; inspect the actual guarantee and retry behavior.
+<Compare title="Anomalies" sides={[
+  { title: "Dirty read", tone: "bad", points: ["Sees uncommitted data", "Writer may abort"] },
+  { title: "Non-repeatable read", tone: "warn", points: ["Same row, new committed value"] },
+  { title: "Phantom", tone: "warn", points: ["Matching set gains a row"] }
+]} caption="Read Committed blocks dirty reads only. Isolation names differ across products." />
 
 <Choice id="anomaly-name" objective="identify-isolation-anomaly" prompt="Within one transaction, SELECT finds three matching reservations. Another transaction inserts and commits a fourth; a later SELECT sees four. What changed?" options={[
   { id: "phantom", text: "The predicate result gained a phantom row", correct: true, feedback: "Right. The membership of the matching set changed between reads." },
@@ -76,9 +83,14 @@ Read Committed prevents dirty reads in the focused model and in PostgreSQL, but 
 
 <Step id="lost-update" title="A read-modify-write can erase another update">
 
-Two clients read a counter at 10. Each computes 11 in application code and writes 11. The final value is 11 even though two increments were requested. This is a **lost update**. An atomic `UPDATE ... SET value = value + 1` can avoid that particular read-modify-write race.
+Read 10, both write 11: **lost update**. Fix with `value = value + 1` or a version predicate, then check the affected-row count.
 
-Another option is a version predicate: update only if the stored version still matches the version read, then inspect the affected-row count. A zero-row result means retry the whole decision against fresh data or return a conflict; it is not a successful update.
+<Sequence title="Lost update" actors={["Client A", "Row", "Client B"]} messages={[
+  { from: "Client A", to: "Row", label: "read 10" },
+  { from: "Client B", to: "Row", label: "read 10" },
+  { from: "Client A", to: "Row", label: "write 11" },
+  { from: "Client B", to: "Row", label: "write 11 (A's update erased)", tone: "bad" }
+]} caption="Zero rows affected means conflict: re-read and retry. It is not success." />
 
 <Choice id="lost-update-fix" objective="compare-concurrency-control" prompt="An optimistic UPDATE includes WHERE version = 7 and affects zero rows. What should the caller do?" options={[
   { id: "retry", text: "Treat it as a conflict and re-read before retrying the decision", correct: true, feedback: "Right. The stale precondition failed; recompute from current state or return a conflict." },
@@ -90,9 +102,7 @@ Another option is a version predicate: update only if the stored version still m
 
 <Step id="write-skew" title="A snapshot can preserve reads and still break a rule">
 
-Two doctors are on call. Each transaction reads that the other is on call, then turns its own row off. Under snapshot isolation, their writes touch different rows, so both may commit and leave nobody on call. This is **write skew**: the invariant spans the rows each transaction read.
-
-Run the focused schedule at snapshot isolation, then reset and compare serializable execution. Predict the final invariant before stepping. This player teaches interleavings and simplified concurrency control; it is not a claim that every database implements the same locking algorithm.
+Two doctors on call; each checks the other, then goes off. Different rows, so both commit and nobody is on call. This is **write skew**. Predict the invariant, then compare snapshot with serializable.
 
 <IsolationPlayer anomaly="writeSkew" level="snapshot" seed={11} />
 
@@ -106,9 +116,13 @@ Run the focused schedule at snapshot isolation, then reset and compare serializa
 
 <Step id="reservation" title="Enforce the rule where the race happens">
 
-For one reservation per seat, a unique constraint on the seat identifier gives the database an authority to reject a duplicate. A prior application check that finds no reservation is insufficient: another transaction can insert between the check and the write.
+Enforce the rule where the race happens: a **unique constraint** on the seat. A prior SELECT cannot stop a concurrent insert. Multirow rules need serializable transactions or a shared locked record. Retry on constraint and serialization failures, and keep side effects outside.
 
-For a multirow invariant, use an appropriate serializable transaction or a deliberately shared locked record covering the decision. Locking only existing matching rows may not protect an absent row or predicate. Handle constraint failures and serialization aborts as expected outcomes, and keep external side effects out of a transaction that may retry.
+<Flow title="Constraint as the authority" height={150} nodes={[
+  { id: "a", label: "Request A", kind: "client", x: 0, y: 20 },
+  { id: "b", label: "Request B", kind: "client", x: 0, y: 80 },
+  { id: "d", label: "UNIQUE(seat)", kind: "database", x: 100, y: 50, note: "one insert wins" }
+]} edges={[{ from: "a", to: "d" }, { from: "b", to: "d", label: "rejected", dashed: true }]} />
 
 <Choice id="unique-seat" objective="protect-transaction-invariant" prompt="Two requests simultaneously reserve seat A12. Which directly enforces at most one active reservation in a simplified table with one row per reserved seat?" options={[
   { id: "unique", text: "A unique seat constraint, with conflict handling in the caller", correct: true, feedback: "Right. The constraint arbitrates concurrent inserts at the database boundary." },
@@ -120,9 +134,11 @@ For a multirow invariant, use an appropriate serializable transaction or a delib
 
 <Step id="locking" title="Choose where contention is paid">
 
-Pessimistic locking coordinates before making a conflicting change. It can be useful when conflicts are frequent, but long transactions hold locks, consume connections and can deadlock. Acquire shared resources in a consistent order and handle deadlock aborts.
-
-Optimistic control checks whether the decision is still valid at commit or update time. It works well when conflicts are uncommon, but repeated retries can waste work under a hot key. Retry with bounds and fresh reads. Serializable execution promises a serial-equivalent committed result, not that every transaction succeeds immediately or that its business logic is correct.
+<Compare title="Where contention is paid" sides={[
+  { title: "Pessimistic", tone: "warn", points: ["Lock first", "Good when conflicts are common", "Deadlocks: lock in order"] },
+  { title: "Optimistic", tone: "info", points: ["Check at commit", "Good when conflicts are rare", "Bound the retries"] },
+  { title: "Serializable", tone: "ok", points: ["Serial-equivalent result", "Transactions can abort"] }
+]} caption="Never hold locks across a remote call." />
 
 <Choice id="lock-remote" objective="compare-concurrency-control" prompt="A transaction locks inventory rows and waits five seconds for an external API. What is the main concern?" options={[
   { id: "hold", text: "It holds scarce locks and connections during an unpredictable remote wait", correct: true, feedback: "Right. Shorten the transaction and design an explicit reservation or compensation workflow around remote effects." },
@@ -134,9 +150,15 @@ Optimistic control checks whether the decision is still valid at commit or updat
 
 <Step id="indexes" title="Isolation and storage structure answer different questions">
 
-A B-tree keeps ordered pages for point and range access, while an LSM buffers updates and merges sorted runs over time. Their write cost depends on page behavior, compaction, indexes, data shape and the durability policy. Neither name alone tells you which isolation level is provided.
+B-tree: ordered pages. LSM: buffer and merge sorted runs. Neither name tells you the isolation level.
 
-**Write amplification = physical bytes written / logical bytes updated.** If 50 MB of logical updates produce 150 MB of B-tree writes and 400 MB of LSM writes in a measured workload, amplification is 3 and 8; the LSM writes 250 MB more. Sequential I/O can still make an engine with more physical bytes useful. Compare throughput, read amplification, space and tail latency too.
+**Write amplification = physical bytes written ÷ logical bytes updated.**
+
+<Bars title="50 MB of logical updates" items={[
+  { label: "Logical", value: 50, unit: "MB", tone: "ok" },
+  { label: "B-tree physical (3×)", value: 150, unit: "MB", tone: "warn" },
+  { label: "LSM physical (8×)", value: 400, unit: "MB", tone: "bad" }
+]} caption="Compare read amplification, space and tail latency too." />
 
 <VariantQuestion template="transactions.write-amplification" />
 
@@ -144,10 +166,10 @@ A B-tree keeps ordered pages for point and range access, while an LSM buffers up
 
 <Step id="practice" title="Check your mastery">
 
-Score at least 80% on fresh measured write-cost calculations. Then revisit the choices: name the anomaly, state the invariant and identify the database rule that enforces it. The numerical mastery check covers write amplification; the schedule and choices assess isolation reasoning.
+Score 80% or more. Name the anomaly, state the invariant, and name the database rule that enforces it.
 
 <MasteryCheck templates={["transactions.write-amplification"]} count={5} />
 
-Use the focused player to compare the same write-skew schedule under snapshot and serializable modes. Continue to [queues](/learn/building-blocks/queues) for the separate problem of coordinating a committed database effect with message delivery.
+Replay the write-skew schedule under snapshot and serializable. Then see [queues](/learn/building-blocks/queues) for coordinating a commit with message delivery.
 
 </Step>

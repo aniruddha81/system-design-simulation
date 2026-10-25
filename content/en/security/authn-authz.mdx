@@ -47,9 +47,13 @@ estimatedMinutes: 30
 
 <Step id="two-questions" title="Two different questions">
 
-**Authentication** (authN) answers *who is making this request?* It verifies a credential: a password, a passkey, a signed token, a client certificate. **Authorisation** (authZ) answers *may this principal do this action on this resource?* It runs on every request, after authentication, and needs the resource in hand.
+**AuthN**: who is calling? **AuthZ**: may they do this action on this resource? AuthZ runs on every request.
 
-HTTP keeps them apart too: **401 Unauthorized** means "I do not know who you are, authenticate", and **403 Forbidden** means "I know who you are, and the answer is no".
+<Sequence title="Valid session, not the owner" actors={["Client", "API"]} messages={[
+  { from: "Client", to: "API", label: "DELETE /projects/42 + session" },
+  { from: "API", to: "Client", label: "401 = who are you?", tone: "muted" },
+  { from: "API", to: "Client", label: "403 = known, not allowed", tone: "bad" }
+]} caption="Here the answer is 403: authentication passed." />
 
 <Choice
   id="authn-or-authz"
@@ -67,9 +71,12 @@ HTTP keeps them apart too: **401 Unauthorized** means "I do not know who you are
 
 <Step id="passwords" title="Store passwords for the day you are breached">
 
-Assume the password table will leak one day, and make that day survivable. Never store the password, and never store a fast hash of it: a GPU computes billions of SHA-256 hashes per second. Use a **slow, memory-hard password hash** such as Argon2id, scrypt or bcrypt, as OWASP recommends, with a work factor tuned so one verification takes tens of milliseconds on your servers.
+Assume the table leaks. Use a **slow, memory-hard hash** (Argon2id, scrypt, bcrypt) tuned to tens of ms, plus a unique random **salt** per user. Never use a fast hash such as SHA-256.
 
-Add a unique random **salt** per user, stored next to the hash. Without salts, one pass of a dictionary cracks every user who chose a listed password at once, and identical passwords share a hash. With salts, the attacker pays for a separate pass per user.
+<Compare title="Password storage" sides={[
+  { title: "Fast hash, no salt", tone: "bad", points: ["Billions of guesses/s", "One pass cracks everyone", "Same password, same hash"] },
+  { title: "Argon2id + salt", tone: "ok", points: ["Tens of ms per guess", "Separate pass per user"] }
+]} />
 
 <VariantQuestion template="auth.salted-crack" />
 
@@ -77,9 +84,14 @@ Add a unique random **salt** per user, stored next to the hash. Without salts, o
 
 <Step id="factors" title="Factors that resist phishing">
 
-Passwords get phished, guessed and reused. A second factor helps, but not all factors are equal. A one-time code from SMS or an authenticator app can be typed into a convincing fake page and relayed to the real one within seconds. NIST SP 800-63B classifies SMS as a *restricted* authenticator, partly because of SIM-swap attacks.
+Typed codes (SMS, app) can be relayed by a phishing page in seconds. **WebAuthn** and passkeys sign a challenge bound to the site origin, so a look-alike domain gets a useless signature.
 
-**WebAuthn** credentials, including passkeys and hardware security keys, sign a challenge that includes the site's origin, so a signature made on a look-alike domain is useless on the real one.
+<Sequence title="Relay phishing versus WebAuthn" actors={["Victim", "Fake site", "Real site"]} messages={[
+  { from: "Victim", to: "Fake site", label: "password + 6-digit code" },
+  { from: "Fake site", to: "Real site", label: "relays both: login works", tone: "bad" },
+  { from: "Victim", to: "Fake site", label: "WebAuthn signature for fake origin" },
+  { from: "Fake site", to: "Real site", label: "wrong origin: rejected", tone: "ok" }
+]} caption="NIST SP 800-63B treats SMS as restricted (SIM swap)." />
 
 <Choice
   id="phishing-resistant"
@@ -97,9 +109,13 @@ Passwords get phished, guessed and reused. A second factor helps, but not all fa
 
 <Step id="bola" title="Check the object, every time">
 
-The top entry of the OWASP API Security Top 10 (2023) is **Broken Object Level Authorization** (BOLA, also called IDOR). The API authenticates the caller, then fetches `/invoices/8812` by the ID in the URL without checking that invoice 8812 belongs to them. Change the number, read someone else's invoice.
+Top of the OWASP API Top 10 (2023): **BOLA / IDOR**. The API authenticates, then loads `/invoices/8812` without checking it is yours. Check permission on **that object**, server-side, every time. Random IDs are not authorisation.
 
-The fix is boring and must be universal: every handler that loads an object by an ID from the request checks the caller's permission on **that object**, on the server. Unguessable IDs make enumeration harder but are not authorisation.
+<Flow title="Object-level check" height={150} nodes={[
+  { id: "c", label: "User A", kind: "client", x: 0, y: 50 },
+  { id: "api", label: "GET /invoices/8812", kind: "service", x: 50, y: 50, note: "owner == caller?" },
+  { id: "db", label: "Invoice 8812", kind: "database", x: 100, y: 50, note: "owned by B" }
+]} edges={[{ from: "c", to: "api" }, { from: "api", to: "db", label: "403 / 404 if not owner" }]} />
 
 <Choice
   id="fix-bola"
@@ -117,11 +133,11 @@ The fix is boring and must be universal: every handler that loads an object by a
 
 <Step id="models" title="Roles, attributes or relationships">
 
-Three common authorisation models:
-
-- **RBAC**, role-based: users get roles, roles get permissions. Simple to audit; struggles when permissions depend on *which* object ("editor of *this* document").
-- **ABAC**, attribute-based: a policy evaluates attributes of the user, the resource and the context ("same department, during business hours, from a managed device"). Expressive, harder to reason about and audit.
-- **ReBAC**, relationship-based: permissions follow a graph of relationships ("user is a member of group G, which is an editor of folder F, which contains document D"). Google's Zanzibar paper describes this model serving sharing for products such as Drive and Calendar.
+<Compare title="Authorisation models" sides={[
+  { title: "RBAC", points: ["Users get roles", "Easy to audit", "Weak per-object"] },
+  { title: "ABAC", points: ["Policy over attributes", "Expressive", "Hard to audit"] },
+  { title: "ReBAC", tone: "ok", points: ["Graph of relationships", "Folders, groups, sharing", "Zanzibar (Drive)"] }
+]} />
 
 <Choice
   id="pick-model"
@@ -139,7 +155,13 @@ Three common authorisation models:
 
 <Step id="layers" title="Where each check runs">
 
-A request passes several checks, each where the needed information is available. The gateway can authenticate and apply coarse rules, but only the service that loads the object can decide object-level access.
+Each check runs where the information exists. Only the service that loads the object can decide object-level access.
+
+<Flow title="Where checks run" height={150} nodes={[
+  { id: "g", label: "Gateway", kind: "apiGateway", x: 0, y: 50, note: "authN, coarse scope" },
+  { id: "s", label: "Service", kind: "service", x: 50, y: 50, note: "loads object" },
+  { id: "o", label: "Object check", kind: "circuitBreaker", x: 100, y: 50, note: "authZ on this object" }
+]} edges={[{ from: "g", to: "s" }, { from: "s", to: "o" }]} />
 
 <Ordering
   id="request-checks"
@@ -159,10 +181,10 @@ A request passes several checks, each where the needed information is available.
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh password-cracking variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["auth.salted-crack"]} count={3} />
 
-Next, see how an authenticated identity is carried between requests in [sessions vs JWT](/learn/security/sessions-jwt).
+Next: [sessions vs JWT](/learn/security/sessions-jwt).
 
 </Step>

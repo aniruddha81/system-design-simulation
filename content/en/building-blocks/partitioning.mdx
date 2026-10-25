@@ -36,9 +36,13 @@ estimatedMinutes: 26
 
 <Step id="key" title="A shard key chooses where work lands">
 
-Partitioning splits a dataset across nodes. Replication copies it. A shard key controls routing, locality and which operations need cross-shard coordination. Start with the queries and invariants, not with a preferred hash function.
+Partitioning splits data; replication copies it. The shard key sets routing, locality and cross-shard work. Start from queries, not hash functions.
 
-Putting an account's rows together makes account queries local, but a huge account may dominate its shard. Partitioning by a random row ID spreads writes but can scatter a range query across every shard. There is no universal shard key: choose the locality you need and expose the resulting skew and fan-out.
+<Compare title="Shard key trade-offs" sides={[
+  { title: "Tenant ID", tone: "ok", points: ["Tenant queries stay local", "Huge tenant dominates a shard"] },
+  { title: "Random row ID", tone: "warn", points: ["Writes spread evenly", "Range queries hit every shard"] },
+  { title: "Constant key", tone: "bad", points: ["All work on one shard"] }
+]} />
 
 <Choice id="shard-locality" objective="choose-shard-key" prompt="Most queries fetch all recent events for one tenant, and tenants are reasonably sized. Which initial key keeps those queries local?" options={[
   { id: "tenant", text: "Tenant ID, with a plan for unusually large tenants", correct: true, feedback: "Right. Tenant locality reduces fan-out, while the large-tenant exception remains a capacity concern." },
@@ -50,9 +54,11 @@ Putting an account's rows together makes account queries local, but a huge accou
 
 <Step id="range" title="Range and hash partitioning fail differently">
 
-Range partitioning keeps adjacent keys together and supports efficient range scans. A timestamp key can send every new write to the newest range. Splitting ranges helps distribute stored data, but an ever-moving write frontier can remain hot.
-
-Hash partitioning spreads distinct keys more evenly but loses natural range locality. A request for all records in a time interval may require scatter-gather. Composite schemes can hash by tenant and range by time within a tenant, but the extra layout should solve a demonstrated workload need.
+<Compare title="Range versus hash" sides={[
+  { title: "Range", tone: "info", points: ["Cheap range scans", "Timestamp key: newest range is hot"] },
+  { title: "Hash", tone: "info", points: ["Even spread of keys", "Time-range query scatters"] },
+  { title: "Hash tenant + range time", tone: "ok", points: ["Only if the workload needs it"] }
+]} caption="Splitting ranges balances stored bytes, not the moving write frontier." />
 
 <Choice id="timestamp-hotspot" objective="choose-shard-key" prompt="All inserts use increasing timestamps and route by timestamp range. One newest shard is overloaded. Why?" options={[
   { id: "frontier", text: "Current writes concentrate in the active end range", correct: true, feedback: "Right. Balanced historical bytes do not imply balanced current write rate." },
@@ -64,9 +70,7 @@ Hash partitioning spreads distinct keys more evenly but loses natural range loca
 
 <Step id="ring" title="Follow the ring clockwise">
 
-Simple `hash(key) % N` changes routing for many keys when N changes. Consistent hashing places both keys and node tokens on a circular hash space. A key belongs to the first node token clockwise, wrapping around at the end.
-
-Add a node and only the intervals it takes change owner. Virtual nodes give one physical machine many tokens, reducing sensitivity to one unlucky large interval. They also add routing metadata and migration fragments. Predict which keys move, then use the focused model to add and remove nodes and compare with modulo routing.
+`hash(key) % N` remaps most keys when N changes. On a ring, a key belongs to the first token clockwise, wrapping at the end. Virtual nodes smooth the intervals. Predict what moves, then add and remove nodes.
 
 <HashRingPlayer seed={7} />
 
@@ -80,9 +84,13 @@ Add a node and only the intervals it takes change owner. Virtual nodes give one 
 
 <Step id="movement" title="Estimate how much data must move">
 
-For N ideally balanced equal nodes, one added node should own about **1 / (N + 1)** of keys after rebalancing. Growing from four to five nodes moves about one fifth of existing keys. With ten million keys, that is approximately **two million** ownership changes.
+Adding a node to N balanced nodes moves about **1 / (N + 1)** of keys. This is an expectation, not a guarantee on a small ring; measure bytes too.
 
-This is an expectation under balance assumptions, not a guarantee for a small ring. Payload sizes, replication and token placement change copied bytes. A two-million-key migration may move very different volumes if one key holds a large object. Measure bytes and migration bandwidth as well as key counts.
+<Stats title="4 to 5 nodes, 10M keys" items={[
+  { label: "Share that moves", value: "1/5", tone: "info" },
+  { label: "Keys moved", value: "≈ 2M", tone: "warn" },
+  { label: "Modulo routing", value: "≈ 80%", tone: "bad", sub: "for contrast" }
+]} />
 
 <VariantQuestion template="partitioning.movement" />
 
@@ -90,9 +98,13 @@ This is an expectation under balance assumptions, not a guarantee for a small ri
 
 <Step id="hot-key" title="Balanced keys can still mean unbalanced traffic">
 
-Suppose one celebrity profile receives 30% of 20,000 reads/s. Its owner handles **at least 6,000 reads/s**, even if every other key is perfectly balanced. Virtual nodes redistribute intervals, not requests within that single key.
+Virtual nodes spread intervals, not requests for one key.
 
-For reads, replication or a cache can spread demand. For writes, split an aggregatable counter or a tenant's data into subkeys only if the operation permits it. Splitting a key may sacrifice simple ordering or atomic updates, so a salting trick must come with a read and reconciliation plan.
+<Flow title="One celebrity key" height={180} hot={["owner"]} nodes={[
+  { id: "c", label: "20,000 reads/s", kind: "client", x: 0, y: 50 },
+  { id: "owner", label: "Key owner", kind: "database", x: 60, y: 50, note: "at least 6,000/s" },
+  { id: "o", label: "Other shards", kind: "database", x: 100, y: 85, note: "balanced" }
+]} edges={[{ from: "c", to: "owner", label: "30% of reads" }, { from: "c", to: "o", dashed: true }]} caption="Spread reads with replicas or a cache. Splitting a write key needs a reconcile plan." />
 
 <VariantQuestion template="partitioning.hot-key" />
 
@@ -100,9 +112,14 @@ For reads, replication or a cache can spread demand. For writes, split an aggreg
 
 <Step id="rebalance" title="Ownership changes need a data protocol">
 
-Updating the routing map does not copy data. During migration, old and new owners can disagree, and writes can arrive while a snapshot is in transit. A safe design needs a versioned ownership map, a change catch-up path and a defined handoff point.
+Changing the routing map copies no data. Use a versioned map, a catch-up path and a coordinated handoff. Rate-limit copying.
 
-One approach copies a snapshot, catches up changes, switches ownership under a coordinated protocol, then retains forwarding or fallback during the transition. Exact mechanics depend on the storage system. Rate-limit copying so rebalancing does not consume the spare capacity needed to serve traffic or recover from a failure.
+<Timeline title="Shard handoff" events={[
+  { at: "1", label: "Copy snapshot", tone: "info" },
+  { at: "2", label: "Catch up changes", tone: "info" },
+  { at: "3", label: "Switch owner (versioned map)", tone: "warn" },
+  { at: "4", label: "Retire old copy after rollback window", tone: "ok" }
+]} />
 
 <Ordering id="migration-order" objective="plan-rebalancing" prompt="Order a simplified coordinated shard handoff." items={[
   { id: "copy", text: "Copy a snapshot while tracking subsequent source changes" },
@@ -115,9 +132,13 @@ One approach copies a snapshot, catches up changes, switches ownership under a c
 
 <Step id="tradeoffs" title="Partitioning moves coordination into the design">
 
-A unique username constraint on one shard is easy to enforce locally. A constraint spanning all shards needs routing to one authority or distributed coordination. Cross-shard joins and transactions also add network and failure cases. Do not shard only because a future scale number sounds large.
+Sharding moves coordination into your design: cross-shard uniqueness, joins and transactions cost more. Pick the smallest layout that meets measured need, and watch per-shard latency and key popularity.
 
-Choose the smallest layout that meets measured capacity and growth needs. Make the partition key part of data access patterns and observability: per-shard latency, bytes and key popularity show failures hidden by fleet averages. Keep an escape path for a large tenant before it becomes the whole incident.
+<Flow title="Local uniqueness is not global" height={190} nodes={[
+  { id: "a", label: "Shard A", kind: "database", x: 0, y: 20, note: "accepts 'ana'" },
+  { id: "b", label: "Shard B", kind: "database", x: 0, y: 80, note: "accepts 'ana'" },
+  { id: "u", label: "Uniqueness authority", kind: "dedupStore", x: 100, y: 50 }
+]} edges={[{ from: "a", to: "u", label: "claim name" }, { from: "b", to: "u", label: "claim name" }]} caption="Without one authority, both shards accept the same name." />
 
 <Choice id="global-unique" objective="plan-rebalancing" prompt="Every shard locally enforces unique usernames, but any username may be inserted on any shard. Is global uniqueness guaranteed?" options={[
   { id: "no", text: "No; route each username to one uniqueness authority or coordinate globally", correct: true, feedback: "Right. Two shards can each accept the same name without seeing the other's local constraint." },
@@ -129,10 +150,10 @@ Choose the smallest layout that meets measured capacity and growth needs. Make t
 
 <Step id="practice" title="Check your mastery, then create a hot shard">
 
-Score at least 80% on fresh movement and hot-key variants. Compare the ideal prediction with the finite focused ring and explain why actual movement varies.
+Score 80% or more. Compare the ideal movement with the finite ring and explain the gap.
 
 <MasteryCheck templates={["partitioning.movement", "partitioning.hot-key"]} count={5} />
 
-In the [sandbox](/sandbox), compare uniform keys with a concentrated hot key on partitioned storage. Add capacity and observe whether the hot owner remains the bottleneck. The ring model above explains ownership; the sandbox adds service and network costs.
+In the [sandbox](/sandbox), compare uniform keys with a hot key and add capacity: the hot owner stays the bottleneck.
 
 </Step>

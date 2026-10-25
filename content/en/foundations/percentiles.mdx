@@ -34,9 +34,13 @@ estimatedMinutes: 24
 
 <Step id="mean" title="An average can hide the slow users">
 
-Imagine 99 requests take 10 ms each and one takes 1,010 ms. The mean is 20 ms, yet one user waited over a second. Averages answer questions about total work and Little's law; they do not describe the experience of the slowest users.
+99 requests at 10 ms and one at 1,010 ms average 20 ms. One user waited over a second. **p99** = the value at or below which about 99% of observations fall.
 
-A percentile describes a point in an ordered distribution. A p99 of 200 ms says about 99% of measured observations are at or below that value under the chosen convention. It does not promise that every user gets 200 ms or that the worst request takes only a little longer.
+<Bars title="Same mean, different experience" log items={[
+  { label: "Mean", value: 20, unit: "ms", tone: "ok" },
+  { label: "p99 (nearest rank)", value: 10, unit: "ms", tone: "ok" },
+  { label: "Slowest request", value: 1010, unit: "ms", tone: "bad" }
+]} caption="A stable mean can hide a worse tail." />
 
 <Choice id="mean-tail" objective="diagnose-tail-latency" prompt="Mean latency stays at 20 ms while p99 rises from 80 ms to 900 ms. What should you conclude?" options={[
   { id: "tail", text: "The slow portion of the measured distribution worsened despite a stable mean", correct: true, feedback: "Right. Investigate slow requests and workload groups; the mean alone cannot rule out a user-visible regression." },
@@ -48,9 +52,12 @@ A percentile describes a point in an ordered distribution. A p99 of 200 ms says 
 
 <Step id="rank" title="Calculate the rank before reading the value">
 
-We use **nearest rank = ceil(p × N)** with one-based indexing. For 1,000 sorted samples, p99 uses rank 990. Read the latency value at that rank; the rank itself is not a time measurement.
+**Nearest rank = ceil(p × N)**, one-based. The rank is a position, not a time. State sample size, interval and convention.
 
-With very few samples, high percentiles collapse toward the maximum and vary sharply between windows. A p99 from ten requests is weak evidence for a service handling millions. State the sample size, observation interval, included statuses and quantile convention when comparing results.
+<Stats title="1,000 sorted samples" items={[
+  { label: "p99 rank", value: "990", tone: "info", sub: "ceil(0.99 × 1000)" },
+  { label: "p99 from 10 requests", value: "= max", tone: "warn", sub: "weak evidence" }
+]} />
 
 <VariantQuestion template="percentiles.rank" />
 
@@ -58,9 +65,14 @@ With very few samples, high percentiles collapse toward the maximum and vary sha
 
 <Step id="aggregation" title="Do not average machine percentiles">
 
-Suppose one server receives 100 requests and another receives 100,000. Their local p99 values do not contain enough information to reconstruct the fleet p99. Even weighting those two values by request count generally fails because a quantile is not a mean.
+Quantiles are not means. Merge histogram counts or a mergeable sketch, then compute the percentile. Check bucket width near your SLO.
 
-Aggregate compatible histogram bucket counts, or use a mergeable distribution sketch with a known error bound. Then calculate the percentile for the combined observations. Check bucket resolution near your SLO; a coarse bucket spanning 100 ms to 1,000 ms gives a weak estimate of a 200 ms objective.
+<Flow title="Fleet percentile" height={190} nodes={[
+  { id: "a", label: "Server A", kind: "service", x: 0, y: 15, note: "100 requests" },
+  { id: "b", label: "Server B", kind: "service", x: 0, y: 85, note: "100,000 requests" },
+  { id: "h", label: "Merged histogram", kind: "kvStore", x: 55, y: 50, note: "sum bucket counts" },
+  { id: "p", label: "Fleet p99", kind: "dedupStore", x: 100, y: 50 }
+]} edges={[{ from: "a", to: "h", label: "counts" }, { from: "b", to: "h", label: "counts" }, { from: "h", to: "p" }]} caption="Never average p99 values." />
 
 <Choice id="fleet-percentile" objective="diagnose-tail-latency" prompt="How should you estimate fleet p99 across machines with different traffic volumes?" options={[
   { id: "hist", text: "Merge compatible histogram counts and compute the quantile from the merged distribution", correct: true, feedback: "Right. Counts preserve the distribution and traffic volume needed for a fleet quantile, within bucket resolution." },
@@ -72,9 +84,12 @@ Aggregate compatible histogram bucket counts, or use a mergeable distribution sk
 
 <Step id="fanout" title="A rare branch delay becomes common in fan-out">
 
-A search request queries 100 shards and needs every result. If each independent shard has a 1% chance of exceeding a threshold, the chance all are fast is **0.99^100 ≈ 36.6%**. About **63.4%** of parents encounter at least one slow branch.
+**P(any slow) = 1 − (1 − q)^n**, assuming independent branches. It is a probability at a threshold, not an exact p99.
 
-The formula is **P(any slow) = 1 − (1 − q)^n**. It gives a probability at a chosen threshold, not an exact end-to-end p99 latency. Correlated pauses, shared queues and unequal shard distributions change the result. Dean and Barroso's tail-at-scale paper motivates treating these rare delays as a system-level problem.
+<Stats title="100 shards, each 1% slow" items={[
+  { label: "All fast", value: "36.6%", tone: "ok", sub: "0.99^100" },
+  { label: "At least one slow", value: "63.4%", tone: "bad" }
+]} caption="See Dean and Barroso, The Tail at Scale." />
 
 <VariantQuestion template="percentiles.fanout" />
 
@@ -82,9 +97,12 @@ The formula is **P(any slow) = 1 − (1 − q)^n**. It gives a probability at a 
 
 <Step id="correlation" title="Check the independence assumption">
 
-If all shards share a network bottleneck, their delays may happen together. Multiplying independent probabilities then misstates the actual parent distribution. At the extreme, if every branch crosses the threshold on exactly the same requests, the parent slow probability equals the single-branch slow probability.
+Shared bottlenecks make delays coincide, so the independence formula overstates. Perfect correlation: parent slow rate equals the single-branch rate.
 
-Real systems mix correlated and independent causes. Trace which branches slow down together and group requests by region, payload, tenant and dependency. A fleet graph can hide one badly affected tenant behind many fast small requests.
+<Compare title="100 branches, 1% slow each" sides={[
+  { title: "Independent", tone: "bad", points: ["Slow events scatter", "About 63.4% of parents slow"] },
+  { title: "Perfectly correlated", tone: "ok", points: ["Same 1% of requests", "1% of parents slow"] }
+]} caption="Real systems mix both. Trace which branches slow together." />
 
 <Choice id="shared-pause" objective="predict-fanout-tail" prompt="All 100 branches exceed 100 ms on exactly the same 1% of parent requests, and never otherwise. What percent of parents encounter a slow branch?" options={[
   { id: "one", text: "1%, because the slow events coincide perfectly", correct: true, feedback: "Right. These branches are perfectly correlated; the independence formula does not apply." },
@@ -96,9 +114,13 @@ Real systems mix correlated and independent causes. Trace which branches slow do
 
 <Step id="mitigate" title="Reduce tails without causing another queue">
 
-First remove avoidable variance: bound batch size, control admission, fix hot partitions and isolate noisy workloads. If the response can tolerate partial results, a deadline can bound waiting, but it changes the result contract and must be visible to the caller.
+Remove variance first: bound batches, admit load, fix hot partitions, isolate noisy neighbours. Hedge only with spare capacity.
 
-Hedged requests send an extra copy after a delay and use the first acceptable response. They can reduce some read tails, but extra work competes for capacity. Bound the hedge rate, avoid unsafe side effects, and cancel losers where supported. Hedging an already saturated dependency can make the tail worse.
+<Compare title="Tail fixes" sides={[
+  { title: "Admission control", tone: "ok", points: ["Cuts queueing", "Rejects excess"] },
+  { title: "Deadline + partial result", tone: "info", points: ["Bounds waiting", "Caller must see it"] },
+  { title: "Hedged request", tone: "warn", points: ["Extra copy after delay", "Bound the rate", "Worse if saturated"] }
+]} />
 
 <Choice id="hedging" objective="diagnose-tail-latency" prompt="A read dependency is saturated and p99 is rising. What is the safest first move?" options={[
   { id: "admission", text: "Control admitted load and investigate the constrained resource", correct: true, feedback: "Right. Creating spare capacity addresses queueing; measure before adding duplicate work." },
@@ -110,9 +132,12 @@ Hedged requests send an extra copy after a delay and use the first acceptable re
 
 <Step id="measurement" title="Measure the wait the user actually experienced">
 
-A client that waits for a slow request before generating the next one can miss delays that a constant arrival stream would have encountered. Record the load model and include time spent waiting before execution when that time belongs to the user-visible boundary.
+Include time spent waiting to start. A timeout is a failure even with no latency sample. Watch latency and availability together.
 
-Keep both latency and availability views. A one-second timeout is a failed user request even if it produces no successful response sample. A success-only p99 may improve while more requests fail. Look at rates, sample counts and failures before celebrating a percentile change.
+<Compare title="Shorter timeout, better p99?" sides={[
+  { title: "Success-only p99", tone: "ok", points: ["Improves"] },
+  { title: "Failures", tone: "bad", points: ["Triple", "Slow requests moved here"] }
+]} caption="A closed-loop client under-offers load when the service slows." />
 
 <Choice id="success-only" objective="diagnose-tail-latency" prompt="Success-only p99 improves after you shorten timeouts, while failures triple. Did overall service quality necessarily improve?" options={[
   { id: "no", text: "No; slow requests may have moved from the success histogram into failures", correct: true, feedback: "Right. Evaluate availability and user-visible waiting alongside successful-request latency." },
@@ -124,10 +149,10 @@ Keep both latency and availability views. A one-second timeout is a failed user 
 
 <Step id="practice" title="Check your mastery, then stress the tail">
 
-Score at least 80% on fresh percentile-rank and fan-out questions. State the independence assumption every time you apply the fan-out formula.
+Score 80% or more. State the independence assumption each time.
 
 <MasteryCheck templates={["percentiles.rank", "percentiles.fanout"]} count={5} />
 
-In the [sandbox](/sandbox), build independent parallel calls that join on all results. Slow one dependency, compare parent and branch latency, then repeat near saturation. This manual experiment illustrates a critical path; the fixed-probability question above is a separate mathematical approximation.
+In the [sandbox](/sandbox), join parallel calls on all results, slow one dependency and compare parent and branch latency. That shows a critical path; the fan-out formula is a separate approximation.
 
 </Step>

@@ -33,9 +33,12 @@ estimatedMinutes: 24
 
 <Step id="units" title="A byte is eight bits">
 
-Network links are commonly sold in bits per second; response sizes are commonly measured in bytes. In this lesson **1 MB = 1,000,000 bytes**, while **1 Mbit = 1,000,000 bits**. A 100 Mbit/s link has an ideal payload ceiling of 12.5 MB/s before protocol overhead.
+Links are sold in **bits**, responses are measured in **bytes**. Divide by 8. Here 1 MB = 1,000,000 bytes (a MiB is 1,048,576).
 
-Do not silently substitute binary units. A MiB is 1,048,576 bytes, and a GiB is 1,073,741,824 bytes. Neither is wrong, but mixing them makes capacity and cost estimates disagree. Write units beside each input and cancel them in the formula.
+<Stats title="Ideal payload rate" items={[
+  { label: "Link", value: "100 Mbit/s" },
+  { label: "÷ 8 bits per byte", value: "12.5 MB/s", tone: "ok", sub: "before overhead" }
+]} />
 
 <Choice id="bit-byte" objective="calculate-transfer-time" prompt="What is the ideal decimal MB/s payload rate of an 80 Mbit/s link before overhead?" options={[
   { id: "ten", text: "10 MB/s", correct: true, feedback: "Right. Divide bits per second by eight to get bytes per second." },
@@ -47,9 +50,12 @@ Do not silently substitute binary units. A MiB is 1,048,576 bytes, and a GiB is 
 
 <Step id="transfer" title="Separate serialization from propagation">
 
-Putting 50 MB onto an idle 100 Mbit/s link takes **50 × 8 / 100 = 4 seconds**. That is serialization time. Propagation, setup, queueing and server work are additional terms. A small response may be dominated by propagation; a large download may be dominated by bytes divided by bandwidth.
+Serialization = bytes × 8 ÷ link rate. Propagation, queueing and server work add on top.
 
-Buying a faster link reduces serialization but cannot make a signal travel instantly between continents. Moving a cached copy closer can reduce propagation and the long-haul transfer demand at once. The best intervention depends on which term dominates.
+<Flow title="50 MB over 100 Mbit/s" height={140} nodes={[
+  { id: "s", label: "Sender", kind: "service", x: 0, y: 50 },
+  { id: "c", label: "Client", kind: "client", x: 100, y: 50 }
+]} edges={[{ from: "s", to: "c", label: "50 × 8 / 100 = 4 s" }]} caption="A faster link cuts serialization. A closer cached copy cuts propagation." />
 
 <VariantQuestion template="bandwidth.transfer" />
 
@@ -57,9 +63,12 @@ Buying a faster link reduces serialization but cannot make a signal travel insta
 
 <Step id="load" title="Aggregate traffic saturates a shared link">
 
-At 1,000 responses/s and 50 kB per response, payload demand is **50 MB/s = 400 Mbit/s**. A 100 Mbit/s outbound link cannot carry that sustained rate. More application workers cannot change this ceiling; they can only enqueue bytes faster.
+Demand = rate × size. Workers only enqueue bytes faster; they cannot widen the link.
 
-Leave headroom for bursts and overhead. Request and response directions can have different sizes and bottlenecks. A service with tiny GET requests and large images may have low inbound bandwidth while outbound serialization dominates latency.
+<Bars title="Demand versus link (Mbit/s)" items={[
+  { label: "1,000 resp/s × 50 kB", value: 400, unit: "Mbit/s", tone: "bad" },
+  { label: "Outbound link", value: 100, unit: "Mbit/s", tone: "ok" }
+]} caption="Leave headroom for bursts. Inbound and outbound can bottleneck differently." />
 
 <VariantQuestion template="bandwidth.load" />
 
@@ -67,9 +76,13 @@ Leave headroom for bursts and overhead. Request and response directions can have
 
 <Step id="queue" title="Bandwidth contention becomes latency">
 
-Suppose ten 10 MB responses share a 10 MB/s FIFO link. The bytes take ten seconds to serialize in total, even if every handler finishes its CPU work immediately. The last response waits behind earlier bytes. A low CPU chart does not imply a fast service.
+Ten 10 MB responses on a 10 MB/s FIFO link: the last waits 10 s with CPU idle. Bound queued bytes, not just request counts.
 
-Bound queued bytes, not just request counts, when payload sizes vary widely. One large export can consume more memory and link time than thousands of metadata responses. Separate bulk traffic or apply fair scheduling when small interactive requests must retain a deadline.
+<Timeline title="FIFO link, 10 MB each" events={[
+  { at: "1 s", label: "Response 1 done", tone: "ok" },
+  { at: "5 s", label: "Response 5 done", tone: "warn" },
+  { at: "10 s", label: "Response 10 done", tone: "bad" }
+]} caption="Separate bulk traffic or schedule fairly when small requests have deadlines." />
 
 <Choice id="link-bottleneck" objective="relieve-link-saturation" prompt="CPU is 20%, but outbound link utilization is pinned and response queues grow. Which action directly addresses the bottleneck?" options={[
   { id: "bytes", text: "Reduce outbound bytes or increase usable outbound link capacity", correct: true, feedback: "Right. Compression, cache placement or a larger link can change the bytes-to-capacity ratio." },
@@ -81,9 +94,13 @@ Bound queued bytes, not just request counts, when payload sizes vary widely. One
 
 <Step id="compression" title="Compression trades CPU for fewer bytes">
 
-Compression helps when the saved transfer and queueing time exceeds compression cost. Text and repeated JSON often compress well; already compressed video or images may not. Measure size reduction and CPU at realistic concurrency before applying it to every response.
+Compression trades CPU for bytes. Text and JSON shrink well; images and video often do not. Cache public, versioned assets at the edge. Private responses need explicit cache policy.
 
-For public versioned static assets, edge caching moves delivery away from the origin. An origin shield can collapse misses from many edges. Cache keys must include representation differences, and private responses need explicit policies to avoid exposing one user's data to another.
+<Compare title="Cut origin egress" sides={[
+  { title: "Compress", tone: "info", points: ["Fewer bytes sent", "Costs CPU", "Skip compressed media"] },
+  { title: "Edge cache", tone: "ok", points: ["Fewer origin fetches", "Version the URL", "Key by representation"] },
+  { title: "Never", tone: "bad", points: ["Path-only key on private data", "Leaks one user's data"] }
+]} />
 
 <Choice id="cdn-choice" objective="relieve-link-saturation" prompt="Public versioned JavaScript bundles dominate origin egress. Which change is a strong fit?" options={[
   { id: "cdn", text: "Compress once and cache immutable versioned assets at the edge", correct: true, feedback: "Right. Reuse reduces origin fetches, while compression reduces bytes delivered. Verify cache keys and content encoding." },
@@ -95,9 +112,12 @@ For public versioned static assets, edge caching moves delivery away from the or
 
 <Step id="egress" title="A cache hit changes who sends the bytes">
 
-Cost is **billable GB × price per GB**, with extra terms for requests, storage and other contract details. If a hypothetical agreement charges 8 cents/GB and 10,000 GB leave the origin, that component costs **$800**. This is arithmetic with a supplied price, not a vendor quote.
+Cost = billable GB × price per GB. Edge delivery is still billed, so a 90% origin hit rate does not cut 90% of the bill.
 
-A CDN can reduce origin egress while still billing for delivery from the edge to the user. Distinguish origin-to-edge traffic, user delivery and cross-region replication. Do not claim a 90% origin cache hit rate removes 90% of all network bills.
+<Stats title="Hypothetical price: $0.08/GB" items={[
+  { label: "Origin egress", value: "10,000 GB" },
+  { label: "Cost", value: "$800", tone: "warn", sub: "supplied price, not a quote" }
+]} />
 
 <VariantQuestion template="bandwidth.egress" />
 
@@ -105,9 +125,13 @@ A CDN can reduce origin egress while still billing for delivery from the edge to
 
 <Step id="tradeoff" title="Choose a complete bandwidth intervention">
 
-An origin shield reduces repeated upstream misses but adds another hop on a miss. Compression lowers bytes but can raise compute use. A larger link buys capacity but still needs overload handling. Each decision should preserve freshness, privacy and response-time requirements.
+Each fix has a cost; predict the new byte rate first, then watch queues and errors.
 
-Predict the new byte rate first, then observe link queueing and errors. A change that lowers average egress but synchronizes cache expiry may still create a burst that overwhelms the origin. Use staggered expiry or request coalescing where repeated misses are possible.
+<Compare title="Interventions" sides={[
+  { title: "Origin shield", points: ["Fewer repeated misses", "One more hop"] },
+  { title: "Compression", points: ["Fewer bytes", "More CPU"] },
+  { title: "Bigger link", points: ["More capacity", "Still needs overload handling"] }
+]} caption="Synchronized expiry makes bursts. Stagger it or coalesce misses." />
 
 <Choice id="egress-accounting" objective="size-link-and-egress" prompt="A CDN serves 90% of requests from its cache. Which cost statement is justified without a contract?" options={[
   { id: "origin", text: "Origin fetch traffic may fall substantially, but edge delivery can still be billable", correct: true, feedback: "Right. Identify each billable traffic path and price before calculating total savings." },
@@ -119,10 +143,10 @@ Predict the new byte rate first, then observe link queueing and errors. A change
 
 <Step id="practice" title="Check your mastery, then saturate a link">
 
-Score at least 80% on fresh transfer, aggregate bandwidth and cost variants. Keep byte and bit units explicit, and separate quoted assumptions from measured values.
+Score 80% or more. Keep bits and bytes explicit.
 
 <MasteryCheck templates={["bandwidth.transfer", "bandwidth.load", "bandwidth.egress"]} count={5} />
 
-Open the [sandbox](/sandbox), choose a large response payload and constrain the response link. Raise traffic until link waiting grows. Reduce response size, then compare latency and completed throughput at the same arrival rate. The link model demonstrates serialization and contention; it does not simulate TCP's congestion window.
+Open the [sandbox](/sandbox), constrain the response link, raise traffic until waiting grows, then shrink the response. The model shows serialization and contention, not TCP congestion control.
 
 </Step>

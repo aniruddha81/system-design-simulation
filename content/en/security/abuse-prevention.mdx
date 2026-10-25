@@ -44,7 +44,14 @@ estimatedMinutes: 25
 
 <Step id="abuse" title="Attacks that use the product as designed">
 
-Abuse is not a bug in your code. It is your login, sign-up, search and checkout used **at scale with bad intent**: testing leaked passwords, creating fake accounts for spam or promotions, scraping prices, testing stolen cards with small purchases. OWASP's catalogue of automated threats names each of these patterns. Every request is individually valid, so the signal is in the **pattern**.
+Abuse is your own login, sign-up, search and checkout used **at scale with bad intent**. Every request is valid; the signal is the **pattern**.
+
+<Compare title="Automated abuse patterns" sides={[
+  { title: "Credential stuffing", tone: "bad", points: ["Leaked passwords replayed"] },
+  { title: "Fake accounts", tone: "bad", points: ["Spam, promo abuse"] },
+  { title: "Scraping", tone: "warn", points: ["Prices, content"] },
+  { title: "Card testing", tone: "bad", points: ["Tiny buys, many cards"] }
+]} caption="OWASP Automated Threats catalogue." />
 
 <Choice
   id="which-abuse"
@@ -62,7 +69,13 @@ Abuse is not a bug in your code. It is your login, sign-up, search and checkout 
 
 <Step id="stuffing" title="Credential stuffing beats per-IP limits">
 
-**Credential stuffing** replays username and password pairs leaked from other sites, betting on password reuse. Attackers rent residential proxy networks with very large pools of IP addresses, so a per-IP limit that would stop one machine barely slows a distributed attack. Each IP looks like one household making a few login attempts.
+**Credential stuffing** replays leaked username and password pairs, betting on reuse. Residential proxy pools make each IP look like one household, so per-IP limits barely help.
+
+<Flow title="Distributed stuffing" height={190} nodes={[
+  { id: "bot", label: "Botnet", kind: "client", x: 0, y: 50, note: "leaked list" },
+  { id: "px", label: "100k proxy IPs", kind: "loadBalancer", x: 50, y: 50, note: "2 tries each" },
+  { id: "login", label: "Login", kind: "service", x: 100, y: 50, note: "every IP under limit" }
+]} edges={[{ from: "bot", to: "px" }, { from: "px", to: "login", label: "valid-looking" }]} caption="A global failure spike is the tell." />
 
 <VariantQuestion template="abuse.stuffing-hours" />
 
@@ -70,7 +83,14 @@ Abuse is not a bug in your code. It is your login, sign-up, search and checkout 
 
 <Step id="signals" title="Layer the signals">
 
-No single signal holds. Effective defences stack several that are expensive for an attacker to fake at once.
+No single signal holds. Stack signals that are costly to fake together.
+
+<Compare title="Layered defences" sides={[
+  { title: "Breached-password check", tone: "ok", points: ["Block known leaks", "k-anonymity range query"] },
+  { title: "MFA", tone: "ok", points: ["Leaked password not enough"] },
+  { title: "Velocity per account, device, global", tone: "ok", points: ["Not only per IP"] },
+  { title: "Per-IP limit alone", tone: "bad", points: ["Proxies dodge it", "Hurts shared NATs"] }
+]} caption="Use one generic error message." />
 
 <Choice
   id="stuffing-defences"
@@ -90,7 +110,13 @@ No single signal holds. Effective defences stack several that are expensive for 
 
 <Step id="false-positives" title="The base-rate trap">
 
-At scale, most traffic is legitimate. A classifier that wrongly blocks "only" 1% of good logins can still produce more wrongful blocks than correct ones when abuse is a small share of the traffic. Those wrongly blocked users raise support tickets, churn, and learn to distrust your security. Always compute the share of blocks that are false, not just the false-positive rate.
+Most traffic is legitimate, so even a 1% false-positive rate can block more good users than bad. Compute the **share of blocks that are false**.
+
+<Stats title="Illustrative: 1,000,000 logins, 0.1% abuse" items={[
+  { label: "Abusive", value: "1,000", sub: "catch 90%: 900 blocked" },
+  { label: "Good users hit by 1% FPR", value: "9,990", tone: "bad" },
+  { label: "Blocks that are wrong", value: "92%", tone: "bad", sub: "9,990 / 10,890" }
+]} />
 
 <VariantQuestion template="abuse.base-rate" />
 
@@ -98,7 +124,14 @@ At scale, most traffic is legitimate. A classifier that wrongly blocks "only" 1%
 
 <Step id="friction" title="Graduated friction">
 
-Because every signal is imperfect, respond in proportion to risk instead of a binary allow or block. Low risk passes silently; medium risk gets a step-up such as an email confirmation, an MFA prompt or a challenge; high risk is blocked or held for review. Do not tell the attacker which signal fired: precise feedback is a free tuning tool for them.
+Respond in proportion to risk. Never reveal which signal fired.
+
+<Flow title="Graduated friction" height={200} nodes={[
+  { id: "s", label: "Risk score", kind: "rateLimiter", x: 0, y: 50 },
+  { id: "l", label: "Low: allow", kind: "service", x: 100, y: 12 },
+  { id: "m", label: "Medium: step-up", kind: "apiGateway", x: 100, y: 50, note: "email, MFA" },
+  { id: "h", label: "High: block / review", kind: "circuitBreaker", x: 100, y: 88 }
+]} edges={[{ from: "s", to: "l" }, { from: "s", to: "m" }, { from: "s", to: "h" }]} />
 
 <Choice
   id="graduated"
@@ -116,10 +149,10 @@ Because every signal is imperfect, respond in proportion to risk instead of a bi
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh stuffing-pace and base-rate variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["abuse.stuffing-hours", "abuse.base-rate"]} count={4} />
 
-Next, keep one customer's problems from becoming everyone's in [multi-tenancy isolation](/learn/security/multi-tenancy).
+Next: [multi-tenancy isolation](/learn/security/multi-tenancy).
 
 </Step>

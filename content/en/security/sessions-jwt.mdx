@@ -44,12 +44,12 @@ estimatedMinutes: 25
 
 <Step id="two-designs" title="A pointer or a passport">
 
-After sign-in, the server must recognise the user on every later request. Two designs:
+A JWT is **signed, not encrypted**: never put secrets in it.
 
-- **Server-side session**: the client holds an opaque, random session ID (OWASP asks for at least 64 bits of entropy) and the server looks it up in a session store on each request. Revocation is instant: delete the row. The cost is a store lookup per request, and a store that must be available.
-- **Self-contained token**, usually a **JWT** (RFC 7519): the server signs a set of claims (`sub`, `exp`, `aud`, roles) and the client presents it. Any service with the verification key can check it with no lookup. The cost: the token stays valid until `exp` unless you build revocation, and it is larger than an ID on every request.
-
-A JWT is **signed, not encrypted**: anyone holding it can base64url-decode the claims. Never put secrets in it.
+<Compare title="A pointer or a passport" sides={[
+  { title: "Server-side session", tone: "ok", points: ["Opaque random ID (64+ bits)", "Store lookup per request", "Revoke instantly: delete row"] },
+  { title: "JWT (RFC 7519)", tone: "info", points: ["Signed claims: sub, exp, aud", "No lookup, any service verifies", "Valid until exp; bigger per request"] }
+]} />
 
 <Choice
   id="pick-design"
@@ -67,7 +67,13 @@ A JWT is **signed, not encrypted**: anyone holding it can base64url-decode the c
 
 <Step id="validate" title="Validating a JWT">
 
-Most JWT vulnerabilities come from trusting the token's own header. RFC 8725 lists the classic attacks: accepting `"alg": "none"`, and **algorithm confusion**, where a server that expects RS256 is tricked into verifying an HS256 signature using its *public* key as the HMAC secret. The defence is to decide the algorithm and key on the server, never from the token.
+Most JWT bugs trust the token's own header: `alg: none`, or **algorithm confusion** (RS256 server tricked into HS256 with its public key). Pin the algorithm and key on the server (RFC 8725).
+
+<Flow title="JWT checks" height={150} nodes={[
+  { id: "t", label: "Token", kind: "client", x: 0, y: 50 },
+  { id: "v", label: "Verify", kind: "circuitBreaker", x: 50, y: 50, note: "pinned alg + key, exp, aud, iss" },
+  { id: "api", label: "API", kind: "service", x: 100, y: 50 }
+]} edges={[{ from: "t", to: "v" }, { from: "v", to: "api", label: "if all pass" }]} caption="Decoding is not verifying." />
 
 <Choice
   id="jwt-checks"
@@ -87,9 +93,13 @@ Most JWT vulnerabilities come from trusting the token's own header. RFC 8725 lis
 
 <Step id="revocation" title="Revoking a token that verifies itself">
 
-A self-contained token cannot be deleted. You can either wait out its lifetime, or keep a **denylist** of revoked token IDs (`jti`) that every service checks. A denylist only needs each entry until the token would have expired anyway, so its size is bounded: by Little's law, revocations per unit of time × token lifetime. Short lifetimes keep it small, and keep the lookup cheap enough to replicate everywhere.
+A self-contained token cannot be deleted. Wait out `exp`, or keep a **denylist** of revoked `jti`. Entries only live until the token would expire, so size = revocations per time × token lifetime (Little's law). Checking it per request is the lookup JWTs avoided, but a far smaller set.
 
-Notice the irony: checking a denylist on every request is a lookup per request, which is the cost JWTs were meant to avoid. It is still a much smaller, read-mostly set than a full session store.
+<Timeline title="Revoked token" events={[
+  { at: "t0", label: "Token issued, exp = t0 + L", tone: "info" },
+  { at: "t1", label: "Revoked: jti added to denylist", tone: "warn" },
+  { at: "t0 + L", label: "Token expires: entry can go", tone: "ok" }
+]} />
 
 <VariantQuestion template="jwt.denylist" />
 
@@ -97,9 +107,14 @@ Notice the irony: checking a denylist on every request is a lookup per request, 
 
 <Step id="lifetime" title="Short access tokens, rotating refresh tokens">
 
-The standard compromise: **short-lived access tokens** (minutes) that APIs verify locally, plus a **long-lived refresh token** that only the authorisation server accepts and can revoke instantly. A stolen access token is useful only briefly; a stolen refresh token can be detected through **refresh token rotation**: each refresh returns a new refresh token and invalidates the old one, so a reused old token reveals theft and revokes the whole family, as the OAuth security best practice (RFC 9700) describes.
+**Short access tokens** (minutes, verified locally) plus a **refresh token** only the auth server accepts. **Rotation**: each refresh returns a new token; reuse of an old one reveals theft and revokes the family (RFC 9700). Shorter lifetimes cost refresh traffic.
 
-Shorter access lifetimes cost refresh traffic at the token endpoint.
+<Sequence title="Refresh token rotation" actors={["Client", "Auth server"]} messages={[
+  { from: "Client", to: "Auth server", label: "refresh with RT1" },
+  { from: "Auth server", to: "Client", label: "new access + RT2 (RT1 dead)", tone: "ok" },
+  { from: "Client", to: "Auth server", label: "thief replays RT1", tone: "bad" },
+  { from: "Auth server", to: "Client", label: "reuse detected: revoke family", tone: "warn" }
+]} />
 
 <VariantQuestion template="jwt.refresh-load" />
 
@@ -107,7 +122,14 @@ Shorter access lifetimes cost refresh traffic at the token endpoint.
 
 <Step id="storage" title="Where the browser keeps it">
 
-In a browser, any credential readable by JavaScript is readable by an XSS payload. A cookie with **HttpOnly** cannot be read by scripts; **Secure** sends it only over HTTPS; **SameSite=Lax** or **Strict** stops most cross-site requests from carrying it, which is the main defence against CSRF along with anti-CSRF tokens for state-changing requests. Regenerate the session ID at sign-in so a pre-set ID cannot be fixed on the victim.
+Anything JavaScript can read, XSS can steal. Regenerate the session ID at sign-in.
+
+<Compare title="Cookie attributes" sides={[
+  { title: "HttpOnly", tone: "ok", points: ["Scripts cannot read it"] },
+  { title: "Secure", tone: "ok", points: ["HTTPS only"] },
+  { title: "SameSite=Lax", tone: "ok", points: ["Blocks most cross-site sends", "Add CSRF tokens"] },
+  { title: "localStorage or URL", tone: "bad", points: ["XSS reads it", "URLs leak to logs and Referer"] }
+]} />
 
 <Choice
   id="cookie-flags"
@@ -125,10 +147,10 @@ In a browser, any credential readable by JavaScript is readable by an XSS payloa
 
 <Step id="practice" title="Check your mastery">
 
-The mastery check draws fresh denylist and refresh-load variants. Score 80% or more to master the lesson.
+Score 80% or more.
 
 <MasteryCheck templates={["jwt.denylist", "jwt.refresh-load"]} count={4} />
 
-Next, see how one service obtains a token to act for a user at another in [OAuth 2.0 and OpenID Connect](/learn/security/oauth-oidc).
+Next: [OAuth 2.0 and OpenID Connect](/learn/security/oauth-oidc).
 
 </Step>
