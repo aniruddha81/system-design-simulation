@@ -31,7 +31,7 @@ const NH = 52;
 
 /** Architecture diagram: typed nodes, labelled arrows, packets flowing along edges, failed nodes marked. */
 export function Flow({ title, nodes, edges, failed = [], hot = [], height = 240, caption }: { title: string; nodes: FlowNode[]; edges: FlowEdge[]; failed?: string[]; hot?: string[]; height?: number; caption?: string }) {
-  const pos = new Map(nodes.map((n) => [n.id, { x: 40 + (n.x / 100) * (W - 80), y: 28 + (n.y / 100) * (height - 56) }]));
+  const pos = new Map(nodes.map((n) => [n.id, { x: NW / 2 + 4 + (n.x / 100) * (W - NW - 8), y: 28 + (n.y / 100) * (height - 56) }]));
   const uid = title.replace(/\W+/g, "");
   return (
     <Figure title={title} caption={caption}>
