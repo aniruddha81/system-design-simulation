@@ -87,7 +87,7 @@ A learner completes the caching lesson, builds a cache-aside design, survives a 
 
 # P2 — Engine breadth (+ Scale/model UIs)
 
-P1 is merged on `p1-vertical-slice`. The P2 contract additions are in `src/engine/types.ts` (search for `P2`). Every addition is optional or a new union member, so P1 designs stay valid. The rules above still apply: own your paths, no `npm install` (`elkjs` is now installed), no commits.
+P1 is merged on `main`. The P2 contract additions are in `src/engine/types.ts` (search for `P2`). Every addition is optional or a new union member, so P1 designs stay valid. The rules above still apply: own your paths, no `npm install` (`elkjs` is now installed), no commits.
 
 ```mermaid
 flowchart LR
