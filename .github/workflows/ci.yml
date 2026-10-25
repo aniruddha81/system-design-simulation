@@ -40,7 +40,7 @@ jobs:
           DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
 
   deploy:
-    # Builds the Docker image on the runner and ships it to EC2 with deploy/deploy.sh. Needs the EC2_SSH_KEY repo secret (contents of sds-prod.pem).
+    # Builds the Docker image on the runner and ships it to EC2 with deploy/deploy.sh. Needs the EC2_SSH_KEY repo secret (contents of sds-prod.pem) and AWS_* keys of the sds-ci-deploy IAM user, which can only open/close port 22 on the sds-web security group.
     if: github.ref == 'refs/heads/release' && github.event_name == 'push'
     needs: [verify, migrate]
     runs-on: ubuntu-latest
@@ -48,8 +48,16 @@ jobs:
     env:
       HOST: ubuntu@13.250.70.115
       SDS_SSH_KEY: /home/runner/.ssh/sds-prod.pem
+      AWS_DEFAULT_REGION: ap-southeast-1
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      SG_ID: sg-0da8fd5abb029d6a9
     steps:
       - uses: actions/checkout@v4
+      - name: Open SSH for this runner (closed again at the end)
+        run: |
+          echo "RUNNER_IP=$(curl -fsS https://checkip.amazonaws.com)" >> "$GITHUB_ENV"
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$(curl -fsS https://checkip.amazonaws.com)/32"
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -64,3 +72,6 @@ jobs:
             sleep 10
           done
           exit 1
+      - name: Close SSH
+        if: always()
+        run: aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$RUNNER_IP/32"
