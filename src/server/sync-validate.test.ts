@@ -17,6 +17,10 @@ describe("sync record validation", () => {
   it("passes tombstones without data", () => {
     expect(check({ store: "designs", key: "d1", updatedAt: 5, deleted: true })).toMatchObject({ deleted: true, data: null });
   });
+  it("rejects timestamps from the far future (they would win last-write-wins forever)", () => {
+    expect(pushSchema.safeParse({ records: [{ store: "progress", key: "a", updatedAt: Date.now() + 10 * 86_400_000 }] }).success).toBe(false);
+    expect(pushSchema.safeParse({ records: [{ store: "progress", key: "a", updatedAt: Date.now() }] }).success).toBe(true);
+  });
   it("bounds batch size and store names", () => {
     expect(pushSchema.safeParse({ records: [{ store: "settings", key: "a", updatedAt: 1 }] }).success).toBe(false);
     expect(pushSchema.safeParse({ records: Array.from({ length: 201 }, (_, i) => ({ store: "progress", key: String(i), updatedAt: 1 })) }).success).toBe(false);

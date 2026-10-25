@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { caseStudies } from "@/content/case-studies";
+import { challenges } from "@/content/challenges";
 import { loadLessons, matrix } from "@/lib/content/loader";
 import { SITE_URL } from "@/lib/content/schema";
 
@@ -16,6 +17,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/interview`, priority: 0.7 },
     ...loadLessons().filter((lesson) => matrix.lessons.some((entry) => entry.id === lesson.id && entry.status === "live"))
       .map((l) => ({ url: `${SITE_URL}/learn/${l.track}/${l.slug}`, lastModified: l.lastReviewed, priority: 0.8 })),
+    ...challenges.map((c) => ({ url: `${SITE_URL}/challenges/${c.id}`, priority: 0.6 })),
     ...caseStudies.map((study) => ({ url: `${SITE_URL}/case-studies/${study.id}`, priority: 0.8 })),
   ];
 }

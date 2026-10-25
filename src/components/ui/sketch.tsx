@@ -7,7 +7,9 @@ import type { SVGProps } from "react";
 const gen = rough.generator();
 const base: Options = { roughness: 1.1, bowing: 1.2, strokeWidth: 1.5, disableMultiStroke: false };
 
-const paths = (d: ReturnType<typeof gen.path>) => gen.toPaths(d).map((p) => p.d);
+// One decimal is invisible at this scale and roughly halves the SVG that ships in every page's HTML and RSC payload.
+const round = (d: string) => d.replace(/-?\d+\.\d+/g, (n) => String(+Number(n).toFixed(1)));
+const paths = (d: ReturnType<typeof gen.path>) => gen.toPaths(d).map((p) => round(p.d));
 
 export const sketch = {
   rect: (x: number, y: number, w: number, h: number, seed: number, o: Options = {}) => paths(gen.rectangle(x, y, w, h, { ...base, seed, ...o })),

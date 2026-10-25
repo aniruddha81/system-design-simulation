@@ -12,9 +12,9 @@ import { PwaRegister } from "@/components/ui/pwa-register";
 import "./globals.css";
 
 // Display: Fraunces (soft, wonky italic for flourishes). Text: Schibsted Grotesk. Data: IBM Plex Mono.
-const fraunces = Fraunces({ variable: "--font-fraunces", subsets: ["latin"], style: ["normal", "italic"], axes: ["SOFT", "WONK", "opsz"] });
+const fraunces = Fraunces({ variable: "--font-fraunces", subsets: ["latin"], style: ["normal", "italic"], axes: ["opsz"] }); // SOFT/WONK axes cost ~100 KB of preloaded font for a barely visible flourish
 const schibsted = Schibsted_Grotesk({ variable: "--font-schibsted", subsets: ["latin"] });
-const plexMono = IBM_Plex_Mono({ variable: "--font-plex-mono", subsets: ["latin"], weight: ["400", "500", "600"] });
+const plexMono = IBM_Plex_Mono({ variable: "--font-plex-mono", subsets: ["latin"], weight: ["400", "500", "600"], preload: false });
 
 const description =
   "Learn system design by running it: step-by-step lessons, a simulator you can break, and graded challenges with explained verdicts.";
@@ -25,6 +25,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: SITE_NAME, template: `%s | ${SITE_NAME}` },
   description,
+  alternates: { canonical: "./" }, // self-canonical on every route that does not set its own
   openGraph: { siteName: SITE_NAME, type: "website", description },
 };
 

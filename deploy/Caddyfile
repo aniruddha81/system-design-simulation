@@ -1,8 +1,37 @@
+{
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 60s
+			idle 2m
+		}
+		max_header_size 16KB
+	}
+}
+
 # SITE_ADDRESS is ":80" (plain HTTP by IP) until a domain exists, then "app.example.com" (automatic HTTPS).
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
+	@trace method TRACE
+	respond @trace 405
+	request_body {
+		max_size 5MB
+	}
+	header {
+		# Ignored over plain HTTP, so it is safe on the ":80" fallback.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+		-X-Powered-By
+		-Via
+		defer
+	}
 	# flush_interval -1: stream RSC/PPR responses instead of buffering them.
 	reverse_proxy app:3000 {
 		flush_interval -1
+		# The app rate-limits /api/errors by this header (it has no Vercel header here). {remote_host} is the TCP peer, so clients cannot spoof it.
+		header_up X-Real-IP {remote_host}
+		header_up -X-Forwarded-Host
+		header_down -Via
 	}
 }

@@ -74,11 +74,12 @@ export function designToSvg(d: Design, opts: { look: Look; overlay?: Record<stri
     out.push(`</g>`);
   }
   for (const a of (d.annotations ?? []) as Annotation[]) {
-    if (a.type === "stroke") out.push(`<path d="${strokePath(a.points)}" fill="${c(a.color)}"/>`);
+    if (a.type === "stroke") out.push(`<path d="${esc(strokePath(a.points))}" fill="${esc(String(c(a.color)))}"/>`);
     else {
-      const lines = a.text.split("\n");
-      if (a.type === "note") out.push(`<rect x="${a.x}" y="${a.y}" width="192" height="${24 + lines.length * 18}" rx="3" fill="${c("var(--highlight, var(--warning))")}"/>`);
-      lines.forEach((l, i) => out.push(`<text x="${a.x + (a.type === "note" ? 12 : 0)}" y="${a.y + 22 + i * 18}" font-size="14" fill="${a.type === "note" ? c("var(--ink-2, var(--bg))") : text}">${esc(l)}</text>`));
+      const lines = String(a.text).split("\n");
+      const [ax, ay] = [Number(a.x) || 0, Number(a.y) || 0];
+      if (a.type === "note") out.push(`<rect x="${ax}" y="${ay}" width="192" height="${24 + lines.length * 18}" rx="3" fill="${c("var(--highlight, var(--warning))")}"/>`);
+      lines.forEach((l, i) => out.push(`<text x="${ax + (a.type === "note" ? 12 : 0)}" y="${ay + 22 + i * 18}" font-size="14" fill="${a.type === "note" ? c("var(--ink-2, var(--bg))") : text}">${esc(l)}</text>`));
     }
   }
   out.push("</svg>");

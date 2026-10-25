@@ -16,8 +16,8 @@ export async function POST(req: Request) {
     return Response.json({ error: "bad origin" }, { status: 403, headers });
   if (!req.headers.get("content-type")?.startsWith("application/json"))
     return Response.json({ error: "json only" }, { status: 415, headers });
-  // Vercel overwrites x-vercel-forwarded-for. Never trust client-supplied x-forwarded-for.
-  const ip = req.headers.get("x-vercel-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  // Vercel and Caddy (deploy/Caddyfile) both overwrite x-real-ip with the peer address. Never read client-settable headers like x-forwarded-for or x-vercel-forwarded-for.
+  const ip = req.headers.get("x-real-ip")?.trim() || "unknown";
   const hash = (value: string) => createHmac("sha256", env().BETTER_AUTH_SECRET).update(value).digest("hex");
   const ipLimit = await rateLimit(`errors:ip:${hash(ip)}`, 0, 20);
   if (!ipLimit.allowed) return Response.json({ error: "rate limited" }, { status: 429, headers: { ...headers, "Retry-After": String(ipLimit.retryAfter) } });

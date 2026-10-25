@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import { syncNow } from "@/lib/cloud-sync/sync";
-import { onExternalChange, openStore } from "@/lib/persistence";
 import { useSession } from "@/lib/auth-client";
 import { setSyncState } from "./sync-status";
 
@@ -21,6 +19,10 @@ export function CloudSync() {
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let dead = false;
+    let cleanup = () => {};
+    // Signed-out visitors never download the sync/persistence/zod code.
+    void Promise.all([import("@/lib/cloud-sync/sync"), import("@/lib/persistence")]).then(([{ syncNow }, { onExternalChange, openStore }]) => {
+    if (dead) return;
     const run = async () => {
       if (running || dead || !navigator.onLine) return;
       running = true;
@@ -49,13 +51,17 @@ export function CloudSync() {
     addEventListener("online", online);
     const hide = () => document.visibilityState === "hidden" && soon(0);
     document.addEventListener("visibilitychange", hide);
-    return () => {
-      dead = true;
+    cleanup = () => {
       clearTimeout(timer);
       clearInterval(interval);
       off();
       removeEventListener("online", online);
       document.removeEventListener("visibilitychange", hide);
+    };
+    });
+    return () => {
+      dead = true;
+      cleanup();
     };
   }, [userId]);
 

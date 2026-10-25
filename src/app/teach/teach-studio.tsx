@@ -440,6 +440,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
     }
   }
 
+  // Student-controlled text must not run as a spreadsheet formula (=, +, -, @, tab, CR).
+  const csvText = (v: string) => `"${(/^[=+\-@\t\r]/.test(v) ? `'${v}` : v).replaceAll('"', '""')}"`;
+
   function exportGradebookCsv() {
     if (verifiedReceipts.length === 0) return;
     const header =
@@ -447,9 +450,9 @@ export function TeachStudio({ catalog }: { catalog: AssignableItem[] }) {
     const rows = verifiedReceipts
       .map(({ receipt, valid }) => {
         const cols = [
-          `"${receipt.studentName.replaceAll('"', '""')}"`,
-          `"${receipt.studentId.replaceAll('"', '""')}"`,
-          `"${receipt.assignmentTitle.replaceAll('"', '""')}"`,
+          csvText(receipt.studentName),
+          csvText(receipt.studentId),
+          csvText(receipt.assignmentTitle),
           receipt.summary.completedItems,
           receipt.summary.totalItems,
           Math.round(receipt.summary.meanMastery * 100),

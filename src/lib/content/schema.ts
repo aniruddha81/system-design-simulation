@@ -2,7 +2,7 @@ import { z } from "zod";
 import { anomalyNames, isolationLevels } from "@/models";
 import { templateIds, templates } from "./variants";
 
-export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://sds.aniruddha81.tech";
 export const SITE_NAME = "System Design Simulator";
 
 export const TRACKS = [
@@ -32,7 +32,7 @@ export const frontmatterSchema = z.strictObject({
   activities: z.array(activity).min(1),
   limitations: z.array(z.string().min(3)),
   sources: z
-    .array(z.strictObject({ title: z.string(), url: z.url(), authors: z.string().optional(), year: z.number().int().optional() }))
+    .array(z.strictObject({ title: z.string(), url: z.url({ protocol: /^https?$/ }), authors: z.string().optional(), year: z.number().int().optional() }))
     .min(1),
   reviewedBy: z.string().min(2),
   lastReviewed: z.iso.date(),

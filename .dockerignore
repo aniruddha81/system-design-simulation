@@ -2,8 +2,9 @@ node_modules
 .next
 .git
 .github
-.env*
+**/.env*
 !.env.example
+deploy
 e2e
 ops
 docs

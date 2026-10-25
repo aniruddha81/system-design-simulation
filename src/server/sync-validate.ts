@@ -5,11 +5,12 @@ export const SYNC_STORES = ["designs", "progress", "reviews", "runs"] as const;
 export const MAX_BATCH = 200;
 export const MAX_PAGE = 500;
 export const MAX_RECORDS_PER_USER = 5000;
+export const MAX_BYTES_PER_USER = 100 * 1024 * 1024;
 const MAX_BYTES = { designs: 2 * 1024 * 1024, progress: 4096, reviews: 4096, runs: 32 * 1024 } as const;
 
 export const pushSchema = z.object({
   records: z
-    .array(z.object({ store: z.enum(SYNC_STORES), key: z.string().min(1).max(512), updatedAt: z.number().int().nonnegative(), deleted: z.boolean().optional(), data: z.unknown().optional() }))
+    .array(z.object({ store: z.enum(SYNC_STORES), key: z.string().min(1).max(512), updatedAt: z.number().int().nonnegative().refine((t) => t <= Date.now() + 86_400_000), deleted: z.boolean().optional(), data: z.unknown().optional() }))
     .max(MAX_BATCH),
 });
 export type PushRecord = z.infer<typeof pushSchema>["records"][number];
@@ -19,7 +20,9 @@ export type Checked = { store: PushRecord["store"]; key: string; updatedAt: numb
 /** Validates one pushed record against the same zod schema the browser store uses. Returns an error string or the row to write. */
 export function check(rec: PushRecord): Checked | string {
   if (rec.deleted) return { store: rec.store, key: rec.key, updatedAt: rec.updatedAt, deleted: true, data: null, bytes: 0 };
-  const parsed = recordSchemas[rec.store].safeParse(rec.data);
+  let parsed: ReturnType<(typeof recordSchemas)[typeof rec.store]["safeParse"]>;
+  try { parsed = recordSchemas[rec.store].safeParse(rec.data); }
+  catch { return `${rec.store}/${rec.key}: invalid record`; } // RangeError on pathologically nested input
   if (!parsed.success) return `${rec.store}/${rec.key}: invalid record`;
   if (String((parsed.data as Record<string, unknown>)[keyPaths[rec.store]]) !== rec.key) return `${rec.store}/${rec.key}: key does not match record`;
   // Per-device counters stay out of the cloud copy, so identical content is byte-identical and never ping-pongs between devices.

@@ -3,6 +3,13 @@ on:
   push:
     branches: [release]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pipeline
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -13,6 +20,8 @@ jobs:
       BETTER_AUTH_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -30,6 +39,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -54,14 +65,19 @@ jobs:
       SG_ID: sg-0da8fd5abb029d6a9
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Open SSH for this runner (closed again at the end)
         run: |
-          echo "RUNNER_IP=$(curl -fsS https://checkip.amazonaws.com)" >> "$GITHUB_ENV"
-          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$(curl -fsS https://checkip.amazonaws.com)/32"
+          ip=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "RUNNER_IP=$ip" >> "$GITHUB_ENV"
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$ip/32"
       - name: Set up SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > "$SDS_SSH_KEY"
+          printf '%s\n' "$EC2_SSH_KEY" > "$SDS_SSH_KEY"
           chmod 600 "$SDS_SSH_KEY"
           ssh-keyscan -T 10 "${HOST#*@}" >> ~/.ssh/known_hosts
       - run: deploy/deploy.sh "$HOST"
@@ -73,5 +89,5 @@ jobs:
           done
           exit 1
       - name: Close SSH
-        if: always()
+        if: always() && env.RUNNER_IP != ''
         run: aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$RUNNER_IP/32"
