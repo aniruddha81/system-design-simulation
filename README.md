@@ -1,5 +1,7 @@
 # System Design Simulator
 
+**Live: https://sds.aniruddha81.tech**
+
 Learn system design by running it: step-by-step lessons, a simulator you can break, and graded challenges with explained verdicts. Local-first (progress lives in the browser); optional accounts sync designs and progress across devices.
 
 ## What's inside
