@@ -1,8 +1,7 @@
 name: ci
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [release]
 
 jobs:
   verify:
@@ -25,8 +24,8 @@ jobs:
       - run: npm run build
 
   migrate:
-    # Applies drizzle migrations to Neon after verification passes on main. Needs the DATABASE_URL_UNPOOLED repo secret.
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Applies drizzle migrations to Neon after verification passes on release. Needs the DATABASE_URL_UNPOOLED repo secret.
+    if: github.ref == 'refs/heads/release' && github.event_name == 'push'
     needs: verify
     runs-on: ubuntu-latest
     steps:
