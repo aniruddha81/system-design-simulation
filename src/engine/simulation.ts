@@ -1113,11 +1113,13 @@ export class ExactSimulation implements Simulation {
       }
     }
     for (const part of parts.slice(0, -1)) {
+      if (part === '__proto__' || part === 'constructor' || part === 'prototype') return 'Invalid edit path.';
       const next = object[part];
       if (!next || typeof next !== 'object') return 'Edit path does not exist.';
       object = next as Record<string, unknown>;
     }
     const last = parts.at(-1)!;
+    if (last === '__proto__' || last === 'constructor' || last === 'prototype') return 'Invalid edit path.';
     if (!last || !(last in object) && !optional && !(last === 'retry' && (object.type === 'call' || object.type === 'data'))) return 'Structural edits are rejected: parameter does not exist.';
     object[last] = structuredClone(value);
   }
