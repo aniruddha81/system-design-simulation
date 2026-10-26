@@ -42,7 +42,7 @@ This repo ships a modified Next.js. Read the relevant guide in `node_modules/nex
 
 ## Branches and deployment
 
-The protected branches are `main` (development) and `release` (production). Pull requests and pushes to either run verification. Merge a verified pull request from `main` to `release` to deploy through [.github/workflows/ci.yml](.github/workflows/ci.yml):
+The branches are `main` (development) and `release` (production). Push development changes to `main`, then merge a pull request from `main` to `release`. Only the resulting push to `release` starts [.github/workflows/ci.yml](.github/workflows/ci.yml); pushes to `main` and pull request updates do not start CI/CD. The release workflow confirms the commit came from a merged `main` pull request, then verifies it before migration and deployment. Both branches block force pushes and deletion; `release` requires a pull request.
 
 ```mermaid
 flowchart LR
