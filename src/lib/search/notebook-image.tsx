@@ -5,7 +5,7 @@ import { SITE_NAME } from "@/lib/content/schema";
 
 export const imageSize = { width: 1200, height: 630 };
 
-export async function notebookImage(title: string, description: string, section: string, screenshot?: string) {
+export async function notebookImage(title: string, description: string, section: string, screenshot = false) {
   // ImageResponse cannot resolve CSS variables; read the paper tokens instead of duplicating colours.
   const css = await readFile(path.join(process.cwd(), "src/app/globals.css"), "utf8");
   function token(name: string) {
@@ -15,7 +15,7 @@ export async function notebookImage(title: string, description: string, section:
   }
   const paper = token("bg"), sheet = token("surface"), ink = token("text"), pencil = token("text-muted"), accent = token("accent"), rule = token("border");
 
-  const shot = screenshot ? `data:image/png;base64,${(await readFile(path.join(process.cwd(), screenshot))).toString("base64")}` : null;
+  const shot = screenshot ? `data:image/png;base64,${(await readFile(path.join(process.cwd(), "src/lib/search/og-sandbox.png"))).toString("base64")}` : null;
 
   return new ImageResponse(
     <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: paper, color: ink, padding: "44px 56px" }}>
