@@ -5,5 +5,5 @@ export const size = imageSize;
 export const contentType = "image/png";
 
 export default function Image() {
-  return notebookImage("Learn system design by running it.", "Step-by-step lessons, a simulator you can break, and challenges with explained verdicts.", "Field notebook");
+  return notebookImage("Learn system design by running it.", "Draw an architecture, run it against real traffic, then break it on purpose.", "Field notebook", "src/lib/search/og-sandbox.png");
 }
